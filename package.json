@@ -1,0 +1,31 @@
+{
+  "name": "finans",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -n api,web -c yellow,cyan \"cross-env NODE_OPTIONS=--experimental-sqlite tsx watch server/index.ts\" \"vite\"",
+    "build": "vite build && tsc --noEmit",
+    "start": "cross-env NODE_ENV=production NODE_OPTIONS=--experimental-sqlite tsx server/index.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.7",
+    "cross-env": "^7.0.3",
+    "hono": "^4.6.16",
+    "node-cron": "^3.0.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^2.15.0",
+    "tsx": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/node-cron": "^3.0.11",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.7"
+  }
+}

@@ -1,0 +1,17 @@
+services:
+  finans:
+    build: .
+    container_name: finans
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./data:/data
+    # Traefik arkasında yayınlamak istersen (basic auth ŞART, uygulamanın kendi girişi yok):
+    # labels:
+    #   - traefik.enable=true
+    #   - traefik.http.routers.finans.rule=Host(`finans.example.com`)
+    #   - traefik.http.routers.finans.tls.certresolver=letsencrypt
+    #   - traefik.http.routers.finans.middlewares=finans-auth
+    #   - traefik.http.middlewares.finans-auth.basicauth.users=USER:HASHED_PASSWORD
+    #   - traefik.http.services.finans.loadbalancer.server.port=8787
