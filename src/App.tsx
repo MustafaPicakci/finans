@@ -172,7 +172,7 @@ function project(data: AllData, months: number): Day[] {
 /* ————— portföy ————— */
 type Position = {
   type: AssetType; sym: string; qty: number; avg: number; realized: number;
-  cur: number | null; value: number | null; unreal: number | null; updated: string | null;
+  cur: number | null; value: number | null; unreal: number | null; updated: string | null; source: string | null;
 };
 function positions(trades: Trade[], prices: AllData["prices"]): Position[] {
   const pm = new Map(prices.map((p) => [`${p.asset_type}:${p.symbol}`, p]));
@@ -198,6 +198,7 @@ function positions(trades: Trade[], prices: AllData["prices"]): Position[] {
       value: cur != null ? p.qty * cur : null,
       unreal: cur != null && p.qty > 0 ? p.qty * (cur - avg) : null,
       updated: price?.updated_at ?? null,
+      source: price?.source ?? null,
     };
   }).sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
 }
@@ -569,13 +570,21 @@ function Butce({ data, reload }: { data: AllData; reload: () => void }) {
     const [y, m] = ym.split("-").map(Number);
     return new Date(y, m - 1, 1).toLocaleDateString("tr-TR", { month: "short", year: "numeric" });
   };
+  /* "2026-8", "2026.08", "2026/8" → "2026-08"; geçersizse null (string karşılaştırması bozulmasın) */
+  const normYm = (s: string): string | null => {
+    const m = s.trim().match(/^(\d{4})[-./](\d{1,2})$/);
+    if (!m) return null;
+    const mo = Number(m[2]);
+    return mo >= 1 && mo <= 12 ? `${m[1]}-${String(mo).padStart(2, "0")}` : null;
+  };
+  const chYm = normYm(chVal.from_month || curYm);
   /* "Değiştir": eski kaydı yeni tutarın geçerli olacağı aydan bir önceki ayda bitir, yeni değerle yeni kayıt aç */
   const applyChange = async (r: Recurring) => {
-    const fromM = chVal.from_month || curYm;
-    await api.put(`recurring/${r.id}`, { to_month: prevYm(fromM) });
+    if (!chYm) return; // geçersiz ay: buton zaten kapalı
+    await api.put(`recurring/${r.id}`, { to_month: prevYm(chYm) });
     await api.post("recurring", {
       kind: r.kind, name: r.name, amount: num(chVal.amount), day: r.day,
-      from_month: fromM, to_month: null,
+      from_month: chYm, to_month: null,
     });
     setChanging(null); setChVal({ amount: "", from_month: "" }); reload();
   };
@@ -633,8 +642,9 @@ function Butce({ data, reload }: { data: AllData; reload: () => void }) {
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
                   <Field label="Yeni tutar (₺)"><input style={css.input} inputMode="decimal" value={chVal.amount} onChange={(e) => setChVal({ ...chVal, amount: e.target.value })} /></Field>
                   <Field label="Geçerli ay (YYYY-AA)"><input style={css.input} placeholder={curYm} value={chVal.from_month} onChange={(e) => setChVal({ ...chVal, from_month: e.target.value })} /></Field>
-                  <button style={{ ...css.btn, opacity: num(chVal.amount) > 0 ? 1 : 0.4 }} disabled={!(num(chVal.amount) > 0)} onClick={() => applyChange(r)}>Uygula</button>
+                  <button style={{ ...css.btn, opacity: num(chVal.amount) > 0 && chYm ? 1 : 0.4 }} disabled={!(num(chVal.amount) > 0 && chYm)} onClick={() => applyChange(r)}>Uygula</button>
                 </div>
+                {chVal.from_month && !chYm && <div style={{ fontSize: 11, color: T.neg, marginTop: 6 }}>Ay biçimi YYYY-AA olmalı, örn. {curYm}</div>}
               </div>
             )}
           </div>
@@ -938,6 +948,11 @@ function Portfoy({ data, pos, reload }: { data: AllData; pos: Position[]; reload
         </div>
       </div>
       {lastUpdate && <div style={{ fontSize: 11, color: T.mut, marginBottom: 6 }}>son güncelleme: {lastUpdate}</div>}
+      <div style={{ fontSize: 11, color: T.mut, marginBottom: 8, lineHeight: 1.5 }}>
+        Her satırdaki kutu o varlığın <b>güncel birim fiyatıdır</b> — pozisyon değeri, açık K/Z ve net varlık bununla hesaplanır.
+        Fonlar (TEFAS) otomatik çekilemiyor; onları elle yaz. Elle girdiğin fiyat <b>oto</b> tazelemede değişmez;
+        otomatik fiyata dönmek için <b>sıfırla</b>’ya bas.
+      </div>
       {pos.length === 0 && <Empty>Henüz işlem yok. İlk alışınızı yukarıdan kaydedin.</Empty>}
       {pos.map((p) => (
         <div key={`${p.type}:${p.sym}`} style={{ padding: "10px 0", borderBottom: `1px solid ${T.line}` }}>
@@ -950,12 +965,25 @@ function Portfoy({ data, pos, reload }: { data: AllData; pos: Position[]; reload
             {p.value != null && <span style={{ ...css.mono, fontSize: 14 }}>{tl.format(Math.round(p.value))}</span>}
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
-            <input key={`${p.sym}-${p.cur}`} style={{ ...css.input, width: 130, padding: "6px 8px", fontSize: 13 }} inputMode="decimal"
-              placeholder="fiyat (elle)" defaultValue={p.cur ?? ""}
+            <input key={`${p.sym}-${p.cur}`} style={{ ...css.input, width: 120, padding: "6px 8px", fontSize: 13 }} inputMode="decimal"
+              placeholder="güncel fiyat ₺" defaultValue={p.cur ?? ""}
               onBlur={async (e) => {
                 const v = num(e.target.value);
                 if (v > 0 && v !== p.cur) { await api.put("prices", { symbol: p.sym, asset_type: p.type, price: v }); reload(); }
               }} />
+            {p.source === "manual" && (
+              <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 10, background: T.panel2, color: T.acc }}>elle</span>
+            )}
+            {p.source === "auto" && (
+              <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 10, background: T.panel2, color: T.mut }}>oto</span>
+            )}
+            {p.cur == null && (
+              <span style={{ fontSize: 11, color: T.neg }}>fiyat yok — elle gir</span>
+            )}
+            {p.cur != null && (
+              <button style={{ ...css.del, fontSize: 12 }} title="fiyatı sil, otomatiğe dön"
+                onClick={async () => { await api.delPrice(p.type, p.sym); reload(); }}>sıfırla</button>
+            )}
             {p.unreal != null && <span style={{ fontSize: 12, color: T.mut }}>açık K/Z: <Money v={Math.round(p.unreal)} sign size={12} /></span>}
             {p.realized !== 0 && <span style={{ fontSize: 12, color: T.mut }}>gerçekleşen: <Money v={Math.round(p.realized)} sign size={12} /></span>}
           </div>

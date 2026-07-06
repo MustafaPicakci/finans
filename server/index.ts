@@ -90,6 +90,14 @@ api.put("/prices", async (c) => {
   ).run(symbol, asset_type, price);
   return c.json({ ok: true });
 });
+/* elle girilen (veya eski) fiyatı sil: sonraki tazelemede otomatik yeniden dolar */
+api.delete("/prices/:asset_type/:symbol", (c) => {
+  db.prepare("DELETE FROM prices WHERE asset_type=? AND symbol=?").run(
+    c.req.param("asset_type"),
+    decodeURIComponent(c.req.param("symbol")),
+  );
+  return c.json({ ok: true });
+});
 
 /* ---- ayarlar ---- */
 api.put("/settings", async (c) => {
