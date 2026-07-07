@@ -2,22 +2,22 @@
 
 Tek ekrandan: nakit hesapları, düzenli gelir/giderler (tarih aralıklı), kredi taksitleri, kredi kartları (ekstre/taksit takibi), günlük nakit akışı takvimi ve canlı fiyatlı çok varlıklı portföy (BIST, TEFAS fonları, altın/kıymetli maden, döviz, kripto).
 
-**Mimari:** Node.js (Hono API) + React/Vite + SQLite (Node yerleşik `node:sqlite`, native bağımlılık yok). Tek süreç, tek konteyner. Tüm veri `data/finans.db` dosyasında — yedeklemek için bu dosyayı kopyalamak yeterli.
+**Mimari:** pnpm monorepo — `apps/server` (Hono API), `apps/web` (React/Vite), `packages/engine` (paylaşılan finans matematiği) + SQLite (Node yerleşik `node:sqlite`, native bağımlılık yok). Tek süreç, tek konteyner. Tüm veri `data/finans.db` dosyasında — yedeklemek için bu dosyayı kopyalamak yeterli. Hedef roadmap için [docs/PLAN.md](docs/PLAN.md).
 
 ## Lokal çalıştırma
 
-Gereksinim: Node.js 22+ (`node --version`).
+Gereksinim: Node.js 22+ (`node --version`), pnpm (`corepack enable` ile gelir).
 
 ```bash
-npm install
-npm run dev        # API: 8787, arayüz: http://localhost:5173
+pnpm install
+pnpm dev        # API: 8787, arayüz: http://localhost:5173
 ```
 
 Üretim modu (tek port):
 
 ```bash
-npm run build
-npm start          # http://localhost:8787
+pnpm build
+pnpm start      # http://localhost:8787
 ```
 
 ## Sunucuya taşıma (Docker)
