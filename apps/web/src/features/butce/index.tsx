@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { todayStr, parseD, fmtD, num, ymOf, normYm, type AllData, type Recurring } from "@finans/engine";
+import { todayStr, parseD, fmtD, num, ymOf, normYm, categoryTotals, transactionsInMonth, type AllData, type Recurring, type Category } from "@finans/engine";
 import { api } from "../../api";
 import { T, css } from "../../theme";
 import { Field, Money, Empty, Row } from "../../ui";
@@ -149,5 +149,115 @@ export function Butce({ data, reload }: { data: AllData; reload: () => void }) {
           setOne({ name: "", amount: "", date: todayStr(), type: "gider" }); reload();
         }}>Ekle</button>
     </div>
+
+    <GercekHarcamalar data={data} reload={reload} />
   </>);
+}
+
+/* ————— GERÇEKLEŞEN HARCAMALAR (kategori bazlı defter) ————— */
+/* Projeksiyon sistemine (recurring/loan/card) bağlı değildir — sadece ne harcadığını
+   kategorilere göre görmek için ayrı, elle tutulan bir defter. Hesap bakiyelerini etkilemez. */
+function GercekHarcamalar({ data, reload }: { data: AllData; reload: () => void }) {
+  const curYm = ymOf(new Date());
+  const [ym, setYm] = useState(curYm);
+  const [cat, setCat] = useState({ name: "", kind: "expense" as Category["kind"] });
+  const [tx, setTx] = useState({ date: todayStr(), name: "", amount: "", type: "gider", category_id: "" });
+  const catOk = cat.name.trim().length > 0;
+  const txOk = tx.name && num(tx.amount) > 0 && tx.date;
+
+  const totals = categoryTotals(data.transactions, data.categories, ym);
+  const monthTxs = transactionsInMonth(data.transactions, ym);
+  const catById = new Map(data.categories.map((c) => [c.id, c]));
+
+  return (
+    <div style={css.card}>
+      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Gerçekleşen Harcamalar</div>
+      <div style={{ fontSize: 12, color: T.mut, marginBottom: 8 }}>
+        Ne harcadığını kategorilere göre kaydet. Bu defter nakit projeksiyonunu ve hesap bakiyelerini etkilemez — sadece geçmişe bakış içindir.
+      </div>
+
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
+        <input type="month" style={{ ...css.input, width: 160 }} value={ym} onChange={(e) => setYm(e.target.value || curYm)} />
+      </div>
+
+      {totals.length === 0 ? <Empty>Bu ayda kayıtlı işlem yok.</Empty> : (
+        <div style={{ display: "grid", gap: 6, marginBottom: 14 }}>
+          {totals.map((t) => (
+            <div key={t.category_id ?? "none"} style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+              <span style={{ color: T.mut }}>{t.name} <span style={{ fontSize: 11 }}>× {t.count}</span></span>
+              <Money v={Math.round(t.total)} sign />
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+        <Field label="Ad" flex={2}><input style={css.input} value={tx.name} placeholder="örn. Migros" onChange={(e) => setTx({ ...tx, name: e.target.value })} /></Field>
+        <Field label="Tutar (₺)"><input style={css.input} inputMode="decimal" value={tx.amount} onChange={(e) => setTx({ ...tx, amount: e.target.value })} /></Field>
+        <Field label="Tarih"><input type="date" style={css.input} value={tx.date} onChange={(e) => setTx({ ...tx, date: e.target.value })} /></Field>
+        <Field label="Tür">
+          <select style={css.input} value={tx.type} onChange={(e) => setTx({ ...tx, type: e.target.value })}>
+            <option value="gider">Gider (−)</option><option value="gelir">Gelir (+)</option>
+          </select>
+        </Field>
+        <Field label="Kategori" flex={2}>
+          <select style={css.input} value={tx.category_id} onChange={(e) => setTx({ ...tx, category_id: e.target.value })}>
+            <option value="">Kategorisiz</option>
+            {data.categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </Field>
+      </div>
+      <button style={{ ...css.btn, opacity: txOk ? 1 : 0.4 }} disabled={!txOk}
+        onClick={async () => {
+          await api.post("transactions", {
+            name: tx.name, date: tx.date, amount: (tx.type === "gider" ? -1 : 1) * num(tx.amount),
+            category_id: tx.category_id ? +tx.category_id : null, account_id: null,
+          });
+          setTx({ date: todayStr(), name: "", amount: "", type: "gider", category_id: "" }); reload();
+        }}>Ekle</button>
+
+      {monthTxs.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          {monthTxs.map((t, i) => (
+            <Row key={t.id} last={i === monthTxs.length - 1}>
+              <span style={{ ...css.mono, fontSize: 12, color: T.mut, width: 74 }}>{fmtD(parseD(t.date), { day: "2-digit", month: "short", year: "2-digit" })}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13 }}>{t.name}</div>
+                {t.category_id != null && catById.get(t.category_id) && (
+                  <div style={{ fontSize: 11, color: T.mut }}>{catById.get(t.category_id)!.name}</div>
+                )}
+              </div>
+              <Money v={t.amount} sign />
+              <button style={css.del} onClick={async () => { await api.del("transactions", t.id); reload(); }}>✕</button>
+            </Row>
+          ))}
+        </div>
+      )}
+
+      <div style={{ borderTop: `1px solid ${T.line}`, marginTop: 16, paddingTop: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Kategoriler</div>
+        {data.categories.length === 0 && <Empty>Henüz kategori yok. Market, Ulaşım, Fatura gibi ekleyebilirsin.</Empty>}
+        {data.categories.map((c, i) => (
+          <Row key={c.id} last={i === data.categories.length - 1}>
+            <span style={{ flex: 1, fontSize: 13 }}>{c.name}</span>
+            <span style={{ fontSize: 11, color: T.mut }}>{c.kind === "income" ? "gelir" : "gider"}</span>
+            <button style={css.del} onClick={async () => { await api.del("categories", c.id); reload(); }}>✕</button>
+          </Row>
+        ))}
+        <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+          <Field label="Kategori adı" flex={2}><input style={css.input} value={cat.name} placeholder="örn. Market" onChange={(e) => setCat({ ...cat, name: e.target.value })} /></Field>
+          <Field label="Tür">
+            <select style={css.input} value={cat.kind} onChange={(e) => setCat({ ...cat, kind: e.target.value as Category["kind"] })}>
+              <option value="expense">Gider</option><option value="income">Gelir</option>
+            </select>
+          </Field>
+          <button style={{ ...css.btn, opacity: catOk ? 1 : 0.4, alignSelf: "flex-end" }} disabled={!catOk}
+            onClick={async () => {
+              await api.post("categories", { name: cat.name.trim(), kind: cat.kind, color: null });
+              setCat({ name: "", kind: cat.kind }); reload();
+            }}>Kategori Ekle</button>
+        </div>
+      </div>
+    </div>
+  );
 }

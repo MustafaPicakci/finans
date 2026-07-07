@@ -3,7 +3,8 @@
 ## Durum
 
 - ✅ **Faz 0 tamamlandı** — pnpm monorepo iskeleti (`apps/server`, `apps/web`, `packages/engine`), finans matematiğinin `packages/engine`'e çıkarımı + 46 vitest testi, `apps/web`'in tab başına `features/` klasörlerine bölünmesi. Davranış değişikliği yok; gerçek `data/finans.db` ile doğrulandı.
-- ⬜ Faz 1–5 henüz başlamadı.
+- ✅ **Faz 1 tamamlandı (kapsamı daraltılmış)** — Faz 1'e başlarken kullanıcıyla "hesap bakiyesi türetilir" (orijinal plan) vs "ek defter" seçeneği tekrar değerlendirildi; kullanıcı **ek defter**i seçti: `accounts.balance` ve tüm projeksiyon/kart/kredi matematiği **hiç değişmedi**. Sadece kategorili *gerçekleşen harcama* takibi için ayrı `categories`+`transactions` tabloları ve Bütçe sekmesinde yeni bir bölüm eklendi. Aşağıdaki "Faz 1" planı bu yüzden orijinal haliyle değil, gerçekleşen (daraltılmış) haliyle güncellendi.
+- ⬜ Faz 2–5 henüz başlamadı.
 
 ## Context (Neden)
 
@@ -44,51 +45,40 @@ Yapılanlar:
 - Kök `pnpm build` = `pnpm -r build` (her paket kendi `tsc --noEmit`/`vite build`'ini çalıştırır) — CI kapısı bu.
 - `apps/server/db.ts`: `DATA_DIR` verilmemişse veri dizini `import.meta.dirname` ile repo köküne göre bulunuyor (cwd'den bağımsız).
 
-## Faz 1 — Ledger Veri Modeli (çekirdek değişim)
+## Faz 1 — Kategorili Gerçekleşen Harcama Defteri ✅
 
-Yeni şema (`apps/server/db.ts`, mevcut migrasyon deseniyle — `PRAGMA table_info` + `ALTER/CREATE IF NOT EXISTS`):
+Yapılanlar (`apps/server/db.ts`, `CREATE TABLE IF NOT EXISTS` ile — yeni tablolar, mevcut şemaya dokunulmadı):
 
 ```sql
-CREATE TABLE categories (
+CREATE TABLE IF NOT EXISTS categories (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL UNIQUE,
   kind TEXT NOT NULL CHECK (kind IN ('income','expense')),
   color TEXT
 );
-CREATE TABLE transactions (
+CREATE TABLE IF NOT EXISTS transactions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
-  date TEXT NOT NULL,                -- gelecek tarihli = planlı kalem
+  date TEXT NOT NULL,
   name TEXT NOT NULL,
   amount REAL NOT NULL,              -- işaretli: gelir +, gider −
   category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
-  source TEXT NOT NULL DEFAULT 'manual'  -- manual | generated | import (ileride)
-    CHECK (source IN ('manual','generated','import')),
-  recurring_id INTEGER,              -- üretildiyse hangi şablondan (dedup için)
-  UNIQUE (recurring_id, date)        -- aynı şablon aynı güne iki kez düşmesin
+  account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL  -- opsiyonel, sadece bilgi amaçlı
 );
 ```
 
-Model kuralları:
-- **Bakiye türetilir**: hesap bakiyesi = açılış işlemi + Σ(o hesabın `date ≤ bugün` işlemleri). `accounts.balance` kolonu kalkar (geçiş süresince okunmaz).
-- **Şablonlar üretir**: `recurring`, `loans`, `cards` tabloları "planlama nesnesi" olarak kalır. Sunucuda günlük job (mevcut `node-cron` altyapısı): vadesi gelen recurring/kredi taksidi/kart ekstresini `source='generated'` işlem olarak deftere yazar (`recurring_id` + `UNIQUE` ile idempotent). Kullanıcı üretilen kaydı düzenleyebilir/silebilir (gerçek tutar farklıysa).
-- **Projeksiyon** (`engine.project` yeniden yazılır): bugünkü türetilmiş nakit + gelecek şablon oluşları (recurring/kredi/kart) + gelecek tarihli işlemler. Geçmiş günler artık defterdeki gerçek işlemlerden hesaplanır.
-- `oneoffs` tablosu `transactions`'a erir (tek seferlik = kategorisiz/kategorili tek işlem, gelecek tarihli olabilir).
+Model kuralları (daraltılmış kapsam — kullanıcı onayıyla):
+- **`accounts.balance` değişmedi.** Elle güncelleme akışı, projeksiyon (`project()`), kart/kredi matematiği tamamen aynı kaldı — bu defter onlara bağlı değil, onları etkilemiyor.
+- **`transactions` bağımsız bir defter**: sadece "ne harcadım/kazandım, hangi kategoride" sorusuna cevap verir. `recurring`/`loans`/`cards`'tan otomatik satır üretimi (cron ile "generated" kayıt) **yapılmıyor** — kapsam dışı bırakıldı, gelecekte istenirse ayrı bir iyileştirme olarak eklenebilir.
+- `oneoffs` tablosu değişmedi, `transactions`'a taşınmadı — o hâlâ projeksiyon sisteminin parçası.
+- Kategori silinirse (`ON DELETE SET NULL`) o kategorideki işlemler "Kategorisiz" altında kalır, silinmez.
 
-Veri geçişi (tek seferlik migrasyon, `db.ts` içinde sürüm anahtarıyla — `settings.schema_version`):
-1. Her hesap için mevcut `balance` → bugün tarihli "Açılış bakiyesi" işlemi.
-2. `oneoffs` satırları → `transactions` (geçmiş + gelecek tarihli olduğu gibi).
-3. Geçmişte kalmış recurring/kredi/kart oluşları **geriye dönük üretilmez** (bakiye zaten açılış işleminde içkin); üretim bugünden ileri başlar.
-4. Migrasyon öncesi otomatik yedek: `data/finans.db` → `data/finans-backup-<tarih>.db` kopyası.
+API (`apps/server/index.ts`): mevcut `crud()` fabrikasıyla `transactions` ve `categories` CRUD; `GET /api/all` yeni alanları da döner.
 
-API (`apps/server/index.ts`):
-- Mevcut `crud()` fabrikasıyla `transactions` ve `categories` CRUD (PUT zaten var → **düzenleme artık her yerde gerçek edit**, sil+yeniden-ekle biter).
-- `GET /api/all` yeni tabloları da döner (tek-okuma-ucu deseni korunur).
+Engine (`packages/engine/src/ledger.ts`, 6 vitest testi): `categoryTotals(transactions, categories, ym)` — bir ay için kategori bazlı toplam/adet (mutlak değere göre sıralı); `transactionsInMonth` — bir ayın işlemlerini yeniden-eskiye sıralar.
 
-UI:
-- **Bütçe sekmesi** yeniden: aylık görünüm — kategori bazlı gerçekleşen toplamlar, işlem listesi (tarih/ad/kategori/hesap/tutar), hızlı işlem ekleme, kategori yönetimi.
-- Hesaplar: bakiye artık salt-okunur türetilmiş değer + "düzeltme işlemi ekle" kısayolu (elle bakiye senkronu için).
-- Nakit takvimi: geçmiş günler defterden, gelecek şablondan — görsel davranış aynı kalır.
+UI (`apps/web/src/features/butce/index.tsx`, `GercekHarcamalar` bileşeni): Bütçe sekmesine 4. kart olarak eklendi — ay seçici, kategori bazlı toplamlar, işlem ekleme/silme, kategori yönetimi (ekle/sil).
+
+Doğrulama: `pnpm build` temiz, 52 engine testi yeşil, gerçek `data/finans.db` üzerinde prod sunucu ile uçtan uca test edildi (kategori/işlem ekle-listele-sil, eski veri MD5 değişmedi).
 
 ## Faz 2 — Mobil-Öncelikli Arayüz + PWA
 
@@ -120,10 +110,10 @@ UI:
 ## Doğrulama
 
 - **Faz 0**: ✅ `pnpm build` temiz; 46 engine vitest testi yeşil; gerçek `data/finans.db` ile prod sunucu smoke test edildi (API verisi + derlenmiş arayüz doğrulandı).
-- **Faz 1**: migrasyon gerçek verinin **kopyasında** test edilir (`cp data/finans.db` → test DATA_DIR); türetilmiş bakiyeler eski `balance` değerleriyle birebir karşılaştırılır; cron üretimi idempotentliği (iki kez tetikle → tek kayıt) test edilir; engine projeksiyon testleri yeni modele uyarlanır.
+- **Faz 1**: ✅ `pnpm build` temiz; 52 engine vitest testi yeşil (6 yeni ledger testi dahil); gerçek `data/finans.db`'nin yedeği alındıktan sonra prod sunucu ile kategori/işlem CRUD uçtan uca test edildi, eski veri (accounts/recurring/loans/trades/cards) değişmeden kaldı.
 - **Faz 2**: Lighthouse PWA denetimi; telefonda kurulum + offline açılış elle test.
 - **Her faz sonunda**: `data/finans.db` yedeği alınmış olmalı; commit fazın sonunda tek parça.
 
 ## Sıralama
 
-Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Sıradaki: Faz 1 (ledger veri modeli).
+Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Sıradaki: Faz 2 (mobil-öncelikli arayüz + PWA).

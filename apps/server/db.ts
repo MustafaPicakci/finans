@@ -77,6 +77,20 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS categories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL CHECK (kind IN ('income','expense')),
+  color TEXT
+);
+CREATE TABLE IF NOT EXISTS transactions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  date TEXT NOT NULL,
+  name TEXT NOT NULL,
+  amount REAL NOT NULL,
+  category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+  account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL
+);
 `);
 
 /* ---- migrasyonlar (var olan db'ye kolon ekle) ---- */

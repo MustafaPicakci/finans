@@ -18,6 +18,8 @@ api.get("/all", (c) =>
     trades: db.prepare("SELECT * FROM trades ORDER BY date, id").all(),
     cards: db.prepare("SELECT * FROM cards ORDER BY id").all(),
     card_txs: db.prepare("SELECT * FROM card_txs ORDER BY date, id").all(),
+    categories: db.prepare("SELECT * FROM categories ORDER BY name").all(),
+    transactions: db.prepare("SELECT * FROM transactions ORDER BY date DESC, id DESC").all(),
     prices: db.prepare("SELECT * FROM prices").all(),
     settings: Object.fromEntries(
       (db.prepare("SELECT key, value FROM settings").all() as { key: string; value: string }[]).map((s) => [s.key, s.value]),
@@ -77,6 +79,13 @@ crud("cards", "cards", [
 crud("cardtxs", "card_txs", [
   { name: "card_id", required: true }, { name: "date", required: true },
   { name: "name", required: true }, { name: "amount", required: true }, { name: "installments" },
+]);
+crud("categories", "categories", [
+  { name: "name", required: true }, { name: "kind", required: true }, { name: "color" },
+]);
+crud("transactions", "transactions", [
+  { name: "date", required: true }, { name: "name", required: true }, { name: "amount", required: true },
+  { name: "category_id" }, { name: "account_id" },
 ]);
 
 /* ---- fiyatlar ---- */
