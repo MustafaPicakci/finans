@@ -109,9 +109,10 @@ api.put("/settings", async (c) => {
 
 app.route("/api", api);
 
-/* prod: derlenmiş arayüzü sun */
-app.use("/*", serveStatic({ root: "./dist" }));
-app.get("*", serveStatic({ path: "./dist/index.html" }));
+/* prod: derlenmiş arayüzü sun (apps/web/dist) — pnpm bu paketi kendi dizininden
+   çalıştırdığı için yol apps/server'a göre relatif */
+app.use("/*", serveStatic({ root: "../web/dist" }));
+app.get("*", serveStatic({ path: "../web/dist/index.html" }));
 
 /* saat başı + her 15 dk fiyat tazele (piyasa dışı saatlerde de zararsız) */
 cron.schedule("*/15 * * * *", () => {

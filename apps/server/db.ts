@@ -2,7 +2,10 @@ import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
 
-const dir = process.env.DATA_DIR || path.join(process.cwd(), "data");
+/* import.meta.dirname yerine process.cwd() kullanılmıyor: server hangi dizinden
+   başlatılırsa başlatılsın (pnpm --filter, Docker, doğrudan tsx) hep aynı
+   repo-kökü data/ klasörünü bulsun — DATA_DIR ortam değişkeni (Docker'da /data) önceliklidir. */
+const dir = process.env.DATA_DIR || path.join(import.meta.dirname, "../../data");
 fs.mkdirSync(dir, { recursive: true });
 
 export const db = new DatabaseSync(path.join(dir, "finans.db"));
