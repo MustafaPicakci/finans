@@ -109,10 +109,15 @@ export async function refreshAll(): Promise<RefreshResult[]> {
     `INSERT INTO prices (symbol, asset_type, price, source, updated_at) VALUES (?,?,?,?,datetime('now','localtime'))
      ON CONFLICT(symbol, asset_type) DO UPDATE SET price=excluded.price, source=excluded.source, updated_at=excluded.updated_at`,
   );
+  /* günde bir satır: aynı gün içindeki tekrar tazelemeler o günün fiyatını günceller, geçmişi çoğaltmaz */
+  const upsertHistory = db.prepare(
+    `INSERT INTO price_history (symbol, asset_type, date, price) VALUES (?,?,date('now','localtime'),?)
+     ON CONFLICT(symbol, asset_type, date) DO UPDATE SET price=excluded.price`,
+  );
   const out: RefreshResult[] = [];
   for (const h of held) {
     const p = await fetchPrice(h.asset_type, h.symbol, usdTry);
-    if (p != null) upsert.run(h.symbol, h.asset_type, p, "auto");
+    if (p != null) { upsert.run(h.symbol, h.asset_type, p, "auto"); upsertHistory.run(h.symbol, h.asset_type, p); }
     out.push({ symbol: h.symbol, asset_type: h.asset_type, ok: p != null, price: p ?? undefined });
   }
   return out;

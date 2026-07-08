@@ -91,6 +91,13 @@ CREATE TABLE IF NOT EXISTS transactions (
   category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
   account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL
 );
+CREATE TABLE IF NOT EXISTS price_history (
+  symbol TEXT NOT NULL,
+  asset_type TEXT NOT NULL,
+  date TEXT NOT NULL,
+  price REAL NOT NULL,
+  PRIMARY KEY (symbol, asset_type, date)
+);
 `);
 
 /* ---- migrasyonlar (var olan db'ye kolon ekle) ---- */

@@ -3,7 +3,7 @@ import { project } from "./projection.js";
 import type { AllData } from "./types.js";
 
 const baseData = (over: Partial<AllData> = {}): AllData => ({
-  accounts: [], recurring: [], loans: [], oneoffs: [], trades: [], cards: [], card_txs: [], prices: [],
+  accounts: [], recurring: [], loans: [], oneoffs: [], trades: [], cards: [], card_txs: [], prices: [], price_history: [],
   categories: [], transactions: [], settings: {},
   ...over,
 });

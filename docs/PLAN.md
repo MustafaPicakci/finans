@@ -5,7 +5,8 @@
 - ✅ **Faz 0 tamamlandı** — pnpm monorepo iskeleti (`apps/server`, `apps/web`, `packages/engine`), finans matematiğinin `packages/engine`'e çıkarımı + 46 vitest testi, `apps/web`'in tab başına `features/` klasörlerine bölünmesi. Davranış değişikliği yok; gerçek `data/finans.db` ile doğrulandı.
 - ✅ **Faz 1 tamamlandı (kapsamı daraltılmış)** — Faz 1'e başlarken kullanıcıyla "hesap bakiyesi türetilir" (orijinal plan) vs "ek defter" seçeneği tekrar değerlendirildi; kullanıcı **ek defter**i seçti: `accounts.balance` ve tüm projeksiyon/kart/kredi matematiği **hiç değişmedi**. Sadece kategorili *gerçekleşen harcama* takibi için ayrı `categories`+`transactions` tabloları ve Bütçe sekmesinde yeni bir bölüm eklendi. Aşağıdaki "Faz 1" planı bu yüzden orijinal haliyle değil, gerçekleşen (daraltılmış) haliyle güncellendi.
 - ✅ **Faz 2 tamamlandı** — `vite-plugin-pwa` ile manifest + service worker (statikler precache, `/api/all` network-first), mobil ikonlar (`apps/web/public/`), mobilde alt sekme çubuğu (bottom nav) + masaüstünde üst sekmeler arası responsive geçiş (`max-width:720px`). Playwright ile hem masaüstü hem mobil görünüm görsel olarak doğrulandı (konsol hatası yok, gerçek veriyle).
-- ⬜ Faz 3–5 henüz başlamadı.
+- ✅ **Faz 3 kısmen tamamlandı** — sadece "fiyat geçmişi + portföy değer grafiği" alt maddesi yapıldı (bkz. aşağı). Temettü/sermaye olayları ve işlem→hesap bağlantısı, gerçek P&L matematiğini değiştirdiği veya CLAUDE.md'deki bilinçli bir tasarım kararını (hisse işlemi hesap bakiyesini otomatik düşürmez) tersine çevirdiği için kullanıcı onayı bekliyor.
+- ⬜ Faz 4–5 henüz başlamadı.
 
 ## Context (Neden)
 
@@ -89,12 +90,24 @@ Yapılanlar:
 - İkonlar `apps/web/public/` altında SVG kaynağından (`icon.svg`, `icon-maskable.svg`) `rsvg-convert` ile üretildi (192/512/maskable-512/apple-touch-icon/favicon). `index.html`'e `apple-mobile-web-app-*` meta etiketleri ve `viewport-fit=cover` eklendi.
 - Playwright (geçici, proje bağımlılığı değil) ile masaüstü (1280px, üst sekmeler) ve mobil (390px, alt nav) görünümleri gerçek `data/finans.db` ile ekran görüntüsü alınarak doğrulandı; konsol hatası yok, manifest doğru içerikle 200 dönüyor.
 
-## Faz 3 — Portföy Derinleştirme
+## Faz 3 — Portföy Derinleştirme (kısmi)
 
-- **Fiyat geçmişi**: `price_history (symbol, asset_type, date, price)` tablosu; `refreshAll()` her başarılı tazelemede günün kaydını yazar (günde bir upsert). Özet sekmesine net varlık zaman grafiği (recharts zaten bağımlılıkta).
-- Temettü + bedelli/bedelsiz kayıtları: `trades.side`'a `TEMETTU` / sermaye olayı türleri ya da ayrı `corporate_actions` tablosu; `engine.positions` maliyet hesabına işler. Temettü aynı zamanda deftere gelir işlemi düşer (ledger tutarlılığı).
-- İşlem → hesap bağlantısı: alışta hesaptan düşen, satışta hesaba giren işlem (opsiyonel `account_id` trades'e; README yol haritasındaki madde).
-- Fon fiyatı: elle giriş ana yol (mevcut rozet/sıfırla korunur); istenirse anahtarlı sağlayıcı adaptörü (`apps/server/prices.ts`'e tek fonksiyon, anahtar `.env`) — kaynak başına izole fonksiyon deseni korunur.
+### Fiyat geçmişi + portföy değer grafiği ✅
+
+Yapılanlar:
+- `price_history (symbol, asset_type, date, price)` tablosu (`PRIMARY KEY (symbol, asset_type, date)` — günde bir satır, aynı gün tekrar tazeleme üzerine yazar).
+- `refreshAll()` (`apps/server/prices.ts`) ve elle fiyat girişi (`PUT /api/prices`, `apps/server/index.ts`) artık `prices` ile birlikte `price_history`'e de upsert yapıyor.
+- `packages/engine/src/portfolio.ts`: `portfolioValueHistory(trades, priceHistory)` — sadece fiyat kaydı olan günler için, sembol başına forward-fill ile portföy değeri serisi üretir (5 vitest testi, toplam **57 test**).
+- Özet sekmesine "Portföy Değeri Geçmişi" kartı: `recharts` ile alan grafiği; 2'den az veri noktası varsa "yeterli geçmiş birikince dolar" mesajı gösterilir (uydurma/geriye dönük veri yok).
+- **Kapsam netliği**: bu grafik *net varlık* değil, *portföy değeri* geçmişidir — nakit bakiyesinin geçmişi hiç tutulmadığından (bkz. Faz 1 kararı) gerçek net varlık geçmişi bu veri modeliyle hesaplanamaz. README'deki mevcut not ("gerçek tarihsel değer grafiği için prices tablosuna gün gün kayıt eklemek gerekir") tam olarak bunu işaret ediyordu.
+
+Doğrulama: `pnpm build` temiz, 57 engine testi yeşil, gerçek sunucuda elle fiyat girişi + otomatik tazeleme uçtan uca test edildi (`price_history` doğru dolduruyor), Playwright ile Özet ekranı görsel doğrulandı (boş durum mesajı doğru, konsol hatası yok).
+
+### Bekleyen alt maddeler (kullanıcı onayı gerekiyor)
+
+- **Temettü + bedelli/bedelsiz sermaye artırımı**: `trades.side` enum'unu genişletmek ya da ayrı `corporate_actions` tablosu — `engine.positions` maliyet/K-Z matematiğini değiştirir, gerçek portföyün P&L rakamlarını etkiler. Tasarım kararı (şema yaklaşımı + temettünün deftere nasıl yansıyacağı) netleşmeden uygulanmadı.
+- **İşlem → hesap bağlantısı** (alışta hesaptan düşen, satışta hesaba giren): CLAUDE.md'de bilinçli bir tasarım kararı olarak belgelenmiş ("Hisse işlemleri hesap bakiyesini otomatik düşürmez"). Bunu değiştirmek mevcut, güvenilir bir akışı tersine çevirir — kullanıcı istemeden yapılmadı.
+- **Fon fiyatı anahtarlı sağlayıcı**: bu oturumda araştırıldı — TEFAS'ın açık API'si F5 bot-koruması arkasında, global sağlayıcılar (TwelveData/EODHD/collectapi) Türk fon NAV'ı taşımıyor, tek anahtarlı yol RapidAPI'deki resmî olmayan bir aracı. Kullanıcı "resmî/güvenilir" tercih ettiği için uygulanmadı; elle giriş (rozet+sıfırla, Faz 0'da eklendi) ana yol olarak kalıyor.
 
 ## Faz 4 — Dosya Importu (banka + Midas)
 
@@ -115,8 +128,9 @@ Yapılanlar:
 - **Faz 0**: ✅ `pnpm build` temiz; 46 engine vitest testi yeşil; gerçek `data/finans.db` ile prod sunucu smoke test edildi (API verisi + derlenmiş arayüz doğrulandı).
 - **Faz 1**: ✅ `pnpm build` temiz; 52 engine vitest testi yeşil (6 yeni ledger testi dahil); gerçek `data/finans.db`'nin yedeği alındıktan sonra prod sunucu ile kategori/işlem CRUD uçtan uca test edildi, eski veri (accounts/recurring/loans/trades/cards) değişmeden kaldı.
 - **Faz 2**: ✅ `pnpm build` temiz (PWA precache üretimi dahil); Playwright ile masaüstü/mobil ekran görüntüsü + konsol hatası kontrolü yapıldı. Henüz yapılmadı: gerçek telefonda "ana ekrana ekle" kurulumu ve Lighthouse PWA denetimi (kullanıcının kendi cihazında denemesi gerekir).
+- **Faz 3 (kısmi)**: ✅ `pnpm build` temiz; 57 engine testi yeşil (5 yeni `portfolioValueHistory` testi dahil); gerçek sunucuda elle fiyat girişi + otomatik tazeleme test edildi (`price_history` doğru yazıyor), Playwright ile Özet ekranı doğrulandı.
 - **Her faz sonunda**: `data/finans.db` yedeği alınmış olmalı; commit fazın sonunda tek parça.
 
 ## Sıralama
 
-Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Sıradaki: Faz 3 (portföy derinleştirme — fiyat geçmişi, temettü/sermaye olayları).
+Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Sıradaki: Faz 3'ün bekleyen alt maddeleri (temettü/sermaye olayları, işlem→hesap bağlantısı — kullanıcı kararı gerekiyor) ya da doğrudan Faz 4 (dosya importu).

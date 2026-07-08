@@ -21,6 +21,7 @@ api.get("/all", (c) =>
     categories: db.prepare("SELECT * FROM categories ORDER BY name").all(),
     transactions: db.prepare("SELECT * FROM transactions ORDER BY date DESC, id DESC").all(),
     prices: db.prepare("SELECT * FROM prices").all(),
+    price_history: db.prepare("SELECT * FROM price_history ORDER BY date").all(),
     settings: Object.fromEntries(
       (db.prepare("SELECT key, value FROM settings").all() as { key: string; value: string }[]).map((s) => [s.key, s.value]),
     ),
@@ -96,6 +97,10 @@ api.put("/prices", async (c) => {
   db.prepare(
     `INSERT INTO prices (symbol, asset_type, price, source, updated_at) VALUES (?,?,?,'manual',datetime('now','localtime'))
      ON CONFLICT(symbol, asset_type) DO UPDATE SET price=excluded.price, source='manual', updated_at=excluded.updated_at`,
+  ).run(symbol, asset_type, price);
+  db.prepare(
+    `INSERT INTO price_history (symbol, asset_type, date, price) VALUES (?,?,date('now','localtime'),?)
+     ON CONFLICT(symbol, asset_type, date) DO UPDATE SET price=excluded.price`,
   ).run(symbol, asset_type, price);
   return c.json({ ok: true });
 });
