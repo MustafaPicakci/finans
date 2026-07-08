@@ -4,7 +4,8 @@
 
 - ✅ **Faz 0 tamamlandı** — pnpm monorepo iskeleti (`apps/server`, `apps/web`, `packages/engine`), finans matematiğinin `packages/engine`'e çıkarımı + 46 vitest testi, `apps/web`'in tab başına `features/` klasörlerine bölünmesi. Davranış değişikliği yok; gerçek `data/finans.db` ile doğrulandı.
 - ✅ **Faz 1 tamamlandı (kapsamı daraltılmış)** — Faz 1'e başlarken kullanıcıyla "hesap bakiyesi türetilir" (orijinal plan) vs "ek defter" seçeneği tekrar değerlendirildi; kullanıcı **ek defter**i seçti: `accounts.balance` ve tüm projeksiyon/kart/kredi matematiği **hiç değişmedi**. Sadece kategorili *gerçekleşen harcama* takibi için ayrı `categories`+`transactions` tabloları ve Bütçe sekmesinde yeni bir bölüm eklendi. Aşağıdaki "Faz 1" planı bu yüzden orijinal haliyle değil, gerçekleşen (daraltılmış) haliyle güncellendi.
-- ⬜ Faz 2–5 henüz başlamadı.
+- ✅ **Faz 2 tamamlandı** — `vite-plugin-pwa` ile manifest + service worker (statikler precache, `/api/all` network-first), mobil ikonlar (`apps/web/public/`), mobilde alt sekme çubuğu (bottom nav) + masaüstünde üst sekmeler arası responsive geçiş (`max-width:720px`). Playwright ile hem masaüstü hem mobil görünüm görsel olarak doğrulandı (konsol hatası yok, gerçek veriyle).
+- ⬜ Faz 3–5 henüz başlamadı.
 
 ## Context (Neden)
 
@@ -80,11 +81,13 @@ UI (`apps/web/src/features/butce/index.tsx`, `GercekHarcamalar` bileşeni): Büt
 
 Doğrulama: `pnpm build` temiz, 52 engine testi yeşil, gerçek `data/finans.db` üzerinde prod sunucu ile uçtan uca test edildi (kategori/işlem ekle-listele-sil, eski veri MD5 değişmedi).
 
-## Faz 2 — Mobil-Öncelikli Arayüz + PWA
+## Faz 2 — Mobil-Öncelikli Arayüz + PWA ✅
 
-- Responsive geçiş: sekme çubuğu mobilde alta (bottom nav), kartlar tek kolon, dokunma hedefleri büyütülür. Mevcut inline-style tema (`T`, `css`) korunur; sadece kırılım noktaları eklenir.
-- `vite-plugin-pwa`: manifest (ad, ikon, tema rengi), service worker — statikler cache-first, `/api/all` network-first + son kopya offline gösterim (salt-okunur offline).
-- iOS/Android "Ana ekrana ekle" ile tam ekran uygulama hissi.
+Yapılanlar:
+- **Responsive geçiş** (`apps/web/src/App.tsx`): `max-width:720px` kırılım noktası. Masaüstünde üst sekmeler (`.top-tabs`), mobilde sabit alt sekme çubuğu (`.bottom-nav`, `position:fixed`, `env(safe-area-inset-bottom)` ile iOS notch payı, kısa etiketler: "Nakit Akışı"→"Nakit" vb.). Mevcut inline-style tema (`T`, `css`) korundu; kartlar zaten `flexWrap`/`auto-fit` grid ile tek kolona düşüyordu, ek değişiklik gerekmedi. Mobilde `input/select/button` için `min-height:40px` dokunma hedefi.
+- **`vite-plugin-pwa`** (`apps/web/vite.config.ts`): manifest (ad "Finans", `tr` dil, `#0D1322` tema/arka plan rengi, 192/512/512-maskable ikonlar), `generateSW` modu — statikler precache (14 girdi, ~636 KiB), `/api/all` `NetworkFirst` (5sn timeout, sonra son başarılı kopya — offline'da salt-okunur gösterim).
+- İkonlar `apps/web/public/` altında SVG kaynağından (`icon.svg`, `icon-maskable.svg`) `rsvg-convert` ile üretildi (192/512/maskable-512/apple-touch-icon/favicon). `index.html`'e `apple-mobile-web-app-*` meta etiketleri ve `viewport-fit=cover` eklendi.
+- Playwright (geçici, proje bağımlılığı değil) ile masaüstü (1280px, üst sekmeler) ve mobil (390px, alt nav) görünümleri gerçek `data/finans.db` ile ekran görüntüsü alınarak doğrulandı; konsol hatası yok, manifest doğru içerikle 200 dönüyor.
 
 ## Faz 3 — Portföy Derinleştirme
 
@@ -111,9 +114,9 @@ Doğrulama: `pnpm build` temiz, 52 engine testi yeşil, gerçek `data/finans.db`
 
 - **Faz 0**: ✅ `pnpm build` temiz; 46 engine vitest testi yeşil; gerçek `data/finans.db` ile prod sunucu smoke test edildi (API verisi + derlenmiş arayüz doğrulandı).
 - **Faz 1**: ✅ `pnpm build` temiz; 52 engine vitest testi yeşil (6 yeni ledger testi dahil); gerçek `data/finans.db`'nin yedeği alındıktan sonra prod sunucu ile kategori/işlem CRUD uçtan uca test edildi, eski veri (accounts/recurring/loans/trades/cards) değişmeden kaldı.
-- **Faz 2**: Lighthouse PWA denetimi; telefonda kurulum + offline açılış elle test.
+- **Faz 2**: ✅ `pnpm build` temiz (PWA precache üretimi dahil); Playwright ile masaüstü/mobil ekran görüntüsü + konsol hatası kontrolü yapıldı. Henüz yapılmadı: gerçek telefonda "ana ekrana ekle" kurulumu ve Lighthouse PWA denetimi (kullanıcının kendi cihazında denemesi gerekir).
 - **Her faz sonunda**: `data/finans.db` yedeği alınmış olmalı; commit fazın sonunda tek parça.
 
 ## Sıralama
 
-Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Sıradaki: Faz 2 (mobil-öncelikli arayüz + PWA).
+Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Sıradaki: Faz 3 (portföy derinleştirme — fiyat geçmişi, temettü/sermaye olayları).
