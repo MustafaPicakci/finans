@@ -78,7 +78,7 @@ export default function App() {
         </div>
       </div>
 
-      <div className="main-content" style={{ maxWidth: 920, margin: "0 auto", padding: 16, display: "grid", gap: 14 }}>
+      <div className="main-content" style={{ maxWidth: 920, margin: "0 auto", padding: 16, display: "grid", gridTemplateColumns: "minmax(0,1fr)", gap: 14 }}>
         {tab === "ozet" && <Ozet data={data} days={days} pos={pos} cash={cash} portValue={portValue} reload={reload} />}
         {tab === "nakit" && <Nakit days={days} />}
         {tab === "butce" && <Butce data={data} reload={reload} />}

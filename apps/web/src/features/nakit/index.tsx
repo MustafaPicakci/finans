@@ -22,7 +22,7 @@ export function Nakit({ days }: { days: Day[] }) {
   return (
     <div style={css.card}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-        <div style={{ display: "flex", gap: 6, overflowX: "auto" }}>
+        <div style={{ display: "flex", gap: 6, overflowX: "auto", minWidth: 0 }}>
           {months.map((m, i) => (
             <button key={i} onClick={() => setMi(i)} style={{
               background: i === mi ? T.acc : T.panel2, color: i === mi ? "#1A1408" : T.mut,
@@ -88,7 +88,7 @@ function Takvim({ month }: { month: { y: number; mo: number; days: Day[] } }) {
   const kBrief = (v: number) => (Math.abs(v) >= 1000 ? `${Math.round(v / 1000)}k` : String(Math.round(v)));
 
   return (<>
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(7,minmax(0,1fr))", gap: 4, maxWidth: 480, margin: "0 auto" }}>
       {wd.map((w) => <div key={w} style={{ textAlign: "center", fontSize: 11, color: T.mut, padding: "2px 0" }}>{w}</div>)}
       {cells.map((d, i) => {
         if (!d) return <div key={i} />;
