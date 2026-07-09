@@ -25,31 +25,48 @@ async function yahoo(sym: string): Promise<number | null> {
   }
 }
 
-async function tefas(code: string): Promise<number | null> {
-  try {
-    const fmt = (d: Date) =>
-      `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}.${d.getFullYear()}`;
-    const body = new URLSearchParams({
-      fontip: "YAT",
-      fonkod: code,
-      bastarih: fmt(new Date(Date.now() - 10 * 864e5)),
-      bittarih: fmt(new Date()),
-    });
-    const r = await fetch("https://www.tefas.gov.tr/api/DB/BindHistoryInfo", {
-      method: "POST",
-      headers: { ...UA, "Content-Type": "application/x-www-form-urlencoded" },
-      body,
-    });
-    if (!r.ok) return null;
-    const j: any = await r.json();
-    const rows: any[] = j?.data ?? [];
-    if (!rows.length) return null;
-    const last = rows[rows.length - 1];
-    const p = last?.FIYAT ?? last?.fiyat;
-    return typeof p === "number" ? p : parseTr(p);
-  } catch {
-    return null;
+/* TEFAS'ın resmi API'si bot korumasının (F5) arkasında — bkz. docs/PLAN.md. Bunun yerine
+   RapidAPI üzerindeki resmi olmayan bir aracı kullanılıyor (opsiyonel, RAPIDAPI_KEY gerekir).
+   Tek fon kodu sorgulayan bir uç sunmuyor: fon türü başına (1-5) tüm fonların listesini
+   döner, biz kendi tuttuğumuz sembollere göre filtreleriz. NAV günde bir hesaplandığından
+   refreshAll() bunu günde bir kez çağırır (bkz. aşağıdaki tefas_last_fetch throttle'ı). */
+const TEFAS_HOST = "tefas-api.p.rapidapi.com";
+
+const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
+
+async function fetchTefasSnapshot(): Promise<Map<string, number>> {
+  const key = process.env.RAPIDAPI_KEY;
+  const map = new Map<string, number>();
+  if (!key) return map;
+  const fmt = (d: Date) => `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}.${d.getFullYear()}`;
+  const end = fmt(new Date());
+  const start = fmt(new Date(Date.now() - 4 * 864e5)); // hafta sonu/tatil boşluğuna karşı birkaç gün geriye
+  for (let fundType = 1; fundType <= 5; fundType++) {
+    for (let page = 1; page <= 5; page++) {
+      try {
+        const url = `https://${TEFAS_HOST}/api/v1/funds/historical/${page}?fundType=${fundType}&startDate=${start}&endDate=${end}&size=250`;
+        const r = await fetch(url, { headers: { "x-rapidapi-host": TEFAS_HOST, "x-rapidapi-key": key } });
+        if (r.status === 429) {
+          /* günlük/saniyelik kota aşıldı — diğer fon türlerini denemek de boşuna, sessizce vazgeç */
+          console.error("[prices] TEFAS (RapidAPI) kotası doldu, bu tazelemede fon fiyatı alınamadı.");
+          return map;
+        }
+        if (!r.ok) break;
+        const j: any = await r.json();
+        const rows: { fund_code?: string; price?: number; date?: string }[] = j?.data ?? [];
+        /* aynı fon birden fazla günle gelebilir; artan tarihe göre işleyip en güncel fiyatı bırak */
+        [...rows]
+          .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+          .forEach((row) => { if (row.fund_code && typeof row.price === "number") map.set(row.fund_code, row.price); });
+        const hasMore = j?.meta?.has_more;
+        await sleep(300); // aynı türün sayfaları arasında küçük bekleme (olası saniyelik kotayı zorlamamak için)
+        if (!hasMore) break;
+      } catch {
+        break;
+      }
+    }
   }
+  return map;
 }
 
 /** GRAM, CEYREK, YARIM, TAM, ONS, GUMUS → TRY satış fiyatı */
@@ -93,8 +110,7 @@ async function fetchPrice(assetType: string, symbol: string, usdTry: number | nu
       const usd = await yahoo(symbol);
       return usd && usdTry ? usd * usdTry : null;
     }
-    case "FON":
-      return tefas(symbol);
+    /* FON burada değil: refreshAll() içinde ayrıca, günde bir kez toplu çekilir (bkz. fetchTefasSnapshot) */
     case "ALTIN":
       return gold(symbol);
     default:
@@ -119,9 +135,32 @@ export async function refreshAll(): Promise<RefreshResult[]> {
     `INSERT INTO price_history (symbol, asset_type, date, price) VALUES (?,?,date('now','localtime'),?)
      ON CONFLICT(symbol, asset_type, date) DO UPDATE SET price=excluded.price`,
   );
+
+  /* TEFAS NAV'ı günde bir hesaplandığından fetchTefasSnapshot() da günde bir kez çağrılır
+     (RapidAPI ücretsiz kotasını korumak için) — tefas_last_fetch bugüne eşitse atlanır. */
+  const today = (db.prepare("SELECT date('now','localtime') as d").get() as { d: string }).d;
+  const lastFetch = (db.prepare("SELECT value FROM settings WHERE key='tefas_last_fetch'").get() as { value: string } | undefined)?.value;
+  const heldFon = held.filter((h) => h.asset_type === "FON");
+  const tefasMap = heldFon.length && lastFetch !== today ? await fetchTefasSnapshot() : null;
+  if (tefasMap && tefasMap.size > 0) {
+    db.prepare("INSERT INTO settings (key,value) VALUES ('tefas_last_fetch',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(today);
+  }
+
   const out: RefreshResult[] = [];
   for (const h of held) {
-    const p = await fetchPrice(h.asset_type, h.symbol, usdTry);
+    let p: number | null;
+    if (h.asset_type === "FON") {
+      if (tefasMap) {
+        p = tefasMap.get(h.symbol) ?? null;
+      } else {
+        /* bugün zaten çekildi (veya anahtar yok): mevcut fiyatı koru, gereksiz yeniden yazma yapma */
+        const existing = db.prepare("SELECT price FROM prices WHERE symbol=? AND asset_type='FON'").get(h.symbol) as { price: number } | undefined;
+        out.push({ symbol: h.symbol, asset_type: h.asset_type, ok: existing != null, price: existing?.price });
+        continue;
+      }
+    } else {
+      p = await fetchPrice(h.asset_type, h.symbol, usdTry);
+    }
     if (p != null) { upsert.run(h.symbol, h.asset_type, p, "auto"); upsertHistory.run(h.symbol, h.asset_type, p); }
     out.push({ symbol: h.symbol, asset_type: h.asset_type, ok: p != null, price: p ?? undefined });
   }

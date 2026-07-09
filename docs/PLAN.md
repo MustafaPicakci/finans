@@ -6,6 +6,7 @@
 - ✅ **Faz 1 tamamlandı (kapsamı daraltılmış)** — Faz 1'e başlarken kullanıcıyla "hesap bakiyesi türetilir" (orijinal plan) vs "ek defter" seçeneği tekrar değerlendirildi; kullanıcı **ek defter**i seçti: `accounts.balance` ve tüm projeksiyon/kart/kredi matematiği **hiç değişmedi**. Sadece kategorili *gerçekleşen harcama* takibi için ayrı `categories`+`transactions` tabloları ve Bütçe sekmesinde yeni bir bölüm eklendi. Aşağıdaki "Faz 1" planı bu yüzden orijinal haliyle değil, gerçekleşen (daraltılmış) haliyle güncellendi.
 - ✅ **Faz 2 tamamlandı** — `vite-plugin-pwa` ile manifest + service worker (statikler precache, `/api/all` network-first), mobil ikonlar (`apps/web/public/`), mobilde alt sekme çubuğu (bottom nav) + masaüstünde üst sekmeler arası responsive geçiş (`max-width:720px`). Playwright ile hem masaüstü hem mobil görünüm görsel olarak doğrulandı (konsol hatası yok, gerçek veriyle).
 - ✅ **Faz 3 tamamlandı (kapsamı daraltılmış)** — "fiyat geçmişi + portföy değer grafiği" yapıldı. Temettü/sermaye olayları ve işlem→hesap bağlantısı kullanıcıya soruldu, ikisi de **şimdilik atlandı/mevcut akış korundu** — bilinçli kapsam dışı, ihtiyaç olursa yeniden gündeme gelebilir.
+- ✅ **Faz 3.5 tamamlandı (Faz 4'ten önce araya eklendi)** — Fon (TEFAS) ve yurt dışı ETF fiyatlarının otomatik çekilmesi. Bkz. aşağıdaki bölüm.
 - ⬜ Faz 4–5 henüz başlamadı.
 
 ## Context (Neden)
@@ -107,9 +108,32 @@ Doğrulama: `pnpm build` temiz, 57 engine testi yeşil, gerçek sunucuda elle fi
 
 - **Temettü + bedelli/bedelsiz sermaye artırımı**: kullanıcıya soruldu, **şimdilik atlanmasına** karar verildi (gerçek P&L matematiğini değiştiren hassas bir alan, aktif ihtiyaç yok). İstenirse yeniden gündeme gelebilir — `trades.side` enum'unu genişletmek ya da ayrı `corporate_actions` tablosu tasarım seçenekleri kalıcı not olarak duruyor.
 - **İşlem → hesap bağlantısı**: kullanıcıya soruldu, **mevcut akış (elle bakiye güncelleme) bilinçli olarak korunuyor** — CLAUDE.md'deki "Hisse işlemleri hesap bakiyesini otomatik düşürmez" kararı değişmedi.
-- **Fon fiyatı anahtarlı sağlayıcı**: bu oturumda araştırıldı — TEFAS'ın açık API'si F5 bot-koruması arkasında, global sağlayıcılar (TwelveData/EODHD/collectapi) Türk fon NAV'ı taşımıyor, tek anahtarlı yol RapidAPI'deki resmî olmayan bir aracı. Kullanıcı "resmî/güvenilir" tercih ettiği için uygulanmadı; elle giriş (rozet+sıfırla, Faz 0'da eklendi) ana yol olarak kalıyor.
+- **Fon fiyatı anahtarlı sağlayıcı**: bu oturumda araştırıldı — TEFAS'ın açık API'si F5 bot-koruması arkasında, global sağlayıcılar (TwelveData/EODHD/collectapi) Türk fon NAV'ı taşımıyor, tek anahtarlı yol RapidAPI'deki resmî olmayan bir aracı. O an kullanıcı "resmî/güvenilir" tercih ettiği için uygulanmadı — **ancak Faz 4'ten önce kullanıcı fikrini değiştirdi ve bu yol Faz 3.5'te uygulandı** (bkz. aşağı).
 
 **Faz 3 bu haliyle kapatıldı.**
+
+## Faz 3.5 — Fon (TEFAS) ve Yurt Dışı ETF Fiyatları ✅
+
+Faz 4'e geçmeden önce kullanıcı fon/hisse fiyatlarının otomatik gelmemesini engel olarak gördü ve bunu çözmeyi öncelikli hale getirdi.
+
+### Araştırma süreci
+- **Headless tarayıcı (Playwright) denendi ve elendi**: TEFAS'ın F5 WAF'ı otomasyonu doğrudan reddediyor ("Request Rejected") — hem bundled Chromium hem gerçek Chrome binary'siyle, `navigator.webdriver` yaması ve gerçekçi header'larla bile. Aynı anda düz `curl` normal (JS-challenge) yanıtı alıyor — yani IP engeli değil, özellikle Playwright'ın CDP kontrol protokolünü tespit edip engelliyor. Daha ileri gitmek (CDP izlerini gizleyen "undetected" yamalar) bir güvenlik sistemini bilinçli atlatmaya kayıyordu, o noktada durup kullanıcıya bildirildi.
+- **~30 alternatif kaynak denendi**: Takasbank (aynı F5 koruması), TEFAS'ın Excel/CSV dışa aktarma ucu (devre dışı), Yahoo/Google/TradingView/investing.com (Türk fonu yok veya engelli), banka/kurucu şirket API'leri (403/404), Türk finans portalları (JS ile render ediliyor). Sonuç: ücretsiz+pratik bir kaynak yok; gerçek uygulamalar ya kurumsal veri anlaşmalarıyla (banka/aracı kurum) ya da ücretli lisanslı sağlayıcılarla (Foreks/Matriks) bu veriye erişiyor.
+- **Karar**: Kullanıcı RapidAPI'deki `tefas-api` (serifcolakel) aracısını kendi araştırıp uygun buldu, ücretsiz kotalı BASIC plana kaydolup anahtar aldı.
+
+### TEFAS entegrasyonu (RapidAPI `tefas-api`)
+- Playwright ile (JS render edilen) playground sayfası incelenerek endpoint şeması çıkarıldı: `/api/v1/funds/historical/{page}?fundType=1-5&startDate&endDate&size` — **tek fon kodu sorgusu yok**, fon türü başına (1: Menkul Kıymet, 2: Emeklilik, 3: Borsa, 4: Gayrimenkul, 5: Girişim Sermayesi) tüm fonların listesini (`fund_code`, `price`, `date`) döner; biz kendi tuttuğumuz sembollere göre filtreleriz.
+- `apps/server/prices.ts`: `fetchTefasSnapshot()` — 5 fon türünü sırayla çeker (aralarında küçük bekleme), her fon için en güncel tarihli fiyatı tutan bir `Map<fund_code, price>` döner. `RAPIDAPI_KEY` yoksa boş döner (elle girişe düşer).
+- **Günde bir çekme throttle'ı**: NAV günde bir hesaplandığından ve ücretsiz kota sınırlı olduğundan, `settings.tefas_last_fetch` bugüne eşitse `fetchTefasSnapshot()` hiç çağrılmaz — mevcut `prices` tablosundaki değer `ok:true` ile geri döner. Bu olmadan cron (15 dk'da bir) günde ~480 istek atardı; throttle ile günde sadece 5.
+- **429 (kota/hız sınırı) ele alınışı**: İlk 429 alınan anda tüm döngüden çıkılır (diğer fon türlerini denemek boşuna) — sessizce `map` boş/kısmi döner, elle girilmiş fiyatlar korunur.
+- **`.env` güvenliği**: `dotenv` eklendi (`apps/server/index.ts`'in en başında yüklenir), `apps/server/.env.example` (placeholder, repoya gider), `.env` `.gitignore`'a eklendi. Kullanıcının isteğiyle `.claude/settings.local.json`'a `.env` için Read/Edit/Write/Bash-cat deny kuralları eklendi — Claude gerçek anahtarı hiç görmüyor, sadece kodun `process.env.RAPIDAPI_KEY` okumasını sağlıyor.
+
+### ETF (yurt dışı borsa) desteği
+- Yeni `AssetType`: `ETF` (VOO, QQQ, VTI...) — Yahoo Finance'ten doğrudan (ek son ek gerekmez), USD→TRY çevrimi KRIPTO ile aynı desende.
+- `trades.asset_type` CHECK kısıtı SQLite'ta ALTER edilemediğinden tablo güvenli şekilde yeniden oluşturuldu (id'ler + AUTOINCREMENT sırası korunarak); gerçek veride doğrulandı.
+
+### Doğrulama
+`pnpm build` temiz, 57 engine testi yeşil. Gerçek `.env` ile uçtan uca test edildi: ilk denemede 3 gerçek fon fiyatı başarıyla geldi (MAC, AFA, KHA), sonrasında test sırasında RapidAPI BASIC planın **günlük** kotası tükendi (429: "You have exceeded the DAILY quota") — bu bir kod hatası değil, aynı gün içinde çok fazla manuel test isteği atılmasından kaynaklandı. Throttle mantığı ayrıca doğrulandı: aynı gün içinde tekrar tazeleme denendiğinde API'ye hiç istek gitmeden önbellekteki fiyat döndü. Gerçek kullanımda (günde 5 istek) günlük kotanın yeterli olması beklenir; kesin doğrulama kota sıfırlandıktan sonra yapılacak.
 
 ## Faz 4 — Dosya Importu (banka + Midas)
 

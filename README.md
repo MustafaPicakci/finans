@@ -1,6 +1,6 @@
 # Finans — Kişisel Finans Paneli
 
-Tek ekrandan: nakit hesapları, düzenli gelir/giderler (tarih aralıklı), kredi taksitleri, kredi kartları (ekstre/taksit takibi), günlük nakit akışı takvimi ve canlı fiyatlı çok varlıklı portföy (BIST, TEFAS fonları, altın/kıymetli maden, döviz, kripto).
+Tek ekrandan: nakit hesapları, düzenli gelir/giderler (tarih aralıklı), kredi taksitleri, kredi kartları (ekstre/taksit takibi), günlük nakit akışı takvimi ve canlı fiyatlı çok varlıklı portföy (BIST, TEFAS fonları, altın/kıymetli maden, döviz, kripto, yurt dışı borsa ETF'leri).
 
 **Mimari:** pnpm monorepo — `apps/server` (Hono API), `apps/web` (React/Vite), `packages/engine` (paylaşılan finans matematiği) + SQLite (Node yerleşik `node:sqlite`, native bağımlılık yok). Tek süreç, tek konteyner. Tüm veri `data/finans.db` dosyasında — yedeklemek için bu dosyayı kopyalamak yeterli. Hedef roadmap için [docs/PLAN.md](docs/PLAN.md).
 
@@ -35,12 +35,13 @@ Fiyatlar 15 dakikada bir otomatik ve "Fiyatları Yenile" butonuyla manuel tazele
 | Tür    | Sembol örneği           | Kaynak                                  |
 |--------|-------------------------|-----------------------------------------|
 | BIST   | `THYAO`, `ASELS`        | Yahoo Finance (`THYAO.IS`), ~15 dk gecikmeli |
-| FON    | TEFAS kodu, örn. `AFT`  | TEFAS BindHistoryInfo (son işlem günü fiyatı) |
+| FON    | TEFAS kodu, örn. `AFT`  | RapidAPI `tefas-api` (resmi değil — TEFAS'ın kendi API'si bot korumasının arkasında). `RAPIDAPI_KEY` env değişkeni gerekir (bkz. `apps/server/.env.example`), yoksa/kota dolarsa elle girilir. NAV günde bir hesaplandığından günde bir kez çekilir. |
 | ALTIN  | `GRAM`, `CEYREK`, `ONS`, `GUMUS` | truncgil kur servisi (satış fiyatı) |
 | DOVIZ  | `USD`, `EUR`, `GBP`     | Yahoo Finance (`USDTRY=X`)              |
 | KRIPTO | `BTC`, `ETH`            | Yahoo (`BTC-USD`) × USDTRY              |
+| ETF    | `VOO`, `QQQ`, `VTI`     | Yahoo Finance (doğrudan sembol) × USDTRY |
 
-Kaynaklardan biri format değiştirirse sadece `server/prices.ts` içindeki ilgili fonksiyon güncellenir; uygulamanın geri kalanı etkilenmez. Banka hesap entegrasyonu Türkiye'de bireysel kullanıcıya açık olmadığından hesap bakiyeleri manuel güncellenir.
+Kaynaklardan biri format değiştirirse sadece `apps/server/prices.ts` içindeki ilgili fonksiyon güncellenir; uygulamanın geri kalanı etkilenmez. Banka hesap entegrasyonu Türkiye'de bireysel kullanıcıya açık olmadığından hesap bakiyeleri manuel güncellenir.
 
 ## Modelin mantığı
 
