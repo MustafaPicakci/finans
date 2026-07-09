@@ -28,8 +28,9 @@ async function yahoo(sym: string): Promise<number | null> {
 /* TEFAS'ın resmi API'si bot korumasının (F5) arkasında — bkz. docs/PLAN.md. Bunun yerine
    RapidAPI üzerindeki resmi olmayan bir aracı kullanılıyor (opsiyonel, RAPIDAPI_KEY gerekir).
    Tek fon kodu sorgulayan bir uç sunmuyor: fon türü başına (1-5) tüm fonların listesini
-   döner, biz kendi tuttuğumuz sembollere göre filtreleriz. NAV günde bir hesaplandığından
-   refreshAll() bunu günde bir kez çağırır (bkz. aşağıdaki tefas_last_fetch throttle'ı). */
+   döner — dönen TÜM fonlar saklanır (sadece tuttuklarımız değil), aynı istek maliyetiyle
+   kota israf edilmez. NAV günde bir hesaplandığından refreshAll() bunu günde bir kez
+   çağırır (bkz. aşağıdaki tefas_last_fetch throttle'ı). */
 const TEFAS_HOST = "tefas-api.p.rapidapi.com";
 
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
@@ -144,20 +145,29 @@ export async function refreshAll(): Promise<RefreshResult[]> {
   const tefasMap = heldFon.length && lastFetch !== today ? await fetchTefasSnapshot() : null;
   if (tefasMap && tefasMap.size > 0) {
     db.prepare("INSERT INTO settings (key,value) VALUES ('tefas_last_fetch',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(today);
+    /* API zaten fon türü başına TÜM fonların listesini döndürüyor — aynı istek maliyetiyle
+       sadece tuttuğumuz sembolleri değil, dönen her fonu saklıyoruz. Böylece kota israf
+       edilmiyor ve aynı gün içinde yeni bir fon eklenirse fiyatı zaten hazır olur. */
+    db.exec("BEGIN");
+    try {
+      tefasMap.forEach((price, code) => {
+        upsert.run(code, "FON", price, "auto");
+        upsertHistory.run(code, "FON", price);
+      });
+      db.exec("COMMIT");
+    } catch {
+      db.exec("ROLLBACK");
+    }
   }
 
   const out: RefreshResult[] = [];
   for (const h of held) {
     let p: number | null;
     if (h.asset_type === "FON") {
-      if (tefasMap) {
-        p = tefasMap.get(h.symbol) ?? null;
-      } else {
-        /* bugün zaten çekildi (veya anahtar yok): mevcut fiyatı koru, gereksiz yeniden yazma yapma */
-        const existing = db.prepare("SELECT price FROM prices WHERE symbol=? AND asset_type='FON'").get(h.symbol) as { price: number } | undefined;
-        out.push({ symbol: h.symbol, asset_type: h.asset_type, ok: existing != null, price: existing?.price });
-        continue;
-      }
+      /* prices tablosu artık (taze çekildiyse ya da önbellekten) güncel — doğrudan oradan oku */
+      const existing = db.prepare("SELECT price FROM prices WHERE symbol=? AND asset_type='FON'").get(h.symbol) as { price: number } | undefined;
+      out.push({ symbol: h.symbol, asset_type: h.asset_type, ok: existing != null, price: existing?.price });
+      continue;
     } else {
       p = await fetchPrice(h.asset_type, h.symbol, usdTry);
     }
