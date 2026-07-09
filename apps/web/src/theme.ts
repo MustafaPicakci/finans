@@ -9,11 +9,11 @@ export const T = {
   disp: "'Space Grotesk', system-ui, sans-serif",
 };
 export const TYPE_COLORS: Record<string, string> = {
-  Nakit: "#5B8DEF", BIST: "#F0B23F", FON: "#3FD68F", ALTIN: "#E8C468", DOVIZ: "#9B7BF3", KRIPTO: "#FF8A5E",
+  Nakit: "#5B8DEF", BIST: "#F0B23F", FON: "#3FD68F", ALTIN: "#E8C468", DOVIZ: "#9B7BF3", KRIPTO: "#FF8A5E", ETF: "#5BC0EB",
 };
 export const TYPE_HINT: Record<AssetType, string> = {
   BIST: "THYAO, ASELS…", FON: "TEFAS kodu: AFT…", ALTIN: "GRAM, CEYREK, ONS, GUMUS",
-  DOVIZ: "USD, EUR, GBP", KRIPTO: "BTC, ETH",
+  DOVIZ: "USD, EUR, GBP", KRIPTO: "BTC, ETH", ETF: "VOO, QQQ, VTI… (ABD/global borsa)",
 };
 
 export const tl = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", maximumFractionDigits: 0 });

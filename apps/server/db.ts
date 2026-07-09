@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS oneoffs (
 CREATE TABLE IF NOT EXISTS trades (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   date TEXT NOT NULL,
-  asset_type TEXT NOT NULL CHECK (asset_type IN ('BIST','FON','ALTIN','DOVIZ','KRIPTO')),
+  asset_type TEXT NOT NULL CHECK (asset_type IN ('BIST','FON','ALTIN','DOVIZ','KRIPTO','ETF')),
   symbol TEXT NOT NULL,
   side TEXT NOT NULL CHECK (side IN ('ALIŞ','SATIŞ')),
   qty REAL NOT NULL,
@@ -104,3 +104,27 @@ CREATE TABLE IF NOT EXISTS price_history (
 const recCols = (db.prepare("PRAGMA table_info(recurring)").all() as { name: string }[]).map((c) => c.name);
 if (!recCols.includes("from_month")) db.exec("ALTER TABLE recurring ADD COLUMN from_month TEXT;");
 if (!recCols.includes("to_month")) db.exec("ALTER TABLE recurring ADD COLUMN to_month TEXT;");
+
+/* trades.asset_type CHECK kısıtına 'ETF' eklendi (yeni varlık türü: yurt dışı borsa ETF'i).
+   SQLite CHECK kısıtını ALTER ile değiştiremez; eski kısıt hâlâ 'ETF' içermiyorsa tabloyu
+   yeniden oluşturup veriyi taşı (id'ler ve AUTOINCREMENT sırası korunur). */
+const tradesSchema = (
+  db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='trades'").get() as { sql: string } | undefined
+)?.sql;
+if (tradesSchema && !tradesSchema.includes("ETF")) {
+  db.exec(`
+    ALTER TABLE trades RENAME TO trades_old_pre_etf;
+    CREATE TABLE trades (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      date TEXT NOT NULL,
+      asset_type TEXT NOT NULL CHECK (asset_type IN ('BIST','FON','ALTIN','DOVIZ','KRIPTO','ETF')),
+      symbol TEXT NOT NULL,
+      side TEXT NOT NULL CHECK (side IN ('ALIŞ','SATIŞ')),
+      qty REAL NOT NULL,
+      price REAL NOT NULL,
+      fee REAL NOT NULL DEFAULT 0
+    );
+    INSERT INTO trades SELECT id, date, asset_type, symbol, side, qty, price, fee FROM trades_old_pre_etf;
+    DROP TABLE trades_old_pre_etf;
+  `);
+}

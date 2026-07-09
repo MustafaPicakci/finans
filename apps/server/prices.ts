@@ -88,6 +88,11 @@ async function fetchPrice(assetType: string, symbol: string, usdTry: number | nu
       const usd = await yahoo(`${symbol}-USD`);
       return usd && usdTry ? usd * usdTry : null;
     }
+    case "ETF": {
+      /* ABD/global borsada işlem gören ETF (VOO, QQQ...) — Yahoo sembolü ek son ek istemez */
+      const usd = await yahoo(symbol);
+      return usd && usdTry ? usd * usdTry : null;
+    }
     case "FON":
       return tefas(symbol);
     case "ALTIN":

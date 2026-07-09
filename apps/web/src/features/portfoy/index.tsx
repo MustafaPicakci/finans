@@ -28,7 +28,7 @@ export function Portfoy({ data, pos, reload }: { data: AllData; pos: Position[];
         <Field label="Tarih"><input type="date" style={css.input} value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field>
         <Field label="Varlık türü">
           <select style={css.input} value={f.asset_type} onChange={(e) => setF({ ...f, asset_type: e.target.value as AssetType, symbol: "" })}>
-            {(["BIST", "FON", "ALTIN", "DOVIZ", "KRIPTO"] as AssetType[]).map((t) => <option key={t}>{t}</option>)}
+            {(["BIST", "FON", "ALTIN", "DOVIZ", "KRIPTO", "ETF"] as AssetType[]).map((t) => <option key={t}>{t}</option>)}
           </select>
         </Field>
         <Field label="Sembol">
