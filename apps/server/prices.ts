@@ -28,19 +28,22 @@ async function yahoo(sym: string): Promise<number | null> {
 /* TEFAS'ın resmi API'si bot korumasının (F5) arkasında — bkz. docs/PLAN.md. Bunun yerine
    RapidAPI üzerindeki resmi olmayan bir aracı kullanılıyor (opsiyonel, RAPIDAPI_KEY /
    RAPIDAPI_KEY_2 gerekir). Tek fon kodu sorgulayan bir uç sunmuyor: fon türü başına (1-5)
-   tüm fonların listesini döner — dönen TÜM fonlar saklanır (sadece tuttuklarımız değil),
-   aynı istek maliyetiyle kota israf edilmez. NAV günde bir hesaplandığından refreshAll()
-   bunu günde bir kez çağırır (bkz. aşağıdaki tefas_last_fetch throttle'ı). */
+   tüm fonların listesini döner. Gerçek veride bir tür (Menkul Kıymet) tek başına 8500+
+   satır/35 sayfa çıktı — "hepsini çek" yaklaşımı öngörülenin aksine kotayı hızla tüketiyor.
+   Bu yüzden aradığımız fon kodlarını (neededCodes) parametre alıp hepsini bulduğumuz an
+   sayfalamayı/tür taramasını durduruyoruz; yol boyunca görülen diğer fonlar da (aynı
+   sayfanın bedavaya gelen verisi) fırsatçı şekilde saklanır. NAV günde bir hesaplandığından
+   refreshAll() bunu günde bir kez çağırır (bkz. aşağıdaki tefas_last_fetch throttle'ı). */
 const TEFAS_HOST = "tefas-api.p.rapidapi.com";
 
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
-async function fetchTefasSnapshot(): Promise<Map<string, number>> {
+async function fetchTefasSnapshot(neededCodes: Set<string>): Promise<Map<string, number>> {
   /* iki anahtar da tanımlıysa: birinci kota/hız sınırına takılırsa (429) aynı istek ikinciyle
      tekrar denenir; ikinciye geçildikten sonra kalan istekler de doğrudan ikinciyle devam eder */
   const keys = [process.env.RAPIDAPI_KEY, process.env.RAPIDAPI_KEY_2].filter((k): k is string => !!k);
   const map = new Map<string, number>();
-  if (!keys.length) return map;
+  if (!keys.length || !neededCodes.size) return map;
   let keyIndex = 0;
   const fetchWithFailover = async (url: string): Promise<Response | null> => {
     while (keyIndex < keys.length) {
@@ -51,24 +54,31 @@ async function fetchTefasSnapshot(): Promise<Map<string, number>> {
     }
     return null;
   };
+  const allFound = () => { for (const c of neededCodes) if (!map.has(c)) return false; return true; };
 
   const fmt = (d: Date) => `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}.${d.getFullYear()}`;
   const end = fmt(new Date());
   const start = fmt(new Date(Date.now() - 4 * 864e5)); // hafta sonu/tatil boşluğuna karşı birkaç gün geriye
+  fundTypeLoop:
   for (let fundType = 1; fundType <= 5; fundType++) {
-    for (let page = 1; page <= 5; page++) {
+    for (let page = 1; page <= 15; page++) {
       try {
         const url = `https://${TEFAS_HOST}/api/v1/funds/historical/${page}?fundType=${fundType}&startDate=${start}&endDate=${end}&size=250`;
         const r = await fetchWithFailover(url);
-        if (!r) return map; // tüm anahtarlar tükendi — daha fazla denemek boşuna
+        if (!r) break fundTypeLoop; // tüm anahtarlar tükendi — daha fazla denemek boşuna
         if (!r.ok) break;
         const j: any = await r.json();
         const rows: { fund_code?: string; price?: number; date?: string }[] = j?.data ?? [];
-        console.error(`[prices] TEFAS fundType=${fundType} page=${page}: ${rows.length} satır (meta.total=${j?.meta?.total}, total_pages=${j?.meta?.total_pages})`);
-        /* aynı fon birden fazla günle gelebilir; artan tarihe göre işleyip en güncel fiyatı bırak */
+        console.error(`[prices] TEFAS fundType=${fundType} page=${page}: ${rows.length} satır (meta.total=${j?.meta?.total}, total_pages=${j?.meta?.total_pages}, örnek tarih=${rows[0]?.date})`);
+        /* sayfadaki tüm fonlar fırsatçı şekilde saklanır (aynı isteğin bedavaya gelen verisi);
+           aynı fon birden fazla günle gelebilir, artan tarihe göre işleyip en güncel fiyatı bırak */
         [...rows]
           .sort((a, b) => String(a.date).localeCompare(String(b.date)))
           .forEach((row) => { if (row.fund_code && typeof row.price === "number") map.set(row.fund_code, row.price); });
+        if (allFound()) {
+          console.error(`[prices] TEFAS: aranan ${neededCodes.size} fonun tamamı bulundu, erken çıkılıyor.`);
+          break fundTypeLoop;
+        }
         const hasMore = j?.meta?.has_more;
         await sleep(300); // aynı türün sayfaları arasında küçük bekleme (olası saniyelik kotayı zorlamamak için)
         if (!hasMore) break;
@@ -77,7 +87,7 @@ async function fetchTefasSnapshot(): Promise<Map<string, number>> {
       }
     }
   }
-  console.error(`[prices] TEFAS tazeleme tamamlandı: toplam ${map.size} benzersiz fon fiyatı toplandı.`);
+  console.error(`[prices] TEFAS tazeleme tamamlandı: ${[...neededCodes].filter((c) => map.has(c)).length}/${neededCodes.size} aranan fon bulundu (toplam ${map.size} fon fiyatı toplandı).`);
   return map;
 }
 
@@ -153,12 +163,13 @@ export async function refreshAll(): Promise<RefreshResult[]> {
   const today = (db.prepare("SELECT date('now','localtime') as d").get() as { d: string }).d;
   const lastFetch = (db.prepare("SELECT value FROM settings WHERE key='tefas_last_fetch'").get() as { value: string } | undefined)?.value;
   const heldFon = held.filter((h) => h.asset_type === "FON");
-  const tefasMap = heldFon.length && lastFetch !== today ? await fetchTefasSnapshot() : null;
+  const neededCodes = new Set(heldFon.map((h) => h.symbol));
+  const tefasMap = heldFon.length && lastFetch !== today ? await fetchTefasSnapshot(neededCodes) : null;
   if (tefasMap && tefasMap.size > 0) {
     db.prepare("INSERT INTO settings (key,value) VALUES ('tefas_last_fetch',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(today);
-    /* API zaten fon türü başına TÜM fonların listesini döndürüyor — aynı istek maliyetiyle
-       sadece tuttuğumuz sembolleri değil, dönen her fonu saklıyoruz. Böylece kota israf
-       edilmiyor ve aynı gün içinde yeni bir fon eklenirse fiyatı zaten hazır olur. */
+    /* aranan fonları bulana kadar taranan sayfalarda görülen TÜM fonlar (bedavaya gelen
+       yan veri) saklanır, sadece tuttuklarımız değil — aynı gün yeni bir fon eklenirse
+       fiyatı zaten hazır olabilir. */
     db.exec("BEGIN");
     try {
       tefasMap.forEach((price, code) => {
