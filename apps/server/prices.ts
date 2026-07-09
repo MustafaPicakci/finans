@@ -26,19 +26,32 @@ async function yahoo(sym: string): Promise<number | null> {
 }
 
 /* TEFAS'ın resmi API'si bot korumasının (F5) arkasında — bkz. docs/PLAN.md. Bunun yerine
-   RapidAPI üzerindeki resmi olmayan bir aracı kullanılıyor (opsiyonel, RAPIDAPI_KEY gerekir).
-   Tek fon kodu sorgulayan bir uç sunmuyor: fon türü başına (1-5) tüm fonların listesini
-   döner — dönen TÜM fonlar saklanır (sadece tuttuklarımız değil), aynı istek maliyetiyle
-   kota israf edilmez. NAV günde bir hesaplandığından refreshAll() bunu günde bir kez
-   çağırır (bkz. aşağıdaki tefas_last_fetch throttle'ı). */
+   RapidAPI üzerindeki resmi olmayan bir aracı kullanılıyor (opsiyonel, RAPIDAPI_KEY /
+   RAPIDAPI_KEY_2 gerekir). Tek fon kodu sorgulayan bir uç sunmuyor: fon türü başına (1-5)
+   tüm fonların listesini döner — dönen TÜM fonlar saklanır (sadece tuttuklarımız değil),
+   aynı istek maliyetiyle kota israf edilmez. NAV günde bir hesaplandığından refreshAll()
+   bunu günde bir kez çağırır (bkz. aşağıdaki tefas_last_fetch throttle'ı). */
 const TEFAS_HOST = "tefas-api.p.rapidapi.com";
 
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
 async function fetchTefasSnapshot(): Promise<Map<string, number>> {
-  const key = process.env.RAPIDAPI_KEY;
+  /* iki anahtar da tanımlıysa: birinci kota/hız sınırına takılırsa (429) aynı istek ikinciyle
+     tekrar denenir; ikinciye geçildikten sonra kalan istekler de doğrudan ikinciyle devam eder */
+  const keys = [process.env.RAPIDAPI_KEY, process.env.RAPIDAPI_KEY_2].filter((k): k is string => !!k);
   const map = new Map<string, number>();
-  if (!key) return map;
+  if (!keys.length) return map;
+  let keyIndex = 0;
+  const fetchWithFailover = async (url: string): Promise<Response | null> => {
+    while (keyIndex < keys.length) {
+      const r = await fetch(url, { headers: { "x-rapidapi-host": TEFAS_HOST, "x-rapidapi-key": keys[keyIndex] } });
+      if (r.status !== 429) return r;
+      keyIndex++;
+      console.error(`[prices] TEFAS anahtarı kota/hız sınırına takıldı${keyIndex < keys.length ? ", ikinci anahtara geçiliyor" : ", başka anahtar yok"}.`);
+    }
+    return null;
+  };
+
   const fmt = (d: Date) => `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}.${d.getFullYear()}`;
   const end = fmt(new Date());
   const start = fmt(new Date(Date.now() - 4 * 864e5)); // hafta sonu/tatil boşluğuna karşı birkaç gün geriye
@@ -46,12 +59,8 @@ async function fetchTefasSnapshot(): Promise<Map<string, number>> {
     for (let page = 1; page <= 5; page++) {
       try {
         const url = `https://${TEFAS_HOST}/api/v1/funds/historical/${page}?fundType=${fundType}&startDate=${start}&endDate=${end}&size=250`;
-        const r = await fetch(url, { headers: { "x-rapidapi-host": TEFAS_HOST, "x-rapidapi-key": key } });
-        if (r.status === 429) {
-          /* günlük/saniyelik kota aşıldı — diğer fon türlerini denemek de boşuna, sessizce vazgeç */
-          console.error("[prices] TEFAS (RapidAPI) kotası doldu, bu tazelemede fon fiyatı alınamadı.");
-          return map;
-        }
+        const r = await fetchWithFailover(url);
+        if (!r) return map; // tüm anahtarlar tükendi — daha fazla denemek boşuna
         if (!r.ok) break;
         const j: any = await r.json();
         const rows: { fund_code?: string; price?: number; date?: string }[] = j?.data ?? [];
