@@ -64,6 +64,7 @@ async function fetchTefasSnapshot(): Promise<Map<string, number>> {
         if (!r.ok) break;
         const j: any = await r.json();
         const rows: { fund_code?: string; price?: number; date?: string }[] = j?.data ?? [];
+        console.error(`[prices] TEFAS fundType=${fundType} page=${page}: ${rows.length} satır (meta.total=${j?.meta?.total}, total_pages=${j?.meta?.total_pages})`);
         /* aynı fon birden fazla günle gelebilir; artan tarihe göre işleyip en güncel fiyatı bırak */
         [...rows]
           .sort((a, b) => String(a.date).localeCompare(String(b.date)))
@@ -76,6 +77,7 @@ async function fetchTefasSnapshot(): Promise<Map<string, number>> {
       }
     }
   }
+  console.error(`[prices] TEFAS tazeleme tamamlandı: toplam ${map.size} benzersiz fon fiyatı toplandı.`);
   return map;
 }
 
