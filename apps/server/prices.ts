@@ -27,67 +27,41 @@ async function yahoo(sym: string): Promise<number | null> {
 
 /* TEFAS'ın resmi API'si bot korumasının (F5) arkasında — bkz. docs/PLAN.md. Bunun yerine
    RapidAPI üzerindeki resmi olmayan bir aracı kullanılıyor (opsiyonel, RAPIDAPI_KEY /
-   RAPIDAPI_KEY_2 gerekir). Tek fon kodu sorgulayan bir uç sunmuyor: fon türü başına (1-5)
-   tüm fonların listesini döner. Gerçek veride bir tür (Menkul Kıymet) tek başına 8500+
-   satır/35 sayfa çıktı — "hepsini çek" yaklaşımı öngörülenin aksine kotayı hızla tüketiyor.
-   Bu yüzden aradığımız fon kodlarını (neededCodes) parametre alıp hepsini bulduğumuz an
-   sayfalamayı/tür taramasını durduruyoruz; yol boyunca görülen diğer fonlar da (aynı
-   sayfanın bedavaya gelen verisi) fırsatçı şekilde saklanır. NAV günde bir hesaplandığından
-   refreshAll() bunu günde bir kez çağırır (bkz. aşağıdaki tefas_last_fetch throttle'ı). */
+   RAPIDAPI_KEY_2 gerekir). `funds/historical` (tarih aralığı) yerine `funds/returns-by-date`
+   (tek gün) kullanılıyor: historical, aralıktaki HER GÜN için ayrı satır döndüğünden bir
+   fon türü tek başına 8500+ satır/35 sayfaya çıkıyordu. returns-by-date tek bir güne ait
+   TÜM fon türlerini TEK istekte döner (tür başına ayrı istek gerekmez) ve
+   lastBusinessDay=true ile hafta sonu/tatili otomatik son iş gününe çevirir. */
 const TEFAS_HOST = "tefas-api.p.rapidapi.com";
 
-const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
-
 async function fetchTefasSnapshot(neededCodes: Set<string>): Promise<Map<string, number>> {
-  /* iki anahtar da tanımlıysa: birinci kota/hız sınırına takılırsa (429) aynı istek ikinciyle
-     tekrar denenir; ikinciye geçildikten sonra kalan istekler de doğrudan ikinciyle devam eder */
+  /* iki anahtar da tanımlıysa: birinci kota/hız sınırına takılırsa (429) istek ikinciyle tekrar denenir */
   const keys = [process.env.RAPIDAPI_KEY, process.env.RAPIDAPI_KEY_2].filter((k): k is string => !!k);
   const map = new Map<string, number>();
   if (!keys.length || !neededCodes.size) return map;
-  let keyIndex = 0;
-  const fetchWithFailover = async (url: string): Promise<Response | null> => {
-    while (keyIndex < keys.length) {
-      const r = await fetch(url, { headers: { "x-rapidapi-host": TEFAS_HOST, "x-rapidapi-key": keys[keyIndex] } });
-      if (r.status !== 429) return r;
-      keyIndex++;
-      console.error(`[prices] TEFAS anahtarı kota/hız sınırına takıldı${keyIndex < keys.length ? ", ikinci anahtara geçiliyor" : ", başka anahtar yok"}.`);
-    }
-    return null;
-  };
-  const allFound = () => { for (const c of neededCodes) if (!map.has(c)) return false; return true; };
 
   const fmt = (d: Date) => `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}.${d.getFullYear()}`;
-  const end = fmt(new Date());
-  const start = fmt(new Date(Date.now() - 4 * 864e5)); // hafta sonu/tatil boşluğuna karşı birkaç gün geriye
-  fundTypeLoop:
-  for (let fundType = 1; fundType <= 5; fundType++) {
-    for (let page = 1; page <= 15; page++) {
-      try {
-        const url = `https://${TEFAS_HOST}/api/v1/funds/historical/${page}?fundType=${fundType}&startDate=${start}&endDate=${end}&size=250`;
-        const r = await fetchWithFailover(url);
-        if (!r) break fundTypeLoop; // tüm anahtarlar tükendi — daha fazla denemek boşuna
-        if (!r.ok) break;
-        const j: any = await r.json();
-        const rows: { fund_code?: string; price?: number; date?: string }[] = j?.data ?? [];
-        console.error(`[prices] TEFAS fundType=${fundType} page=${page}: ${rows.length} satır (meta.total=${j?.meta?.total}, total_pages=${j?.meta?.total_pages}, örnek tarih=${rows[0]?.date})`);
-        /* sayfadaki tüm fonlar fırsatçı şekilde saklanır (aynı isteğin bedavaya gelen verisi);
-           aynı fon birden fazla günle gelebilir, artan tarihe göre işleyip en güncel fiyatı bırak */
-        [...rows]
-          .sort((a, b) => String(a.date).localeCompare(String(b.date)))
-          .forEach((row) => { if (row.fund_code && typeof row.price === "number") map.set(row.fund_code, row.price); });
-        if (allFound()) {
-          console.error(`[prices] TEFAS: aranan ${neededCodes.size} fonun tamamı bulundu, erken çıkılıyor.`);
-          break fundTypeLoop;
-        }
-        const hasMore = j?.meta?.has_more;
-        await sleep(300); // aynı türün sayfaları arasında küçük bekleme (olası saniyelik kotayı zorlamamak için)
-        if (!hasMore) break;
-      } catch {
-        break;
+  const today = fmt(new Date());
+  const url = `https://${TEFAS_HOST}/api/v1/funds/returns-by-date?date=${today}&lastBusinessDay=true`;
+
+  for (let keyIndex = 0; keyIndex < keys.length; keyIndex++) {
+    try {
+      const r = await fetch(url, { headers: { "x-rapidapi-host": TEFAS_HOST, "x-rapidapi-key": keys[keyIndex] } });
+      if (r.status === 429) {
+        console.error(`[prices] TEFAS anahtarı kota/hız sınırına takıldı${keyIndex + 1 < keys.length ? ", ikinci anahtara geçiliyor" : ", başka anahtar yok"}.`);
+        continue;
       }
+      if (!r.ok) { console.error(`[prices] TEFAS returns-by-date HTTP=${r.status}`); break; }
+      const j: any = await r.json();
+      const groups: { fund_type?: string; funds?: { fund_code?: string; price?: number }[] }[] = j?.data ?? [];
+      groups.forEach((g) => (g.funds ?? []).forEach((f) => { if (f.fund_code && typeof f.price === "number") map.set(f.fund_code, f.price); }));
+      console.error(`[prices] TEFAS returns-by-date: ${groups.length} tür, toplam ${map.size} fon fiyatı; aranan ${[...neededCodes].filter((c) => map.has(c)).length}/${neededCodes.size} bulundu.`);
+      break;
+    } catch (e) {
+      console.error("[prices] TEFAS returns-by-date hata:", e);
+      break;
     }
   }
-  console.error(`[prices] TEFAS tazeleme tamamlandı: ${[...neededCodes].filter((c) => map.has(c)).length}/${neededCodes.size} aranan fon bulundu (toplam ${map.size} fon fiyatı toplandı).`);
   return map;
 }
 
@@ -164,7 +138,12 @@ export async function refreshAll(): Promise<RefreshResult[]> {
   const lastFetch = (db.prepare("SELECT value FROM settings WHERE key='tefas_last_fetch'").get() as { value: string } | undefined)?.value;
   const heldFon = held.filter((h) => h.asset_type === "FON");
   const neededCodes = new Set(heldFon.map((h) => h.symbol));
-  const tefasMap = heldFon.length && lastFetch !== today ? await fetchTefasSnapshot(neededCodes) : null;
+  const alreadySucceededToday = lastFetch === today;
+  const tefasMap = heldFon.length && !alreadySucceededToday ? await fetchTefasSnapshot(neededCodes) : null;
+  /* bugün için gerçekten denendi ama (kota/hız sınırı, ağ hatası vb.) başarısız oldu —
+     bu durumda prices tablosundaki bayat (önceki günden kalma) fiyatı "başarılı" gibi
+     göstermek yanıltıcı olur; diğer varlık türleriyle tutarlı şekilde ok:false dönülür */
+  const tefasAttemptFailed = heldFon.length > 0 && !alreadySucceededToday && (!tefasMap || tefasMap.size === 0);
   if (tefasMap && tefasMap.size > 0) {
     db.prepare("INSERT INTO settings (key,value) VALUES ('tefas_last_fetch',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(today);
     /* aranan fonları bulana kadar taranan sayfalarda görülen TÜM fonlar (bedavaya gelen
@@ -186,7 +165,11 @@ export async function refreshAll(): Promise<RefreshResult[]> {
   for (const h of held) {
     let p: number | null;
     if (h.asset_type === "FON") {
-      /* prices tablosu artık (taze çekildiyse ya da önbellekten) güncel — doğrudan oradan oku */
+      if (tefasAttemptFailed) {
+        out.push({ symbol: h.symbol, asset_type: h.asset_type, ok: false });
+        continue;
+      }
+      /* bugün başarıyla çekildi (bu çağrıda ya da daha önce) — prices tablosundan oku */
       const existing = db.prepare("SELECT price FROM prices WHERE symbol=? AND asset_type='FON'").get(h.symbol) as { price: number } | undefined;
       out.push({ symbol: h.symbol, asset_type: h.asset_type, ok: existing != null, price: existing?.price });
       continue;
