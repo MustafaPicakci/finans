@@ -1,6 +1,6 @@
 import type { AllData } from "@finans/engine";
 
-export type { Account, Recurring, Loan, OneOff, AssetType, Trade, Card, CardTx, Price, AllData } from "@finans/engine";
+export type { Account, Recurring, Loan, OneOff, AssetType, Currency, Trade, Card, CardTx, Price, AllData } from "@finans/engine";
 
 async function j<T>(r: Response): Promise<T> {
   if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as any).error || r.statusText);

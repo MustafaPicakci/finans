@@ -3,13 +3,15 @@ import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, CartesianGrid,
   PieChart, Pie, Cell,
 } from "recharts";
-import { fmtD, parseD, num, portfolioValueHistory, type AllData, type Day, type Position } from "@finans/engine";
+import { fmtD, parseD, num, convert, portfolioValueHistory, type AllData, type Day, type Position, type Rates } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, tl, TYPE_COLORS } from "../../theme";
 import { Field, AmountField, Money, Empty, Row } from "../../ui";
 
-export function Ozet({ data, days, pos, cash, portValue, reload }: {
-  data: AllData; days: Day[]; pos: Position[]; cash: number; portValue: number; reload: () => void;
+/* Özet grafikleri TRY canonical'dır (nakit projeksiyonu + portföy değeri geçmişi hep TRY).
+   Görüntü para birimi çevrimi üstteki hero/KPI'da (App.tsx); pozisyon değerleri burada TRY'ye çevrilir. */
+export function Ozet({ data, days, pos, cash, rates, reload }: {
+  data: AllData; days: Day[]; pos: Position[]; cash: number; rates: Rates; reload: () => void;
 }) {
   const minDay = days.reduce((m, d) => (d.bal < m.bal ? d : m), days[0] ?? { bal: 0, date: new Date() } as Day);
   const negDays = days.filter((d) => d.bal < 0).length;
@@ -21,10 +23,10 @@ export function Ozet({ data, days, pos, cash, portValue, reload }: {
   const alloc = [
     { name: "Nakit", value: Math.max(0, cash) },
     ...Object.entries(pos.reduce((m, p) => {
-      if (p.value) m[p.type] = (m[p.type] || 0) + p.value; return m;
+      if (p.value) m[p.type] = (m[p.type] || 0) + convert(p.value, p.currency, "TRY", rates); return m;
     }, {} as Record<string, number>)).map(([name, value]) => ({ name, value })),
   ].filter((a) => a.value > 0);
-  const valueHistory = portfolioValueHistory(data.trades, data.price_history)
+  const valueHistory = portfolioValueHistory(data.trades, data.price_history, rates)
     .map((v) => ({ x: fmtD(parseD(v.date), { day: "numeric", month: "short" }), value: Math.round(v.value) }));
 
   return (<>

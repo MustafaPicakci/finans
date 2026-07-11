@@ -95,11 +95,22 @@ describe("project", () => {
   it("portföy değeri güncel fiyatla o günün toplam varlığına eklenir", () => {
     const data = baseData({
       accounts: [{ id: 1, name: "Vadesiz", balance: 1000 }],
-      trades: [{ id: 1, date: "2026-01-01", asset_type: "BIST", symbol: "THYAO", side: "ALIŞ", qty: 10, price: 100, fee: 0 }],
+      trades: [{ id: 1, date: "2026-01-01", asset_type: "BIST", symbol: "THYAO", side: "ALIŞ", qty: 10, price: 100, fee: 0, currency: "TRY" }],
       prices: [{ symbol: "THYAO", asset_type: "BIST", price: 120, source: "manual", updated_at: "2026-01-01" }],
     });
     const days = project(data, 1);
     expect(days[0].assets).toBe(1200);
     expect(days[0].total).toBe(1000 + 1200);
+  });
+
+  it("USD-doğal varlık güncel FX ile TRY'ye çevrilerek toplam varlığa girer", () => {
+    const data = baseData({
+      accounts: [{ id: 1, name: "Vadesiz", balance: 1000 }],
+      trades: [{ id: 1, date: "2026-01-01", asset_type: "ETF", symbol: "VOO", side: "ALIŞ", qty: 2, price: 150, fee: 0, currency: "USD" }],
+      prices: [{ symbol: "VOO", asset_type: "ETF", price: 180, source: "auto", updated_at: "2026-01-01", currency: "USD" }],
+    });
+    const days = project(data, 1, { usdTry: 40 });
+    expect(days[0].assets).toBe(2 * 180 * 40); // 14400 TRY
+    expect(days[0].total).toBe(1000 + 14400);
   });
 });

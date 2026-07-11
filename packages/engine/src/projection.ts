@@ -1,12 +1,14 @@
-import type { AllData } from "./types.js";
+import type { AllData, Currency } from "./types.js";
 import { keyOf, hits } from "./date.js";
 import { recActiveOn } from "./recurring.js";
 import { loanPayDay, loanRemaining, loanActiveOn } from "./loans.js";
 import { cardInfos } from "./cards.js";
+import { convert, type Rates } from "./portfolio.js";
 
 export type Day = { date: Date; k: string; net: number; bal: number; assets: number; total: number; ev: { n: string; a: number }[] };
 
-export function project(data: AllData, months: number): Day[] {
+/** Nakit projeksiyonu (hepsi TRY). `rates` USD-doğal varlıkları TRY'ye çevirmek için — verilmezse USD çevrilmez. */
+export function project(data: AllData, months: number, rates: Rates = { usdTry: 0 }): Day[] {
   const start = new Date(); start.setHours(0, 0, 0, 0);
   const end = new Date(start); end.setMonth(end.getMonth() + months);
   const oneMap = new Map<string, { n: string; a: number }[]>();
@@ -16,6 +18,7 @@ export function project(data: AllData, months: number): Day[] {
   });
   /* güncel fiyat haritası; geçmiş günlerde de bugünkü fiyatla değerlenir (fiyat geçmişi tutulmuyor) */
   const priceMap = new Map(data.prices.map((p) => [`${p.asset_type}:${p.symbol}`, p.price]));
+  const curOf = new Map<string, Currency>(data.trades.map((t) => [`${t.asset_type}:${t.symbol}`, t.currency ?? "TRY"]));
   /* o güne dek elde tutulan miktarı çıkarmak için işlemleri tarihe göre sırala */
   const sortedTrades = [...data.trades].sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
   const assetsOn = (dayKey: string) => {
@@ -26,7 +29,7 @@ export function project(data: AllData, months: number): Day[] {
       qty.set(k, (qty.get(k) || 0) + (t.side === "ALIŞ" ? t.qty : -t.qty));
     }
     let v = 0;
-    qty.forEach((q, k) => { const p = priceMap.get(k); if (p && q > 0) v += q * p; });
+    qty.forEach((q, k) => { const p = priceMap.get(k); if (p && q > 0) v += convert(q * p, curOf.get(k) ?? "TRY", "TRY", rates); });
     return v;
   };
   let bal = data.accounts.reduce((s, a) => s + a.balance, 0);

@@ -1,8 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
-import { todayStr, num, type AllData, type AssetType, type Recurring, type Trade } from "@finans/engine";
+import { todayStr, num, type AllData, type AssetType, type Currency, type Recurring, type Trade } from "@finans/engine";
 import { api } from "../../api";
-import { T, css, tl2, TYPE_HINT } from "../../theme";
+import { T, css, fmtMoney, TYPE_HINT } from "../../theme";
 import { Field, AmountField, Hint } from "../../ui";
+
+/** Varlık türünün doğal para birimi: yurt dışı borsa (KRIPTO/ETF) USD, diğerleri TRY */
+const defaultCcy = (t: AssetType): Currency => (t === "KRIPTO" || t === "ETF" ? "USD" : "TRY");
 
 /* ————— GLOBAL "+ EKLE" AKIŞININ FORMLARI —————
    Her form modal içinde yaşar: "Kaydet" kaydedip kapatır, "Kaydet, yeni ekle"
@@ -122,7 +125,7 @@ export function CardTxForm({ data, reload, onClose }: FormProps) {
       </div>
       {ok && +tf.installments > 1 && (
         <div style={{ fontSize: 12, color: T.mut, marginTop: 8 }}>
-          aylık pay: <span style={{ ...css.mono, color: T.text }}>{tl2.format(num(tf.amount) / +tf.installments)}</span> × {tf.installments}
+          aylık pay: <span style={{ ...css.mono, color: T.text }}>{fmtMoney(num(tf.amount) / +tf.installments, "TRY", true)}</span> × {tf.installments}
         </div>
       )}
       <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} />
@@ -195,14 +198,14 @@ export function LoanForm({ reload, onClose }: FormProps) {
 export function TradeForm({ reload, onClose }: FormProps) {
   const [f, setF] = useState({
     date: todayStr(), asset_type: "BIST" as AssetType, symbol: "", side: "ALIŞ" as Trade["side"],
-    qty: "", price: "", fee: "",
+    qty: "", price: "", fee: "", currency: "TRY" as Currency,
   });
   const symbolRef = useRef<HTMLInputElement>(null);
   const ok = !!f.symbol && num(f.qty) > 0 && num(f.price) > 0 && !!f.date;
   const reason = !f.symbol ? "Sembol gerekli" : !(num(f.qty) > 0) ? "Adet/miktar 0'dan büyük olmalı" : !(num(f.price) > 0) ? "Birim fiyat 0'dan büyük olmalı" : null;
   const save = async (andNew: boolean) => {
     if (!ok) return;
-    await api.post("trades", { ...f, symbol: f.symbol.trim(), qty: num(f.qty), price: num(f.price), fee: num(f.fee) });
+    await api.post("trades", { ...f, symbol: f.symbol.trim(), qty: num(f.qty), price: num(f.price), fee: num(f.fee), currency: f.currency });
     reload();
     if (andNew) { setF({ ...f, symbol: "", qty: "", price: "", fee: "" }); symbolRef.current?.focus(); } else onClose();
   };
@@ -211,8 +214,14 @@ export function TradeForm({ reload, onClose }: FormProps) {
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <Field label="Tarih"><input type="date" style={css.input} value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field>
         <Field label="Varlık türü">
-          <select style={css.input} value={f.asset_type} onChange={(e) => setF({ ...f, asset_type: e.target.value as AssetType, symbol: "" })}>
+          <select style={css.input} value={f.asset_type}
+            onChange={(e) => { const at = e.target.value as AssetType; setF({ ...f, asset_type: at, symbol: "", currency: defaultCcy(at) }); }}>
             {(["BIST", "FON", "ALTIN", "DOVIZ", "KRIPTO", "ETF"] as AssetType[]).map((t) => <option key={t}>{t}</option>)}
+          </select>
+        </Field>
+        <Field label="Para birimi">
+          <select style={css.input} value={f.currency} onChange={(e) => setF({ ...f, currency: e.target.value as Currency })}>
+            <option value="TRY">₺ TRY</option><option value="USD">$ USD</option>
           </select>
         </Field>
         <Field label="Sembol">
@@ -233,12 +242,12 @@ export function TradeForm({ reload, onClose }: FormProps) {
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
         <Field label="Adet / Miktar"><input style={css.input} inputMode="decimal" placeholder="0" value={f.qty} onChange={(e) => setF({ ...f, qty: e.target.value })} /></Field>
-        <AmountField label="Birim fiyat (₺)" value={f.price} onChange={(v) => setF({ ...f, price: v })} />
-        <AmountField label="Komisyon (₺)" value={f.fee} onChange={(v) => setF({ ...f, fee: v })} />
+        <AmountField label={`Birim fiyat (${f.currency === "USD" ? "$" : "₺"})`} value={f.price} onChange={(v) => setF({ ...f, price: v })} ccy={f.currency} />
+        <AmountField label={`Komisyon (${f.currency === "USD" ? "$" : "₺"})`} value={f.fee} onChange={(v) => setF({ ...f, fee: v })} ccy={f.currency} />
       </div>
       {ok && (
         <div style={{ fontSize: 12, color: T.mut, marginTop: 8 }}>
-          İşlem tutarı: <span style={{ ...css.mono, color: T.text }}>{tl2.format(num(f.qty) * num(f.price))}</span>
+          İşlem tutarı: <span style={{ ...css.mono, color: T.text }}>{fmtMoney(num(f.qty) * num(f.price), f.currency, true)}</span>
         </div>
       )}
       <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} />

@@ -1,16 +1,26 @@
 import React, { useState } from "react";
-import { parseD, fmtD, num, type AllData, type Position } from "@finans/engine";
+import { parseD, fmtD, num, convert, type AllData, type Position, type Rates, type Currency } from "@finans/engine";
 import { api } from "../../api";
-import { T, css, tl, tl2, TYPE_COLORS } from "../../theme";
-import { Money, Empty, Row } from "../../ui";
+import { T, css, fmtMoney, TYPE_COLORS } from "../../theme";
+import { Empty, Row } from "../../ui";
 import type { AddKind } from "../forms";
 
+/** İşaretli tutar, verilen para biriminde (Money bileşeni TRY'ye sabit olduğundan native gösterim için) */
+const Signed = ({ v, ccy, size = 12 }: { v: number; ccy: Currency; size?: number }) => (
+  <span style={{ ...css.mono, fontSize: size, color: v > 0 ? T.pos : v < 0 ? T.neg : T.mut }}>
+    {v > 0 ? "+" : ""}{fmtMoney(v, ccy)}
+  </span>
+);
+
 /* ————— PORTFÖY ————— */
-/* İşlem (alış/satış) girişi global "+" akışındadır; burada pozisyonlar, fiyatlar ve geçmiş var. */
-export function Portfoy({ data, pos, reload, onAdd }: { data: AllData; pos: Position[]; reload: () => void; onAdd: (k: AddKind) => void }) {
+/* İşlem (alış/satış) girişi global "+" akışındadır; burada pozisyonlar, fiyatlar ve geçmiş var.
+   Pozisyon satırları kendi doğal (native) para biriminde; başlık toplamları görüntü birimine çevrilir. */
+export function Portfoy({ data, pos, rates, ccy, reload, onAdd }: {
+  data: AllData; pos: Position[]; rates: Rates; ccy: Currency; reload: () => void; onAdd: (k: AddKind) => void;
+}) {
   const [busy, setBusy] = useState(false);
-  const totUnreal = pos.reduce((s, p) => s + (p.unreal ?? 0), 0);
-  const totReal = pos.reduce((s, p) => s + p.realized, 0);
+  const totUnreal = pos.reduce((s, p) => s + convert(p.unreal ?? 0, p.currency, ccy, rates), 0);
+  const totReal = pos.reduce((s, p) => s + convert(p.realized, p.currency, ccy, rates), 0);
   const lastUpdate = data.prices.reduce((m, p) => (p.updated_at > m ? p.updated_at : m), "");
 
   const refresh = async () => {
@@ -23,8 +33,8 @@ export function Portfoy({ data, pos, reload, onAdd }: { data: AllData; pos: Posi
       <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 6, marginBottom: 10, alignItems: "center" }}>
         <div style={{ fontWeight: 700, fontSize: 15 }}>Pozisyonlar</div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", fontSize: 12, color: T.mut }}>
-          <span>gerç. K/Z <Money v={Math.round(totReal)} sign size={12} /></span>
-          <span>açık K/Z <Money v={Math.round(totUnreal)} sign size={12} /></span>
+          <span>gerç. K/Z <Signed v={Math.round(totReal)} ccy={ccy} /></span>
+          <span>açık K/Z <Signed v={Math.round(totUnreal)} ccy={ccy} /></span>
           <button style={css.ghost} onClick={refresh} disabled={busy}>{busy ? "Yenileniyor…" : "Fiyatları Yenile"}</button>
           <button style={{ ...css.ghost, color: T.acc, borderColor: T.acc }} onClick={() => onAdd("trade")}>+ İşlem</button>
         </div>
@@ -42,16 +52,17 @@ export function Portfoy({ data, pos, reload, onAdd }: { data: AllData; pos: Posi
             <div>
               <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 10, marginRight: 8, background: T.panel2, color: TYPE_COLORS[p.type] || T.mut }}>{p.type}</span>
               <span style={{ ...css.mono, fontWeight: 600, fontSize: 15, color: T.acc }}>{p.sym}</span>
-              <span style={{ fontSize: 12, color: T.mut, marginLeft: 8 }}>{p.qty} adet · ort. <span style={css.mono}>{tl2.format(p.avg)}</span></span>
+              {p.currency === "USD" && <span style={{ fontSize: 10, fontWeight: 700, color: T.mut3, marginLeft: 6 }}>USD</span>}
+              <span style={{ fontSize: 12, color: T.mut, marginLeft: 8 }}>{p.qty} adet · ort. <span style={css.mono}>{fmtMoney(p.avg, p.currency, true)}</span></span>
             </div>
-            {p.value != null && <span style={{ ...css.mono, fontSize: 14 }}>{tl.format(Math.round(p.value))}</span>}
+            {p.value != null && <span style={{ ...css.mono, fontSize: 14 }}>{fmtMoney(Math.round(p.value), p.currency)}</span>}
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
             <input key={`${p.sym}-${p.cur}`} style={{ ...css.input, width: 120, padding: "6px 8px", fontSize: 13 }} inputMode="decimal"
-              placeholder="güncel fiyat ₺" defaultValue={p.cur ?? ""}
+              placeholder={`güncel fiyat ${p.currency === "USD" ? "$" : "₺"}`} defaultValue={p.cur ?? ""}
               onBlur={async (e) => {
                 const v = num(e.target.value);
-                if (v > 0 && v !== p.cur) { await api.put("prices", { symbol: p.sym, asset_type: p.type, price: v }); reload(); }
+                if (v > 0 && v !== p.cur) { await api.put("prices", { symbol: p.sym, asset_type: p.type, price: v, currency: p.currency }); reload(); }
               }} />
             {p.source === "manual" && (
               <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 10, background: T.panel2, color: T.acc }}>elle</span>
@@ -66,8 +77,8 @@ export function Portfoy({ data, pos, reload, onAdd }: { data: AllData; pos: Posi
               <button style={{ ...css.del, fontSize: 12 }} title="fiyatı sil, otomatiğe dön"
                 onClick={async () => { await api.delPrice(p.type, p.sym); reload(); }}>sıfırla</button>
             )}
-            {p.unreal != null && <span style={{ fontSize: 12, color: T.mut }}>açık K/Z: <Money v={Math.round(p.unreal)} sign size={12} /></span>}
-            {p.realized !== 0 && <span style={{ fontSize: 12, color: T.mut }}>gerçekleşen: <Money v={Math.round(p.realized)} sign size={12} /></span>}
+            {p.unreal != null && <span style={{ fontSize: 12, color: T.mut }}>açık K/Z: <Signed v={Math.round(p.unreal)} ccy={p.currency} /></span>}
+            {p.realized !== 0 && <span style={{ fontSize: 12, color: T.mut }}>gerçekleşen: <Signed v={Math.round(p.realized)} ccy={p.currency} /></span>}
           </div>
         </div>
       ))}
@@ -85,9 +96,9 @@ export function Portfoy({ data, pos, reload, onAdd }: { data: AllData; pos: Posi
           }}>{t.side}</span>
           <span style={{ flex: 1, fontSize: 13 }}>
             <b style={css.mono}>{t.symbol}</b> <span style={{ color: T.mut, fontSize: 11 }}>{t.asset_type}</span>{" "}
-            <span style={{ color: T.mut }}>{t.qty} × {tl2.format(t.price)}</span>
+            <span style={{ color: T.mut }}>{t.qty} × {fmtMoney(t.price, t.currency ?? "TRY", true)}</span>
           </span>
-          <span style={{ ...css.mono, fontSize: 13 }}>{tl.format(Math.round(t.qty * t.price))}</span>
+          <span style={{ ...css.mono, fontSize: 13 }}>{fmtMoney(Math.round(t.qty * t.price), t.currency ?? "TRY")}</span>
           <button style={css.del} onClick={async () => { await api.del("trades", t.id); reload(); }}>✕</button>
         </Row>
       ))}

@@ -30,7 +30,7 @@ api.get("/all", (c) =>
 );
 
 /* ---- generic CRUD ---- */
-type Col = { name: string; required?: boolean };
+type Col = { name: string; required?: boolean; default?: unknown };
 function crud(route: string, table: string, cols: Col[]) {
   api.post(`/${route}`, async (c) => {
     const b = await c.req.json();
@@ -40,7 +40,7 @@ function crud(route: string, table: string, cols: Col[]) {
     const names = cols.map((x) => x.name);
     const info = db
       .prepare(`INSERT INTO ${table} (${names.join(",")}) VALUES (${names.map(() => "?").join(",")})`)
-      .run(...names.map((n) => b[n] ?? null));
+      .run(...cols.map((col) => b[col.name] ?? col.default ?? null));
     return c.json({ id: info.lastInsertRowid });
   });
   api.put(`/${route}/:id`, async (c) => {
@@ -73,6 +73,7 @@ crud("oneoffs", "oneoffs", [
 crud("trades", "trades", [
   { name: "date", required: true }, { name: "asset_type", required: true }, { name: "symbol", required: true },
   { name: "side", required: true }, { name: "qty", required: true }, { name: "price", required: true }, { name: "fee" },
+  { name: "currency", default: "TRY" },
 ]);
 crud("cards", "cards", [
   { name: "name", required: true }, { name: "limit_amount" },
@@ -131,16 +132,17 @@ api.delete("/transactions/:id", (c) => {
 /* ---- fiyatlar ---- */
 api.post("/prices/refresh", async (c) => c.json(await refreshAll()));
 api.put("/prices", async (c) => {
-  const { symbol, asset_type, price } = await c.req.json();
+  const { symbol, asset_type, price, currency } = await c.req.json();
   if (!symbol || !asset_type || typeof price !== "number") return c.json({ error: "eksik alan" }, 400);
+  const ccy = currency === "USD" ? "USD" : "TRY"; // elle girilen fiyat sembolün biriminde
   db.prepare(
-    `INSERT INTO prices (symbol, asset_type, price, source, updated_at) VALUES (?,?,?,'manual',datetime('now','localtime'))
-     ON CONFLICT(symbol, asset_type) DO UPDATE SET price=excluded.price, source='manual', updated_at=excluded.updated_at`,
-  ).run(symbol, asset_type, price);
+    `INSERT INTO prices (symbol, asset_type, price, source, updated_at, currency) VALUES (?,?,?,'manual',datetime('now','localtime'),?)
+     ON CONFLICT(symbol, asset_type) DO UPDATE SET price=excluded.price, source='manual', updated_at=excluded.updated_at, currency=excluded.currency`,
+  ).run(symbol, asset_type, price, ccy);
   db.prepare(
-    `INSERT INTO price_history (symbol, asset_type, date, price) VALUES (?,?,date('now','localtime'),?)
-     ON CONFLICT(symbol, asset_type, date) DO UPDATE SET price=excluded.price`,
-  ).run(symbol, asset_type, price);
+    `INSERT INTO price_history (symbol, asset_type, date, price, currency) VALUES (?,?,date('now','localtime'),?,?)
+     ON CONFLICT(symbol, asset_type, date) DO UPDATE SET price=excluded.price, currency=excluded.currency`,
+  ).run(symbol, asset_type, price, ccy);
   return c.json({ ok: true });
 });
 /* elle girilen (veya eski) fiyatı sil: sonraki tazelemede otomatik yeniden dolar */

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { project, positions, cardInfos, loanRemaining } from "@finans/engine";
+import { project, positions, cardInfos, loanRemaining, portfolioValueTry, convert, type Currency } from "@finans/engine";
 import { api } from "./api";
-import { T, css, tl, themeCSS, THEME_KEY, type ThemeMode } from "./theme";
+import { T, css, fmtMoney, themeCSS, THEME_KEY, CCY_KEY, type ThemeMode } from "./theme";
 import { Center } from "./ui";
 import { Ozet } from "./features/ozet";
 import { Nakit } from "./features/nakit";
@@ -17,6 +17,7 @@ export default function App() {
   const [err, setErr] = useState("");
   const [tab, setTab] = useState<"ozet" | "nakit" | "plan" | "kart" | "portfoy" | "rapor">("ozet");
   const [theme, setTheme] = useState<ThemeMode>(() => (localStorage.getItem(THEME_KEY) as ThemeMode) || "light");
+  const [ccy, setCcy] = useState<Currency>(() => (localStorage.getItem(CCY_KEY) as Currency) || "TRY");
   const [add, setAdd] = useState<AddState | null>(null); // global "+ Ekle" akışı
 
   const reload = useCallback(() => api.all().then(setData).catch((e) => setErr(String(e))), []);
@@ -25,11 +26,13 @@ export default function App() {
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
+  useEffect(() => { localStorage.setItem(CCY_KEY, ccy); }, [ccy]);
 
-  const days = useMemo(() => (data ? project(data, Number(data.settings.horizon || 6)) : []), [data]);
+  const rates = useMemo(() => ({ usdTry: Number(data?.settings.fx_usd_try || 0) }), [data]);
+  const days = useMemo(() => (data ? project(data, Number(data.settings.horizon || 6), rates) : []), [data, rates]);
   const pos = useMemo(() => (data ? positions(data.trades, data.prices) : []), [data]);
   const cash = useMemo(() => (data ? data.accounts.reduce((s, a) => s + a.balance, 0) : 0), [data]);
-  const portValue = useMemo(() => pos.reduce((s, p) => s + (p.value ?? 0), 0), [pos]);
+  const portValueTry = useMemo(() => portfolioValueTry(pos, rates), [pos, rates]);
   const cardInfoList = useMemo(() => {
     if (!data) return [];
     const t = new Date(); t.setHours(0, 0, 0, 0);
@@ -45,7 +48,10 @@ export default function App() {
   if (err) return <Center>API'ye ulaşılamadı: {err}. Sunucu çalışıyor mu? (npm run dev)</Center>;
   if (!data) return <Center>Yükleniyor…</Center>;
 
-  const netWorth = cash + portValue - cardDebt - loanDebt;
+  // TRY canonical; görüntü para birimi saf sunum katmanı — nihai TRY rakamını çevirir
+  const netWorthTry = cash + portValueTry - cardDebt - loanDebt;
+  const m = (tryVal: number, dec = false) => fmtMoney(convert(tryVal, "TRY", ccy, rates), ccy, dec);
+  const usdReady = rates.usdTry > 0; // FX kuru yoksa USD toggle pasif
   const portTypes = [...new Set(pos.filter((p) => (p.value ?? 0) > 0).map((p) => p.type))];
   const cardsWaiting = cardInfoList.filter((c) => c.debt > 0).length;
   const loansActive = data.loans.filter((l) => loanRemaining(l, new Date()) > 0).length;
@@ -105,6 +111,19 @@ export default function App() {
           <button className="add-btn-top" onClick={() => openAdd("pick")} style={{
             ...css.btn, padding: "8px 14px", flexShrink: 0,
           }}>+ Ekle</button>
+          <div style={{ display: "flex", border: `1px solid ${T.line}`, borderRadius: 999, overflow: "hidden", flexShrink: 0 }}>
+            {(["TRY", "USD"] as const).map((k) => {
+              const disabled = k === "USD" && !usdReady;
+              return (
+                <button key={k} onClick={() => !disabled && setCcy(k)} disabled={disabled}
+                  title={disabled ? "USD kuru için önce fiyatları yenile" : `Görüntü: ${k}`}
+                  style={{
+                    border: "none", cursor: disabled ? "not-allowed" : "pointer", padding: "7px 11px", fontSize: 13, fontWeight: 700,
+                    fontFamily: T.disp, background: ccy === k ? T.acc : T.panel, color: ccy === k ? T.accInk : disabled ? T.mut3 : T.mut,
+                  }}>{k === "TRY" ? "₺" : "$"}</button>
+              );
+            })}
+          </div>
           <button className="theme-toggle" aria-label="Temayı değiştir" title="Açık / koyu tema"
             onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}
             style={{
@@ -117,7 +136,7 @@ export default function App() {
       <div className="main-content" style={{ maxWidth: 960, margin: "0 auto", padding: 16, display: "grid", gridTemplateColumns: "minmax(0,1fr)", gap: 14 }}>
         <div style={{ padding: "10px 4px 4px" }}>
           <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: T.mut }}>Net Varlık</div>
-          <div style={{ ...css.mono, fontSize: 40, fontWeight: 700, letterSpacing: "-0.02em", marginTop: 4 }}>{tl.format(netWorth)}</div>
+          <div style={{ ...css.mono, fontSize: 40, fontWeight: 700, letterSpacing: "-0.02em", marginTop: 4 }}>{m(netWorthTry)}</div>
           <div style={{ fontSize: 13, color: T.mut3, marginTop: 6 }}>nakit + portföy − kart borcu − kredi borcu</div>
         </div>
 
@@ -126,14 +145,14 @@ export default function App() {
             <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12.5, fontWeight: 550, color: T.mut }}>
               <span style={{ width: 8, height: 8, borderRadius: 3, background: "var(--type-nakit)", display: "inline-block" }} />Nakit
             </div>
-            <div style={{ ...css.mono, fontSize: 22, fontWeight: 680, letterSpacing: "-0.01em", marginTop: 4 }}>{tl.format(cash)}</div>
+            <div style={{ ...css.mono, fontSize: 22, fontWeight: 680, letterSpacing: "-0.01em", marginTop: 4 }}>{m(cash)}</div>
             <div style={{ fontSize: 12, color: T.mut3, marginTop: 2 }}>{data.accounts.length} hesap</div>
           </div>
           <div style={css.card}>
             <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12.5, fontWeight: 550, color: T.mut }}>
               <span style={{ width: 8, height: 8, borderRadius: 3, background: T.acc, display: "inline-block" }} />Portföy
             </div>
-            <div style={{ ...css.mono, fontSize: 22, fontWeight: 680, letterSpacing: "-0.01em", marginTop: 4 }}>{tl.format(portValue)}</div>
+            <div style={{ ...css.mono, fontSize: 22, fontWeight: 680, letterSpacing: "-0.01em", marginTop: 4 }}>{m(portValueTry)}</div>
             <div style={{ fontSize: 12, color: T.mut3, marginTop: 2 }}>{portTypes.length ? portTypes.join(" · ") : "henüz işlem yok"}</div>
           </div>
           <div style={css.card}>
@@ -141,7 +160,7 @@ export default function App() {
               <span style={{ width: 8, height: 8, borderRadius: 3, background: T.neg, display: "inline-block" }} />Kart Borcu
             </div>
             <div style={{ ...css.mono, fontSize: 22, fontWeight: 680, letterSpacing: "-0.01em", marginTop: 4, color: cardDebt > 0 ? T.neg : T.text }}>
-              {cardDebt > 0 ? "−" : ""}{tl.format(cardDebt)}
+              {cardDebt > 0 ? "−" : ""}{m(cardDebt)}
             </div>
             <div style={{ fontSize: 12, color: T.mut3, marginTop: 2 }}>{cardsWaiting > 0 ? `${cardsWaiting} ekstre bekliyor` : "borç yok"}</div>
           </div>
@@ -150,17 +169,17 @@ export default function App() {
               <span style={{ width: 8, height: 8, borderRadius: 3, background: T.neg, display: "inline-block" }} />Kredi Borcu
             </div>
             <div style={{ ...css.mono, fontSize: 22, fontWeight: 680, letterSpacing: "-0.01em", marginTop: 4, color: loanDebt > 0 ? T.neg : T.text }}>
-              {loanDebt > 0 ? "−" : ""}{tl.format(loanDebt)}
+              {loanDebt > 0 ? "−" : ""}{m(loanDebt)}
             </div>
             <div style={{ fontSize: 12, color: T.mut3, marginTop: 2 }}>{loansActive > 0 ? `${loansActive} aktif kredi` : "borç yok"}</div>
           </div>
         </div>
 
-        {tab === "ozet" && <Ozet data={data} days={days} pos={pos} cash={cash} portValue={portValue} reload={reload} />}
+        {tab === "ozet" && <Ozet data={data} days={days} pos={pos} cash={cash} rates={rates} reload={reload} />}
         {tab === "nakit" && <Nakit days={days} />}
         {tab === "plan" && <Plan data={data} reload={reload} onRealize={(p) => openAdd("kalem", p)} />}
         {tab === "kart" && <Kartlar data={data} reload={reload} onAdd={(k) => openAdd(k)} />}
-        {tab === "portfoy" && <Portfoy data={data} pos={pos} reload={reload} onAdd={(k) => openAdd(k)} />}
+        {tab === "portfoy" && <Portfoy data={data} pos={pos} rates={rates} ccy={ccy} reload={reload} onAdd={(k) => openAdd(k)} />}
         {tab === "rapor" && <Rapor data={data} reload={reload} />}
       </div>
 

@@ -91,7 +91,9 @@ async function gold(sym: string): Promise<number | null> {
   }
 }
 
-async function fetchPrice(assetType: string, symbol: string, usdTry: number | null): Promise<number | null> {
+/* Fiyatı sembolün DOĞAL (native) para biriminde döndürür: KRIPTO/ETF için işlem birimi USD ise
+   ham USD (× yapılmaz), TRY ise (eski davranış) × usdTry. Diğer türler her zaman TRY. */
+async function fetchPrice(assetType: string, symbol: string, usdTry: number | null, currency: string): Promise<number | null> {
   switch (assetType) {
     case "BIST":
       return yahoo(`${symbol}.IS`);
@@ -99,12 +101,14 @@ async function fetchPrice(assetType: string, symbol: string, usdTry: number | nu
       return symbol === "USD" && usdTry ? usdTry : yahoo(`${symbol}TRY=X`);
     case "KRIPTO": {
       const usd = await yahoo(`${symbol}-USD`);
-      return usd && usdTry ? usd * usdTry : null;
+      if (usd == null) return null;
+      return currency === "USD" ? usd : usdTry ? usd * usdTry : null;
     }
     case "ETF": {
-      /* ABD/global borsada işlem gören ETF (VOO, QQQ...) — Yahoo sembolü ek son ek istemez */
+      /* ABD/global borsada işlem gören ETF/hisse (VOO, QQQ, AAPL...) — Yahoo sembolü ek son ek istemez */
       const usd = await yahoo(symbol);
-      return usd && usdTry ? usd * usdTry : null;
+      if (usd == null) return null;
+      return currency === "USD" ? usd : usdTry ? usd * usdTry : null;
     }
     /* FON burada değil: refreshAll() içinde ayrıca, günde bir kez toplu çekilir (bkz. fetchTefasSnapshot) */
     case "ALTIN":
@@ -118,18 +122,25 @@ export type RefreshResult = { symbol: string; asset_type: string; ok: boolean; p
 
 export async function refreshAll(): Promise<RefreshResult[]> {
   const held = db
-    .prepare("SELECT DISTINCT asset_type, symbol FROM trades")
-    .all() as { asset_type: string; symbol: string }[];
-  if (!held.length) return [];
+    .prepare("SELECT DISTINCT asset_type, symbol, currency FROM trades")
+    .all() as { asset_type: string; symbol: string; currency: string }[];
+
+  /* Görüntü para birimi çevrimi için USD/TRY kuru her koşulda saklanır — portföyde hiç varlık
+     olmasa bile net varlık (nakit) USD'ye çevrilebilsin diye holding kontrolünden ÖNCE. */
   const usdTry = await yahoo("USDTRY=X");
+  if (usdTry != null) {
+    db.prepare("INSERT INTO settings (key,value) VALUES ('fx_usd_try',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(usdTry));
+  }
+  if (!held.length) return [];
+
   const upsert = db.prepare(
-    `INSERT INTO prices (symbol, asset_type, price, source, updated_at) VALUES (?,?,?,?,datetime('now','localtime'))
-     ON CONFLICT(symbol, asset_type) DO UPDATE SET price=excluded.price, source=excluded.source, updated_at=excluded.updated_at`,
+    `INSERT INTO prices (symbol, asset_type, price, source, updated_at, currency) VALUES (?,?,?,?,datetime('now','localtime'),?)
+     ON CONFLICT(symbol, asset_type) DO UPDATE SET price=excluded.price, source=excluded.source, updated_at=excluded.updated_at, currency=excluded.currency`,
   );
   /* günde bir satır: aynı gün içindeki tekrar tazelemeler o günün fiyatını günceller, geçmişi çoğaltmaz */
   const upsertHistory = db.prepare(
-    `INSERT INTO price_history (symbol, asset_type, date, price) VALUES (?,?,date('now','localtime'),?)
-     ON CONFLICT(symbol, asset_type, date) DO UPDATE SET price=excluded.price`,
+    `INSERT INTO price_history (symbol, asset_type, date, price, currency) VALUES (?,?,date('now','localtime'),?,?)
+     ON CONFLICT(symbol, asset_type, date) DO UPDATE SET price=excluded.price, currency=excluded.currency`,
   );
 
   /* TEFAS NAV'ı günde bir hesaplandığından fetchTefasSnapshot() da günde bir kez çağrılır
@@ -152,8 +163,8 @@ export async function refreshAll(): Promise<RefreshResult[]> {
     db.exec("BEGIN");
     try {
       tefasMap.forEach((price, code) => {
-        upsert.run(code, "FON", price, "auto");
-        upsertHistory.run(code, "FON", price);
+        upsert.run(code, "FON", price, "auto", "TRY"); // TEFAS NAV her zaman TRY
+        upsertHistory.run(code, "FON", price, "TRY");
       });
       db.exec("COMMIT");
     } catch {
@@ -174,9 +185,9 @@ export async function refreshAll(): Promise<RefreshResult[]> {
       out.push({ symbol: h.symbol, asset_type: h.asset_type, ok: existing != null, price: existing?.price });
       continue;
     } else {
-      p = await fetchPrice(h.asset_type, h.symbol, usdTry);
+      p = await fetchPrice(h.asset_type, h.symbol, usdTry, h.currency);
     }
-    if (p != null) { upsert.run(h.symbol, h.asset_type, p, "auto"); upsertHistory.run(h.symbol, h.asset_type, p); }
+    if (p != null) { upsert.run(h.symbol, h.asset_type, p, "auto", h.currency); upsertHistory.run(h.symbol, h.asset_type, p, h.currency); }
     out.push({ symbol: h.symbol, asset_type: h.asset_type, ok: p != null, price: p ?? undefined });
   }
   return out;

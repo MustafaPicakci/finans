@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS trades (
   side TEXT NOT NULL CHECK (side IN ('ALIŞ','SATIŞ')),
   qty REAL NOT NULL,
   price REAL NOT NULL,
-  fee REAL NOT NULL DEFAULT 0
+  fee REAL NOT NULL DEFAULT 0,
+  currency TEXT NOT NULL DEFAULT 'TRY'   -- işlemin doğal para birimi (TRY/USD)
 );
 CREATE TABLE IF NOT EXISTS prices (
   symbol TEXT NOT NULL,
@@ -56,6 +57,7 @@ CREATE TABLE IF NOT EXISTS prices (
   price REAL NOT NULL,
   source TEXT NOT NULL DEFAULT 'manual',
   updated_at TEXT NOT NULL,
+  currency TEXT NOT NULL DEFAULT 'TRY',   -- saklanan fiyatın birimi (native)
   PRIMARY KEY (symbol, asset_type)
 );
 CREATE TABLE IF NOT EXISTS cards (
@@ -96,6 +98,7 @@ CREATE TABLE IF NOT EXISTS price_history (
   asset_type TEXT NOT NULL,
   date TEXT NOT NULL,
   price REAL NOT NULL,
+  currency TEXT NOT NULL DEFAULT 'TRY',   -- o günkü fiyatın birimi (native)
   PRIMARY KEY (symbol, asset_type, date)
 );
 `);
@@ -128,3 +131,13 @@ if (tradesSchema && !tradesSchema.includes("ETF")) {
     DROP TABLE trades_old_pre_etf;
   `);
 }
+
+/* Çok para birimi (TRY + USD): trades/prices/price_history'ye currency kolonu.
+   DEFAULT 'TRY' → mevcut satırlar TRY olur, davranış birebir korunur (portföyde USD varlık yoktu).
+   NOT: ETF tablo-yeniden-kurmasından SONRA çalışır ki yeniden kurulan trades da kolonu alsın. */
+const tradeCols = (db.prepare("PRAGMA table_info(trades)").all() as { name: string }[]).map((c) => c.name);
+if (!tradeCols.includes("currency")) db.exec("ALTER TABLE trades ADD COLUMN currency TEXT NOT NULL DEFAULT 'TRY';");
+const priceCols = (db.prepare("PRAGMA table_info(prices)").all() as { name: string }[]).map((c) => c.name);
+if (!priceCols.includes("currency")) db.exec("ALTER TABLE prices ADD COLUMN currency TEXT NOT NULL DEFAULT 'TRY';");
+const phCols = (db.prepare("PRAGMA table_info(price_history)").all() as { name: string }[]).map((c) => c.name);
+if (!phCols.includes("currency")) db.exec("ALTER TABLE price_history ADD COLUMN currency TEXT NOT NULL DEFAULT 'TRY';");

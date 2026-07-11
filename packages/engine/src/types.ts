@@ -3,15 +3,17 @@ export type Recurring = { id: number; kind: "income" | "expense"; name: string; 
 export type Loan = { id: number; name: string; amount: number; first_date: string; total: number };
 export type OneOff = { id: number; date: string; name: string; amount: number };
 export type AssetType = "BIST" | "FON" | "ALTIN" | "DOVIZ" | "KRIPTO" | "ETF";
-export type Trade = { id: number; date: string; asset_type: AssetType; symbol: string; side: "ALIŞ" | "SATIŞ"; qty: number; price: number; fee: number };
+/** Bir varlığın/işlemin doğal (native) para birimi. TRY taban birimidir; USD döviz varlıklar içindir. */
+export type Currency = "TRY" | "USD";
+export type Trade = { id: number; date: string; asset_type: AssetType; symbol: string; side: "ALIŞ" | "SATIŞ"; qty: number; price: number; fee: number; currency: Currency };
 export type Card = { id: number; name: string; limit_amount: number; statement_day: number; due_day: number };
 export type CardTx = { id: number; card_id: number; date: string; name: string; amount: number; installments: number };
-export type Price = { symbol: string; asset_type: string; price: number; source: string; updated_at: string };
+export type Price = { symbol: string; asset_type: string; price: number; source: string; updated_at: string; currency?: Currency };
 export type Category = { id: number; name: string; kind: "income" | "expense"; color: string | null };
 /** Gerçekleşen harcama/gelir defteri — projeksiyon sistemine (recurring/loan/card) bağlı değildir */
 export type Transaction = { id: number; date: string; name: string; amount: number; category_id: number | null; account_id: number | null };
 /** Günlük fiyat anlık görüntüsü — her tazelemede/elle girişte o günün satırı upsert edilir */
-export type PriceHistoryEntry = { symbol: string; asset_type: AssetType; date: string; price: number };
+export type PriceHistoryEntry = { symbol: string; asset_type: AssetType; date: string; price: number; currency?: Currency };
 export type AllData = {
   accounts: Account[]; recurring: Recurring[]; loans: Loan[]; oneoffs: OneOff[];
   trades: Trade[]; cards: Card[]; card_txs: CardTx[]; prices: Price[]; price_history: PriceHistoryEntry[];

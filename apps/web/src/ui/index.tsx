@@ -1,15 +1,15 @@
 import React from "react";
-import { num } from "@finans/engine";
-import { T, css, tl, tl2 } from "../theme";
+import { num, type Currency } from "@finans/engine";
+import { T, css, tl, fmtMoney } from "../theme";
 
 export const Field = ({ label, children, flex }: { label: string; children: React.ReactNode; flex?: number }) => (
   <div style={{ flex: flex || 1, minWidth: 120 }}><div style={css.label}>{label}</div>{children}</div>
 );
 
-/** Tutar girişi + canlı "₺1.234,56" önizlemesi — girilen değerin nasıl yorumlandığını anında gösterir, sessiz yanlış-ayrıştırmayı önler */
-export const AmountField = ({ label, value, onChange, placeholder, flex, inputRef }: {
+/** Tutar girişi + canlı "₺1.234,56" (veya seçili para birimi) önizlemesi — sessiz yanlış-ayrıştırmayı önler */
+export const AmountField = ({ label, value, onChange, placeholder, flex, inputRef, ccy = "TRY" }: {
   label: string; value: string; onChange: (v: string) => void; placeholder?: string; flex?: number;
-  inputRef?: React.Ref<HTMLInputElement>;
+  inputRef?: React.Ref<HTMLInputElement>; ccy?: Currency;
 }) => {
   const parsed = num(value);
   return (
@@ -18,7 +18,7 @@ export const AmountField = ({ label, value, onChange, placeholder, flex, inputRe
         onChange={(e) => onChange(e.target.value)} />
       {value.trim() !== "" && (
         <div style={{ fontSize: 11, color: parsed > 0 ? T.mut3 : T.neg, marginTop: 4 }}>
-          {parsed > 0 ? tl2.format(parsed) : "geçersiz tutar"}
+          {parsed > 0 ? fmtMoney(parsed, ccy, true) : "geçersiz tutar"}
         </div>
       )}
     </Field>

@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import type { AssetType } from "@finans/engine";
+import type { AssetType, Currency } from "@finans/engine";
 
 /**
  * Token sistemi: renkler CSS custom property olarak `themeCSS` içinde tanımlanır
@@ -74,6 +74,7 @@ export const themeCSS = `
 
 export type ThemeMode = "light" | "dark";
 export const THEME_KEY = "finans-theme";
+export const CCY_KEY = "finans-ccy"; // görüntü para birimi (TRY/USD) localStorage anahtarı
 
 /* ————— tasarım jetonları ————— */
 export const T = {
@@ -101,6 +102,12 @@ export const CATEGORY_PALETTE = [
 
 export const tl = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", maximumFractionDigits: 0 });
 export const tl2 = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", minimumFractionDigits: 2 });
+const usd = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+const usd2 = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "USD", minimumFractionDigits: 2 });
+
+/** Para birimine göre biçimler; `dec` iki ondalık ister. ccy verilmezse TRY. */
+export const fmtMoney = (v: number, ccy: Currency = "TRY", dec = false) =>
+  ccy === "USD" ? (dec ? usd2 : usd).format(v) : (dec ? tl2 : tl).format(v);
 
 export const css: Record<string, CSSProperties> = {
   card: { background: T.panel, border: `1px solid ${T.line}`, borderRadius: 20, padding: 20, boxShadow: "var(--shadow-sm)" },
