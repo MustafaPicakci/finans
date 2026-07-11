@@ -1,26 +1,33 @@
-import React, { useState } from "react";
-import { todayStr, parseD, fmtD, num, cardInfos, txShares, type AllData } from "@finans/engine";
+import React, { useRef, useState } from "react";
+import { parseD, fmtD, num, cardInfos, txShares, type AllData } from "@finans/engine";
 import { api } from "../../api";
-import { T, css, tl, tl2 } from "../../theme";
-import { Field, Empty, Row } from "../../ui";
+import { T, css, tl } from "../../theme";
+import { Field, AmountField, Hint, Empty, Row } from "../../ui";
+import type { AddKind } from "../forms";
 
 /* ————— KARTLAR ————— */
-export function Kartlar({ data, reload }: { data: AllData; reload: () => void }) {
+/* Kart TANIMI burada yapılır; kart HARCAMASI girişi global "+" akışındadır. */
+export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => void; onAdd: (k: AddKind) => void }) {
   const [cf, setCf] = useState({ name: "", limit_amount: "", statement_day: "", due_day: "" });
-  const [tf, setTf] = useState({ card_id: 0, date: todayStr(), name: "", amount: "", installments: "1" });
-  const cardOk = cf.name && +cf.statement_day >= 1 && +cf.statement_day <= 31 && +cf.due_day >= 1 && +cf.due_day <= 31;
-  const txOk = tf.card_id > 0 && tf.name && num(tf.amount) > 0 && tf.date && +tf.installments >= 1;
+  const cardNameRef = useRef<HTMLInputElement>(null);
+  const cardOk = !!cf.name && +cf.statement_day >= 1 && +cf.statement_day <= 31 && +cf.due_day >= 1 && +cf.due_day <= 31;
+  const cardReason = !cf.name ? "Kart adı gerekli" : !(+cf.statement_day >= 1 && +cf.statement_day <= 31) ? "Kesim günü 1-31 arası olmalı" : !(+cf.due_day >= 1 && +cf.due_day <= 31) ? "Son ödeme günü 1-31 arası olmalı" : null;
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const infos = cardInfos(data.cards, data.card_txs, today);
   const totalDebt = infos.reduce((s, c) => s + c.debt, 0);
 
   return (<>
     <div style={css.card}>
-      <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
         <div style={{ fontWeight: 700, fontSize: 15 }}>Kredi Kartları</div>
-        {totalDebt > 0 && (
-          <div style={{ fontSize: 12, color: T.mut }}>toplam kart borcu <span style={{ ...css.mono, color: T.neg }}>{tl.format(totalDebt)}</span></div>
-        )}
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          {totalDebt > 0 && (
+            <div style={{ fontSize: 12, color: T.mut }}>toplam kart borcu <span style={{ ...css.mono, color: T.neg }}>{tl.format(totalDebt)}</span></div>
+          )}
+          {data.cards.length > 0 && (
+            <button style={{ ...css.ghost, padding: "6px 12px", fontSize: 12.5, color: T.acc, borderColor: T.acc }} onClick={() => onAdd("cardtx")}>+ Harcama</button>
+          )}
+        </div>
       </div>
       <div style={{ fontSize: 12, color: T.mut, margin: "4px 0 8px" }}>
         Harcamalar kesim gününe göre ekstreye dağılır; her ekstre son ödeme tarihinde nakit akışına gider olarak düşer. Geçmiş vadeli ekstreler ödendi varsayılır.
@@ -62,46 +69,22 @@ export function Kartlar({ data, reload }: { data: AllData; reload: () => void })
           </div>
         );
       })}
-      <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-        <Field label="Kart adı" flex={2}><input style={css.input} value={cf.name} placeholder="örn. Yapı Kredi" onChange={(e) => setCf({ ...cf, name: e.target.value })} /></Field>
-        <Field label="Limit (₺)"><input style={css.input} inputMode="decimal" value={cf.limit_amount} onChange={(e) => setCf({ ...cf, limit_amount: e.target.value })} /></Field>
-        <Field label="Kesim günü"><input style={css.input} inputMode="numeric" value={cf.statement_day} onChange={(e) => setCf({ ...cf, statement_day: e.target.value })} /></Field>
-        <Field label="Son ödeme günü"><input style={css.input} inputMode="numeric" value={cf.due_day} onChange={(e) => setCf({ ...cf, due_day: e.target.value })} /></Field>
-      </div>
-      <button style={{ ...css.btn, marginTop: 10, opacity: cardOk ? 1 : 0.4 }} disabled={!cardOk}
-        onClick={async () => {
-          await api.post("cards", { name: cf.name, limit_amount: num(cf.limit_amount), statement_day: +cf.statement_day, due_day: +cf.due_day });
-          setCf({ name: "", limit_amount: "", statement_day: "", due_day: "" }); reload();
-        }}>Kart Ekle</button>
-    </div>
-
-    {data.cards.length > 0 && (
-      <div style={css.card}>
-        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 10 }}>Kart Harcaması Ekle</div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <Field label="Kart">
-            <select style={css.input} value={tf.card_id} onChange={(e) => setTf({ ...tf, card_id: +e.target.value })}>
-              <option value={0}>Seç…</option>
-              {data.cards.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-          </Field>
-          <Field label="Tarih"><input type="date" style={css.input} value={tf.date} onChange={(e) => setTf({ ...tf, date: e.target.value })} /></Field>
-          <Field label="Açıklama" flex={2}><input style={css.input} value={tf.name} placeholder="örn. Telefon" onChange={(e) => setTf({ ...tf, name: e.target.value })} /></Field>
-          <Field label="Toplam tutar (₺)"><input style={css.input} inputMode="decimal" value={tf.amount} onChange={(e) => setTf({ ...tf, amount: e.target.value })} /></Field>
-          <Field label="Taksit"><input style={css.input} inputMode="numeric" value={tf.installments} onChange={(e) => setTf({ ...tf, installments: e.target.value })} /></Field>
+      <form onSubmit={async (e) => {
+        e.preventDefault();
+        if (!cardOk) return;
+        await api.post("cards", { name: cf.name, limit_amount: num(cf.limit_amount), statement_day: +cf.statement_day, due_day: +cf.due_day });
+        setCf({ name: "", limit_amount: "", statement_day: "", due_day: "" }); cardNameRef.current?.focus(); reload();
+      }}>
+        <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+          <Field label="Kart adı" flex={2}><input ref={cardNameRef} style={css.input} value={cf.name} placeholder="örn. Yapı Kredi" onChange={(e) => setCf({ ...cf, name: e.target.value })} /></Field>
+          <AmountField label="Limit (₺)" value={cf.limit_amount} onChange={(v) => setCf({ ...cf, limit_amount: v })} />
+          <Field label="Kesim günü"><input style={css.input} inputMode="numeric" placeholder="1-31" value={cf.statement_day} onChange={(e) => setCf({ ...cf, statement_day: e.target.value })} /></Field>
+          <Field label="Son ödeme günü"><input style={css.input} inputMode="numeric" placeholder="1-31" value={cf.due_day} onChange={(e) => setCf({ ...cf, due_day: e.target.value })} /></Field>
         </div>
-        {txOk && +tf.installments > 1 && (
-          <div style={{ fontSize: 12, color: T.mut, marginTop: 8 }}>
-            aylık pay: <span style={{ ...css.mono, color: T.text }}>{tl2.format(num(tf.amount) / +tf.installments)}</span> × {tf.installments}
-          </div>
-        )}
-        <button style={{ ...css.btn, marginTop: 10, opacity: txOk ? 1 : 0.4 }} disabled={!txOk}
-          onClick={async () => {
-            await api.post("cardtxs", { card_id: tf.card_id, date: tf.date, name: tf.name, amount: num(tf.amount), installments: +tf.installments });
-            setTf({ ...tf, name: "", amount: "", installments: "1" }); reload();
-          }}>Harcamayı Kaydet</button>
-      </div>
-    )}
+        <button type="submit" style={{ ...css.btn, marginTop: 10, opacity: cardOk ? 1 : 0.4 }} disabled={!cardOk}>Kart Ekle</button>
+        {cardReason && <Hint>{cardReason}</Hint>}
+      </form>
+    </div>
 
     {data.card_txs.length > 0 && (
       <div style={css.card}>

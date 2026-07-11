@@ -1,12 +1,12 @@
-import React from "react";
+import React, { useRef, useState } from "react";
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, CartesianGrid,
   PieChart, Pie, Cell,
 } from "recharts";
-import { fmtD, parseD, portfolioValueHistory, type AllData, type Day, type Position } from "@finans/engine";
+import { fmtD, parseD, num, portfolioValueHistory, type AllData, type Day, type Position } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, tl, TYPE_COLORS } from "../../theme";
-import { Money, Empty } from "../../ui";
+import { Field, AmountField, Money, Empty, Row } from "../../ui";
 
 export function Ozet({ data, days, pos, cash, portValue, reload }: {
   data: AllData; days: Day[]; pos: Position[]; cash: number; portValue: number; reload: () => void;
@@ -34,7 +34,7 @@ export function Ozet({ data, days, pos, cash, portValue, reload }: {
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {days.length > 0 && (
             <div style={{
-              background: minDay.bal < 0 ? "#3A1712" : T.panel2, border: `1px solid ${minDay.bal < 0 ? T.neg : T.line}`,
+              background: minDay.bal < 0 ? T.negSoft : T.panel2, border: `1px solid ${minDay.bal < 0 ? T.neg : T.line}`,
               borderRadius: 20, padding: "4px 12px", fontSize: 12, ...css.mono,
             }}>
               en düşük: {fmtD(minDay.date, { day: "numeric", month: "short" })} ·{" "}
@@ -47,7 +47,11 @@ export function Ozet({ data, days, pos, cash, portValue, reload }: {
           </select>
         </div>
       </div>
-      {negDays > 0 && <div style={{ color: T.neg, fontSize: 12, marginTop: 6 }}>⚠ {negDays} gün eksi bakiyede görünüyorsunuz.</div>}
+      {negDays > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, color: T.warn, background: T.warnSoft, borderRadius: 10, padding: "8px 12px", fontSize: 13, marginTop: 10, fontWeight: 500 }}>
+          ⚠ {negDays} gün eksi bakiyede görünüyorsunuz.
+        </div>
+      )}
       <div style={{ height: 220, marginTop: 8 }}>
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={chart} margin={{ top: 8, right: 4, left: 4, bottom: 0 }}>
@@ -97,7 +101,7 @@ export function Ozet({ data, days, pos, cash, portValue, reload }: {
       </div>
       <div style={css.card}>
         <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Yaklaşan Hareketler</div>
-        {upcoming.length === 0 ? <Empty>Bütçe sekmesinden gelir/gider ekleyin.</Empty> : upcoming.map((e, i) => (
+        {upcoming.length === 0 ? <Empty>Plan sekmesinden gelir/gider ekleyin.</Empty> : upcoming.map((e, i) => (
           <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: i < upcoming.length - 1 ? `1px solid ${T.line}` : "none" }}>
             <div style={{ fontSize: 13 }}>
               <span style={{ ...css.mono, color: T.mut, marginRight: 8 }}>{fmtD(e.date, { day: "2-digit", month: "short" })}</span>{e.n}
@@ -137,5 +141,41 @@ export function Ozet({ data, days, pos, cash, portValue, reload }: {
         </div>
       )}
     </div>
+
+    <Hesaplar data={data} reload={reload} />
   </>);
+}
+
+/* ————— HESAPLAR (nakit) — tanım + bakiye güncelleme ————— */
+/* Bakiyeler elle güncellenir; toplamı projeksiyonun başlangıç noktasıdır. */
+function Hesaplar({ data, reload }: { data: AllData; reload: () => void }) {
+  const [acc, setAcc] = useState({ name: "", balance: "" });
+  const nameRef = useRef<HTMLInputElement>(null);
+  return (
+    <div style={css.card}>
+      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Hesaplar (Nakit)</div>
+      <div style={{ fontSize: 12, color: T.mut, marginBottom: 8 }}>Banka, cüzdan… Bakiyeye tıklayıp güncelleyebilirsin; toplamı nakit projeksiyonunun başlangıcıdır.</div>
+      {data.accounts.length === 0 && <Empty>Henüz hesap yok.</Empty>}
+      {data.accounts.map((a, i) => (
+        <Row key={a.id} last={i === data.accounts.length - 1}>
+          <div style={{ flex: 1, fontSize: 14 }}>{a.name}</div>
+          <input style={{ ...css.input, width: 130, textAlign: "right" }} inputMode="decimal" defaultValue={a.balance}
+            onBlur={async (e) => { const v = num(e.target.value); if (v !== a.balance) { await api.put(`accounts/${a.id}`, { balance: v }); reload(); } }} />
+          <button style={css.del} onClick={async () => { await api.del("accounts", a.id); reload(); }}>✕</button>
+        </Row>
+      ))}
+      <form onSubmit={async (e) => {
+        e.preventDefault();
+        if (!acc.name) return;
+        await api.post("accounts", { name: acc.name, balance: num(acc.balance) });
+        setAcc({ name: "", balance: "" }); nameRef.current?.focus(); reload();
+      }}>
+        <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+          <Field label="Hesap adı" flex={2}><input ref={nameRef} style={css.input} value={acc.name} placeholder="örn. Vakıfbank" onChange={(e) => setAcc({ ...acc, name: e.target.value })} /></Field>
+          <AmountField label="Bakiye (₺)" value={acc.balance} onChange={(v) => setAcc({ ...acc, balance: v })} />
+          <button type="submit" style={{ ...css.btn, opacity: acc.name ? 1 : 0.4 }} disabled={!acc.name}>Hesap Ekle</button>
+        </div>
+      </form>
+    </div>
+  );
 }

@@ -28,3 +28,17 @@ export function transactionsInMonth(transactions: Transaction[], ym: string): Tr
     .filter((t) => ymOf(parseD(t.date)) === ym)
     .sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
 }
+
+export type MonthlyTotal = { ym: string; income: number; expense: number; net: number };
+
+/** Verilen aylar (YYYY-MM) için gelir/gider/net toplamları; işlemi olmayan aylar 0 olarak döner. Sıralama `months` ile aynıdır */
+export function monthlyTotals(transactions: Transaction[], months: string[]): MonthlyTotal[] {
+  const byYm = new Map<string, MonthlyTotal>(months.map((ym) => [ym, { ym, income: 0, expense: 0, net: 0 }]));
+  transactions.forEach((t) => {
+    const entry = byYm.get(ymOf(parseD(t.date)));
+    if (!entry) return; // istenen ay aralığının dışında
+    if (t.amount >= 0) entry.income += t.amount; else entry.expense += t.amount;
+    entry.net += t.amount;
+  });
+  return months.map((ym) => byYm.get(ym)!);
+}

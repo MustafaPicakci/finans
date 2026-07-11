@@ -25,7 +25,7 @@ export function Nakit({ days }: { days: Day[] }) {
         <div style={{ display: "flex", gap: 6, overflowX: "auto", minWidth: 0 }}>
           {months.map((m, i) => (
             <button key={i} onClick={() => setMi(i)} style={{
-              background: i === mi ? T.acc : T.panel2, color: i === mi ? "#1A1408" : T.mut,
+              background: i === mi ? T.acc : T.panel2, color: i === mi ? T.accInk : T.mut,
               border: `1px solid ${i === mi ? T.acc : T.line}`, borderRadius: 20, padding: "6px 12px",
               fontSize: 12, cursor: "pointer", whiteSpace: "nowrap", fontFamily: T.disp, fontWeight: i === mi ? 700 : 400,
             }}>{m.label}</button>
@@ -98,7 +98,7 @@ function Takvim({ month }: { month: { y: number; mo: number; days: Day[] } }) {
         return (
           <button key={i} onClick={() => setSel(isSel ? null : d)} style={{
             aspectRatio: "1", border: `1px solid ${isSel ? T.acc : neg ? T.neg : T.line}`, borderRadius: 8,
-            background: neg ? "#2A1310" : hasEv ? T.panel2 : "transparent", cursor: "pointer",
+            background: neg ? T.negSoft : hasEv ? T.panel2 : "transparent", cursor: "pointer",
             display: "flex", flexDirection: "column", justifyContent: "space-between", padding: "4px 5px", overflow: "hidden",
           }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { categoryTotals, transactionsInMonth } from "./ledger.js";
+import { categoryTotals, transactionsInMonth, monthlyTotals } from "./ledger.js";
 import type { Category, Transaction } from "./types.js";
 
 const categories: Category[] = [
@@ -67,5 +67,34 @@ describe("transactionsInMonth", () => {
     ];
     const result = transactionsInMonth(txs, "2026-01");
     expect(result.map((t) => t.id)).toEqual([2, 1]);
+  });
+});
+
+describe("monthlyTotals", () => {
+  it("her ay için gelir/gider/net toplar", () => {
+    const txs = [
+      tx({ id: 1, date: "2026-01-05", amount: 5000 }),
+      tx({ id: 2, date: "2026-01-10", amount: -200 }),
+      tx({ id: 3, date: "2026-02-01", amount: -50 }),
+    ];
+    const result = monthlyTotals(txs, ["2026-01", "2026-02"]);
+    expect(result).toEqual([
+      { ym: "2026-01", income: 5000, expense: -200, net: 4800 },
+      { ym: "2026-02", income: 0, expense: -50, net: -50 },
+    ]);
+  });
+
+  it("işlemi olmayan ayları 0 olarak döner, verilen sırayı korur", () => {
+    const result = monthlyTotals([], ["2025-12", "2026-01"]);
+    expect(result).toEqual([
+      { ym: "2025-12", income: 0, expense: 0, net: 0 },
+      { ym: "2026-01", income: 0, expense: 0, net: 0 },
+    ]);
+  });
+
+  it("istenen ay aralığı dışındaki işlemleri hariç tutar", () => {
+    const txs = [tx({ id: 1, date: "2025-01-01", amount: 999 })];
+    const result = monthlyTotals(txs, ["2026-01"]);
+    expect(result).toEqual([{ ym: "2026-01", income: 0, expense: 0, net: 0 }]);
   });
 });

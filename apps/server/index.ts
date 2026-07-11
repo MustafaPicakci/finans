@@ -85,10 +85,48 @@ crud("cardtxs", "card_txs", [
 crud("categories", "categories", [
   { name: "name", required: true }, { name: "kind", required: true }, { name: "color" },
 ]);
-crud("transactions", "transactions", [
-  { name: "date", required: true }, { name: "name", required: true }, { name: "amount", required: true },
-  { name: "category_id" }, { name: "account_id" },
-]);
+
+/* ---- gerçekleşen işlemler (transactions): hesaba bağlıysa bakiyeyi de oynatır ----
+   Jenerik crud() yerine özel rotalar: amount işaretlidir (gider −, gelir +);
+   account_id verilmişse INSERT bakiyeye ekler, DELETE geri alır — BEGIN/COMMIT ile atomik.
+   PUT yok: kayıt düzenleme modeli sil + yeniden ekle'dir (bakiye tersinirliği böyle basit kalır). */
+api.post("/transactions", async (c) => {
+  const b = await c.req.json();
+  for (const f of ["date", "name", "amount"]) if (b[f] === undefined || b[f] === "") {
+    return c.json({ error: `${f} zorunlu` }, 400);
+  }
+  db.exec("BEGIN");
+  try {
+    const info = db
+      .prepare("INSERT INTO transactions (date,name,amount,category_id,account_id) VALUES (?,?,?,?,?)")
+      .run(b.date, b.name, b.amount, b.category_id ?? null, b.account_id ?? null);
+    if (b.account_id != null) {
+      db.prepare("UPDATE accounts SET balance = balance + ? WHERE id=?").run(b.amount, b.account_id);
+    }
+    db.exec("COMMIT");
+    return c.json({ id: info.lastInsertRowid });
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
+});
+api.delete("/transactions/:id", (c) => {
+  const row = db.prepare("SELECT amount, account_id FROM transactions WHERE id=?").get(c.req.param("id")) as
+    | { amount: number; account_id: number | null }
+    | undefined;
+  db.exec("BEGIN");
+  try {
+    db.prepare("DELETE FROM transactions WHERE id=?").run(c.req.param("id"));
+    if (row?.account_id != null) {
+      db.prepare("UPDATE accounts SET balance = balance - ? WHERE id=?").run(row.amount, row.account_id);
+    }
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
+  return c.json({ ok: true });
+});
 
 /* ---- fiyatlar ---- */
 api.post("/prices/refresh", async (c) => c.json(await refreshAll()));
