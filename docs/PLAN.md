@@ -13,7 +13,7 @@
 - ✅ **Faz 4.7 tamamlandı** — gerçekleşen işlem artık hesap bakiyesini etkiliyor: Harcamalar sekmesi de kaldırıldı (Rapor'a birleşti), tek gelir/gider formu tarihe göre defter/plan'a yönleniyor, hesaba bağlı işlem bakiyeyi atomik oynatıyor, Plan kalemleri "Gerçekleşti" ile deftere geçiyor. Faz 1'in "bakiye defterden bağımsız" kararının yerini aldı. Bkz. aşağıdaki Faz 4.7 bölümü.
 - ✅ **Faz 4.8 tamamlandı** — çok para birimi (TRY + USD): portföy işlemleri döviz cinsinden girilebilir (kripto/ABD hisse/ETF USD), pozisyonlar native hesaplanır, üstte ₺/$ görüntü seçici net varlık özetini/KPI'ları çevirir. Bkz. aşağıdaki Faz 4.8 bölümü.
 - ✅ **Faz 4.9 tamamlandı** — para piyasası fonları nakit gibi değerlenir: Nakit Akışı takvimi gün rengini artık **etkin nakit (nakit + para piyasası fonu)** ile belirler, güne tıklayınca nakit/PPF/diğer portföy kırılımı + gün içi hareketler açılır; fonlar Portföy sekmesinde "nakit say" ile opt-in işaretlenir. Bkz. aşağıdaki Faz 4.9 bölümü.
-- ⬜ Faz 5 henüz başlamadı.
+- ⬜ **Faz 5 planlandı, henüz başlamadı (kapsamı SaaS'a genişletildi, Temmuz 2026)** — orijinal "tek-parola auth" yerine tam SaaS dönüşümü: kendi auth'umuz + düz Postgres (taşınabilirlik öncelikli, Supabase Auth bilinçli elendi), `user_id` ile çok-kiracılık, global fiyat tazeleme, KVKK, yayınlama. Billing yok. Bkz. aşağıdaki Faz 5 bölümü.
 
 ## Context (Neden)
 
@@ -282,11 +282,54 @@ Onaylanan kapsam: para piyasası fonları **nakit gibi** sayılır; takvim gün 
 
 Doğrulama: `pnpm build` temiz, 77 engine testi yeşil. İzole sunucu (`:8799`, ayrı DATA_DIR — gerçek DB'ye dokunulmadı) + Playwright: senaryo nakit ₺2.000, Kira −₺9.000 (20 Tem → nakit −₺7.000), AFA para-piyasası ₺11.000, TTE hisse fonu ₺5.500. İşaretlemeden önce 20–31 Tem kırmızı (−7k); AFA "nakit say" işaretlenince aynı günler yeşile döndü (4k = −7.000 + 11.000); 20 Tem detayı: etkin nakit ₺4.000 · gün sonu nakit −₺7.000 · para piyasası fonu ₺11.000 · diğer portföy ₺5.500 · toplam ₺9.500 · gün içi: Kira −₺9.000. Konsol hatası yok.
 
-## Faz 5 — Auth + Yayınlama (en son)
+## Faz 5 — SaaS Dönüşümü: Auth + Çok-Kiracılık + Yayınlama (planlandı, henüz başlamadı)
 
-- Tek kullanıcılı basit auth: parola (env/settings), cookie session, tüm `/api` middleware ile korunur; login ekranı. (Çok kullanıcılı yapı bilinçli kapsam dışı — SaaS/çok kullanıcılı dönüşüm ileride ayrı bir faz olarak değerlendirilecek, kullanıcı kararı.)
-- Docker imajı pnpm monorepo'ya göre; mevcut Traefik/Tailscale notları geçerli kalır. PWA için HTTPS gereksinimi belgelenir (service worker şartı).
-- README + CLAUDE.md güncellenir (yeni komutlar, yeni model).
+Orijinal Faz 5 "tek kullanıcılı basit auth + yayınlama" idi. Temmuz 2026'da kullanıcıyla yeniden değerlendirildi ve kapsam **tam SaaS-MVP**'ye genişletildi. Alınan kararlar (kullanıcı onaylı):
+
+1. **Taşınabilirlik öncelikli — lock-in yok.** Supabase Auth *kullanılmayacak* (asıl bağımlılık oradan geliyordu: `supabase-js` + GoTrue JWT + `auth` şeması); auth'u kendimiz yazıyoruz. Veri **düz Postgres** — sağlayıcı değiştirmek = connection string değiştir + `pg_dump`/restore.
+2. **DB = Postgres, izolasyon = `user_id` scoping** (+ istenirse RLS ikinci savunma katmanı olarak). Database-per-tenant (Turso/libSQL) ve shared-SQLite seçenekleri değerlendirildi; kullanıcı Postgres'i seçti.
+3. **Hosting kararı deploy anına bırakıldı**: **Neon** (managed, ücretsiz katman, scale-to-zero, duraklatma yok) **veya** **VPS'te self-host Postgres** (docker-compose'a servis, $0 ek maliyet, `pg_dump` cron yedeği bizde). Plan ikisinde de aynı; yalnız Faz 5.5'in yedek/bağlantı detayı değişir. (Supabase da değerlendirildi: ücretsiz projede 7 gün hareketsizlikte duraklatma + elle restore gerekiyor, Auth'u da kullanmayacaksak avantajı kalmıyor — elendi.)
+4. **Billing yok** — Stripe kapsam dışı (kullanıcı kararı). Reklam (AdSense) mimari sürücü değil, sonraya park: SPA'ya script eklemek + KVKK cookie onayı ister, düşük trafikte getirisi düşük.
+5. **`packages/engine` hiç değişmez** — saf/stateless, kendisine verilen `AllData` üzerinde çalışır. Tüm iş `apps/server` (db/index/prices) + yeni auth katmanı + `apps/web` giriş akışında.
+6. **Fiyatlar global, varlıklar kiracıya özel.** `prices`/`price_history` piyasa verisidir (THYAO fiyatı herkes için aynı) — kiracıya bölünmez. `settings` ikiye ayrılır: **global** (`fx_usd_try`, `tefas_last_fetch`) vs **kullanıcı başına** (`horizon`, `cash_funds`).
+
+Alt fazlar sıralı; her biri kendi başına çalışan uygulama bırakır:
+
+### Faz 5.0 — SQLite → Postgres geçişi (davranış değişikliği yok)
+- `node:sqlite` (hâlâ experimental, `--experimental-sqlite` bayrağı) yerine `pg`/`postgres.js` sürücüsü; `DATABASE_URL` env.
+- `db.ts` yeniden yazımı: şema Postgres lehçesinde (`SERIAL`/`IDENTITY`, `REAL`→`numeric` değerlendirilir), mevcut "PRAGMA table_info + ALTER" migrasyon deseni yerine basit sıralı migrasyon dosyaları.
+- Tek seferlik veri taşıma script'i: mevcut `data/finans.db` → Postgres (kullanıcının gerçek verisi korunur, taşıma sonrası satır sayıları karşılaştırılarak doğrulanır).
+- `docker-compose.yml`'e `postgres` servisi (dev + VPS self-host senaryosu); dev için `pnpm dev` yereldeki compose Postgres'ine bağlanır.
+- Henüz auth/user yok — uygulama aynı tek-kullanıcı davranışıyla Postgres üstünde çalışır ve doğrulanır.
+
+### Faz 5.1 — Auth temeli
+- `users` (email, `password_hash` argon2, `email_verified`, `created_at`) + `sessions` (server-side, revoke edilebilir) tabloları; `httpOnly + Secure + SameSite` cookie.
+- Rotalar: `POST /api/auth/register|login|logout`, `GET /api/auth/me`; auth middleware `auth/*` hariç tüm `/api/*`'ı korur, context'e `userId` koyar.
+- Parola sıfırlama e-postası (Resend, ücretsiz katman) — token tablosu + tek kullanımlık link.
+- Web: giriş/kayıt ekranları (Faz 4.5 tasarım diliyle); `App.tsx` açılışta `me` kontrolü, 401'de login'e yönlendirme.
+
+### Faz 5.2 — Çok-kiracılık (en kritik alt faz)
+- Kiracıya özel tablolara `user_id` kolonu: `accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions`.
+- `crud(route, table, cols)` fabrikası her INSERT'e `userId` enjekte eder, her SELECT/DELETE'e `WHERE user_id=?` ekler — tek noktadan scoping, elle yazılmış rotalar (`transactions`, prices, settings) ayrıca elden geçirilir.
+- `GET /api/all` kullanıcıya scope'lanır; `settings` global/kullanıcı ayrımıyla birleştirilip döner (frontend sözleşmesi değişmez).
+- İsteğe bağlı ikinci katman: Postgres RLS politikaları (kaçan bir filtrenin sızıntıya dönüşmemesi için savunma).
+- Test: iki kullanıcılı senaryoda çapraz erişim denemeleri (A'nın verisi B'ye hiçbir uçtan sızmamalı) — otomatik test + elle doğrulama.
+
+### Faz 5.3 — Global fiyat tazeleme
+- `refreshAll()` tek kullanıcının `trades`'i yerine **tüm kullanıcıların tuttuğu sembollerin birleşimini** tazeler; `prices`/`price_history` global kalır.
+- TEFAS zaten tür başına tüm listeyi çekiyor → RapidAPI kotası kullanıcı sayısıyla **artmaz**. `fx_usd_try`/`tefas_last_fetch` global settings'te.
+
+### Faz 5.4 — Sertleştirme + KVKK
+- Yazma rotalarında girdi doğrulama (zod), rate-limit (özellikle auth uçları), CSRF (cookie session olduğundan), güvenlik header'ları.
+- **KVKK**: hesap silme (tüm kiracı verisi + session'lar) ve JSON veri dışa-aktarımı ucu; aydınlatma/gizlilik metni sayfası.
+- Hata izleme (Sentry ücretsiz katman) + yapısal log; `pg_dump` cron yedeği (VPS senaryosu) veya Neon otomatik yedek notu.
+
+### Faz 5.5 — Yayınlama
+- Hosting kararı burada kesinleşir: **Neon + Fly.io/VPS** veya **tek VPS'te app+Postgres** (Hetzner ~€4/ay). Önde Caddy (otomatik HTTPS — PWA service worker şartı) veya Cloudflare.
+- CI/CD: GitHub Actions → Docker build → deploy. Docker imajı pnpm monorepo'ya göre güncellenir.
+- README + CLAUDE.md güncellenir (yeni komutlar, env değişkenleri, çok-kullanıcılı model, deploy).
+
+Kapsam dışı (bilinçli, ileride ayrı faz olabilir): Stripe/billing ve plan kapıları, AdSense, Google ile giriş (OAuth), e-posta doğrulama zorunluluğu (kayıtta doğrulamasız giriş + sonradan doğrulama hatırlatması yeterli).
 
 ---
 
@@ -303,4 +346,4 @@ Doğrulama: `pnpm build` temiz, 77 engine testi yeşil. İzole sunucu (`:8799`, 
 
 ## Sıralama
 
-Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Sıradaki: Faz 5 (auth + yayınlama, en son).
+Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Sıradaki: Faz 5 — SaaS dönüşümü, alt fazlar 5.0 (Postgres) → 5.1 (auth) → 5.2 (çok-kiracılık) → 5.3 (global fiyat) → 5.4 (sertleştirme+KVKK) → 5.5 (yayınlama) sırasıyla.
