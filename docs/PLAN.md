@@ -13,7 +13,7 @@
 - ✅ **Faz 4.7 tamamlandı** — gerçekleşen işlem artık hesap bakiyesini etkiliyor: Harcamalar sekmesi de kaldırıldı (Rapor'a birleşti), tek gelir/gider formu tarihe göre defter/plan'a yönleniyor, hesaba bağlı işlem bakiyeyi atomik oynatıyor, Plan kalemleri "Gerçekleşti" ile deftere geçiyor. Faz 1'in "bakiye defterden bağımsız" kararının yerini aldı. Bkz. aşağıdaki Faz 4.7 bölümü.
 - ✅ **Faz 4.8 tamamlandı** — çok para birimi (TRY + USD): portföy işlemleri döviz cinsinden girilebilir (kripto/ABD hisse/ETF USD), pozisyonlar native hesaplanır, üstte ₺/$ görüntü seçici net varlık özetini/KPI'ları çevirir. Bkz. aşağıdaki Faz 4.8 bölümü.
 - ✅ **Faz 4.9 tamamlandı** — para piyasası fonları nakit gibi değerlenir: Nakit Akışı takvimi gün rengini artık **etkin nakit (nakit + para piyasası fonu)** ile belirler, güne tıklayınca nakit/PPF/diğer portföy kırılımı + gün içi hareketler açılır; fonlar Portföy sekmesinde "nakit say" ile opt-in işaretlenir. Bkz. aşağıdaki Faz 4.9 bölümü.
-- 🔄 **Faz 5 başladı (SaaS dönüşümü, Temmuz 2026)** — kendi auth'umuz + düz Postgres (taşınabilirlik öncelikli, Supabase Auth bilinçli elendi), `user_id` ile çok-kiracılık, global fiyat tazeleme, KVKK, yayınlama. Billing yok. **Faz 5.0 ✅ (SQLite→Postgres geçişi, davranış değişikliği yok)**; sıradaki 5.1 (auth temeli). Bkz. aşağıdaki Faz 5 bölümü.
+- 🔄 **Faz 5 başladı (SaaS dönüşümü, Temmuz 2026)** — kendi auth'umuz + düz Postgres (taşınabilirlik öncelikli, Supabase Auth bilinçli elendi), `user_id` ile çok-kiracılık, global fiyat tazeleme, KVKK, yayınlama. Billing yok. **Faz 5.0 ✅** (SQLite→Postgres) + **Faz 5.1 ✅** (auth temeli: kendi scrypt+session auth'u, owner-bootstrap kayıt, giriş ekranı); sıradaki 5.2 (çok-kiracılık, `user_id` scoping). Bkz. aşağıdaki Faz 5 bölümü.
 
 ## Context (Neden)
 
@@ -305,11 +305,16 @@ Yapılanlar:
 
 Doğrulama: gerçek `data/finans.db` (2 hesap, 20 trade, 3498 fiyat, 8261 fiyat geçmişi, `cash_funds:TP2` dahil) Postgres'e taşındı — tüm 12 tablonun satır sayıları birebir eşleşti, örnek değerler (float `0.43261478`, id'ler, settings) SQLite ile bit-bit aynı. Postgres-tabanlı server (izole port) + curl: RETURNING id (yeni id sequence'tan), `transactions` bakiye yan etkisi çift yönlü (1000→750→1000), fiyat upsert+delete, `updated_at` biçimi SQLite ile aynı. Playwright: SPA net varlık ₺143.119 + tüm KPI/grafikler gerçek Postgres verisiyle render, sıfır konsol hatası. `pnpm build` temiz.
 
-### Faz 5.1 — Auth temeli
-- `users` (email, `password_hash` argon2, `email_verified`, `created_at`) + `sessions` (server-side, revoke edilebilir) tabloları; `httpOnly + Secure + SameSite` cookie.
-- Rotalar: `POST /api/auth/register|login|logout`, `GET /api/auth/me`; auth middleware `auth/*` hariç tüm `/api/*`'ı korur, context'e `userId` koyar.
-- Parola sıfırlama e-postası (Resend, ücretsiz katman) — token tablosu + tek kullanımlık link.
-- Web: giriş/kayıt ekranları (Faz 4.5 tasarım diliyle); `App.tsx` açılışta `me` kontrolü, 401'de login'e yönlendirme.
+### Faz 5.1 — Auth temeli ✅
+Yapılanlar:
+- `users` (email unique, `password_hash`, `created_at`) + `sessions` (token PK, server-side, revoke edilebilir, `expires_at` 30 gün) tabloları ([db.ts](../apps/server/db.ts) `initDb`).
+- [auth.ts](../apps/server/auth.ts): parola hash'i **Node yerleşik `crypto.scrypt`** ("salt:key" hex; argon2 native bağımlılığından kaçınıldı), `verifyPassword` sabit-zaman karşılaştırma; session oluştur/oku(join+expiry)/sil.
+- Rotalar ([index.ts](../apps/server/index.ts)): `POST /auth/register|login|logout`, `GET /auth/me`; guard'tan önce tanımlanır. `api.use("*")` guard'ı sonraki tüm `/api/*`'ı korur (geçerli oturum yoksa 401), context'e `user` koyar. Cookie `httpOnly + SameSite=Lax + Secure(prod)`, e-posta küçük harfe indirgenir.
+- **Kayıt yalnız ilk kullanıcıya (owner) açık** — `users` boşsa izin, doluysa 403. Çok-kullanıcı kaydı Faz 5.2'de (tenant scoping gelince) açılacak. Veri şimdilik paylaşımlı (henüz `user_id` yok).
+- Web: [features/auth](../apps/web/src/features/auth/index.tsx) giriş/kayıt ekranı (Faz 4.5 tasarım dili, kendi `themeCSS`'i); [api.ts](../apps/web/src/api.ts) `ApiError(status)` + `me/login/register/logout`; [App.tsx](../apps/web/src/App.tsx) açılışta `me` kontrolü, oturum yoksa `<Auth>`, 401'de (oturum düşünce) otomatik giriş ekranına dönüş, header'da ⏻ çıkış.
+- **Ertelendi**: parola sıfırlama e-postası (Resend anahtarı yok — e-posta Faz 5.4'te kurulunca).
+
+Doğrulama: `pnpm build` temiz. Postgres API (izole port) + cookie jar: oturumsuz `/all`→401, register(owner)→200+cookie, oturumla `/all`→200 (gerçek veri), ikinci register→403, yanlış parola→401, case-insensitive login→200, logout→sonra `/all`→401. Playwright: giriş ekranı render → login → dashboard (net varlık ₺143.113) → ⏻ logout → tekrar giriş ekranı, sıfır konsol hatası. Test kullanıcısı silindi (owner slotu boş).
 
 ### Faz 5.2 — Çok-kiracılık (en kritik alt faz)
 - Kiracıya özel tablolara `user_id` kolonu: `accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions`.

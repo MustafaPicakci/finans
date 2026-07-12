@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { project, positions, cardInfos, loanRemaining, portfolioValueTry, convert, type Currency } from "@finans/engine";
-import { api } from "./api";
+import { api, ApiError, type SessionUser } from "./api";
 import { T, css, fmtMoney, themeCSS, THEME_KEY, CCY_KEY, type ThemeMode } from "./theme";
 import { Center } from "./ui";
+import { Auth } from "./features/auth";
 import { Ozet } from "./features/ozet";
 import { Nakit } from "./features/nakit";
 import { Plan } from "./features/plan";
@@ -19,9 +20,16 @@ export default function App() {
   const [theme, setTheme] = useState<ThemeMode>(() => (localStorage.getItem(THEME_KEY) as ThemeMode) || "light");
   const [ccy, setCcy] = useState<Currency>(() => (localStorage.getItem(CCY_KEY) as Currency) || "TRY");
   const [add, setAdd] = useState<AddState | null>(null); // global "+ Ekle" akışı
+  const [user, setUser] = useState<SessionUser | null | undefined>(undefined); // undefined = oturum kontrol ediliyor
 
-  const reload = useCallback(() => api.all().then(setData).catch((e) => setErr(String(e))), []);
-  useEffect(() => { reload(); }, [reload]);
+  const reload = useCallback(() => api.all().then(setData).catch((e) => {
+    if (e instanceof ApiError && e.status === 401) { setUser(null); setData(null); } // oturum düştü → giriş ekranı
+    else setErr(String(e));
+  }), []);
+  useEffect(() => {
+    api.me().then(({ user }) => { setUser(user); if (user) reload(); }).catch((e) => setErr(String(e)));
+  }, [reload]);
+  const logout = useCallback(async () => { await api.logout().catch(() => {}); setUser(null); setData(null); }, []);
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem(THEME_KEY, theme);
@@ -46,6 +54,8 @@ export default function App() {
   }, [data]);
 
   if (err) return <Center>API'ye ulaşılamadı: {err}. Sunucu çalışıyor mu? (npm run dev)</Center>;
+  if (user === undefined) return <Center>Yükleniyor…</Center>;
+  if (user === null) return <Auth onAuthed={(u) => { setUser(u); setErr(""); reload(); }} />;
   if (!data) return <Center>Yükleniyor…</Center>;
 
   // TRY canonical; görüntü para birimi saf sunum katmanı — nihai TRY rakamını çevirir
@@ -130,6 +140,11 @@ export default function App() {
               width: 36, height: 36, borderRadius: 999, border: `1px solid ${T.line}`, background: T.panel,
               color: T.mut, cursor: "pointer", display: "grid", placeItems: "center", fontSize: 15, flexShrink: 0,
             }}>◐</button>
+          <button aria-label="Çıkış yap" title={`Çıkış yap${user ? ` (${user.email})` : ""}`} onClick={logout}
+            style={{
+              width: 36, height: 36, borderRadius: 999, border: `1px solid ${T.line}`, background: T.panel,
+              color: T.mut, cursor: "pointer", display: "grid", placeItems: "center", fontSize: 15, flexShrink: 0,
+            }}>⏻</button>
         </div>
       </div>
 
