@@ -75,6 +75,9 @@ function Liste({ days }: { days: Day[] }) {
   </>);
 }
 
+/** Etkin nakit = gün sonu nakit + para piyasası fonu (likit, nakit gibi değerlenir) */
+const effCash = (d: Day) => d.bal + d.cashFunds;
+
 function Takvim({ month }: { month: { y: number; mo: number; days: Day[] } }) {
   const [sel, setSel] = useState<Day | null>(null);
   const byDate = new Map(month.days.map((d) => [d.date.getDate(), d]));
@@ -93,7 +96,7 @@ function Takvim({ month }: { month: { y: number; mo: number; days: Day[] } }) {
       {cells.map((d, i) => {
         if (!d) return <div key={i} />;
         const hasEv = d.ev.length > 0;
-        const neg = d.bal < 0;
+        const neg = effCash(d) < 0; // para piyasası fonu nakit gibi sayılır
         const isSel = sel?.k === d.k;
         return (
           <button key={i} onClick={() => setSel(isSel ? null : d)} style={{
@@ -106,7 +109,7 @@ function Takvim({ month }: { month: { y: number; mo: number; days: Day[] } }) {
               {hasEv && <span style={{ width: 5, height: 5, borderRadius: 3, background: T.acc }} />}
             </div>
             <div style={{ textAlign: "right", lineHeight: 1.15 }}>
-              <div style={{ ...css.mono, fontSize: 11, color: neg ? T.neg : T.text }}>{kBrief(d.bal)}</div>
+              <div style={{ ...css.mono, fontSize: 11, color: neg ? T.neg : T.text }}>{kBrief(effCash(d))}</div>
               {d.assets > 0 && <div style={{ ...css.mono, fontSize: 9, color: T.mut }}>Σ{kBrief(d.total)}</div>}
             </div>
           </button>
@@ -114,26 +117,43 @@ function Takvim({ month }: { month: { y: number; mo: number; days: Day[] } }) {
       })}
     </div>
     <div style={{ display: "flex", gap: 14, marginTop: 10, fontSize: 11, color: T.mut, flexWrap: "wrap" }}>
-      <span><span style={{ ...css.mono, color: T.text }}>sayı</span> = gün sonu nakit</span>
-      <span><span style={{ ...css.mono, color: T.mut }}>Σ</span> = nakit + portföy</span>
-      <span><span style={{ color: T.neg }}>kırmızı</span> = eksi bakiye</span>
+      <span><span style={{ ...css.mono, color: T.text }}>sayı</span> = etkin nakit (nakit + para piyasası)</span>
+      <span><span style={{ ...css.mono, color: T.mut }}>Σ</span> = tüm varlık</span>
+      <span><span style={{ color: T.neg }}>kırmızı</span> = eksi etkin nakit</span>
     </div>
-    {sel && (
+    {sel && (() => {
+      const eff = effCash(sel);
+      const hasPpf = sel.cashFunds > 0;
+      const other = sel.assets - sel.cashFunds; // para piyasası dışı portföy
+      return (
       <div style={{ background: T.panel2, borderRadius: 10, padding: 12, marginTop: 12 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
           <div style={{ fontWeight: 700 }}>{fmtD(sel.date, { day: "numeric", month: "long", weekday: "long" })}</div>
         </div>
-        <div style={{ display: "flex", gap: 16, marginBottom: sel.ev.length ? 8 : 0, flexWrap: "wrap" }}>
-          <div><div style={css.label}>gün sonu nakit</div><span style={{ ...css.mono, fontSize: 16, color: sel.bal < 0 ? T.neg : T.pos }}>{tl.format(Math.round(sel.bal))}</span></div>
-          <div><div style={css.label}>portföy</div><span style={{ ...css.mono, fontSize: 16, color: T.text }}>{tl.format(Math.round(sel.assets))}</span></div>
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+          <div>
+            <div style={css.label}>etkin nakit</div>
+            <span style={{ ...css.mono, fontSize: 16, color: eff < 0 ? T.neg : T.pos }}>{tl.format(Math.round(eff))}</span>
+          </div>
+          {hasPpf && (<>
+            <div><div style={css.label}>gün sonu nakit</div><span style={{ ...css.mono, fontSize: 16, color: sel.bal < 0 ? T.neg : T.text }}>{tl.format(Math.round(sel.bal))}</span></div>
+            <div><div style={css.label}>para piyasası fonu</div><span style={{ ...css.mono, fontSize: 16, color: T.text }}>{tl.format(Math.round(sel.cashFunds))}</span></div>
+          </>)}
+          <div><div style={css.label}>{hasPpf ? "diğer portföy" : "portföy"}</div><span style={{ ...css.mono, fontSize: 16, color: T.text }}>{tl.format(Math.round(other))}</span></div>
           <div><div style={css.label}>toplam varlık</div><span style={{ ...css.mono, fontSize: 16, color: T.acc }}>{tl.format(Math.round(sel.total))}</span></div>
         </div>
-        {sel.ev.map((e, j) => (
-          <div key={j} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginTop: 4 }}>
-            <span style={{ color: T.mut }}>{e.n}</span><Money v={e.a} sign />
+        {sel.ev.length > 0 && (
+          <div style={{ marginTop: 10, borderTop: `1px solid ${T.line}`, paddingTop: 8 }}>
+            <div style={{ ...css.label, marginBottom: 4 }}>gün içi hareketler</div>
+            {sel.ev.map((e, j) => (
+              <div key={j} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginTop: 4 }}>
+                <span style={{ color: T.mut }}>{e.n}</span><Money v={e.a} sign />
+              </div>
+            ))}
           </div>
-        ))}
+        )}
       </div>
-    )}
+      );
+    })()}
   </>);
 }

@@ -5,9 +5,12 @@ import { loanPayDay, loanRemaining, loanActiveOn } from "./loans.js";
 import { cardInfos } from "./cards.js";
 import { convert, type Rates } from "./portfolio.js";
 
-export type Day = { date: Date; k: string; net: number; bal: number; assets: number; total: number; ev: { n: string; a: number }[] };
+/** `cashFunds` = o gün elde tutulan para piyasası fonlarının TRY değeri (assets'in bir alt kümesi);
+    nakit gibi likit sayılır. Etkin nakit = `bal + cashFunds`. */
+export type Day = { date: Date; k: string; net: number; bal: number; assets: number; cashFunds: number; total: number; ev: { n: string; a: number }[] };
 
-/** Nakit projeksiyonu (hepsi TRY). `rates` USD-doğal varlıkları TRY'ye çevirmek için — verilmezse USD çevrilmez. */
+/** Nakit projeksiyonu (hepsi TRY). `rates` USD-doğal varlıkları TRY'ye çevirmek için — verilmezse USD çevrilmez.
+    Para piyasası (nakit sayılan) fon sembolleri `settings.cash_funds`'tan (virgülle ayrık) okunur. */
 export function project(data: AllData, months: number, rates: Rates = { usdTry: 0 }): Day[] {
   const start = new Date(); start.setHours(0, 0, 0, 0);
   const end = new Date(start); end.setMonth(end.getMonth() + months);
@@ -19,6 +22,10 @@ export function project(data: AllData, months: number, rates: Rates = { usdTry: 
   /* güncel fiyat haritası; geçmiş günlerde de bugünkü fiyatla değerlenir (fiyat geçmişi tutulmuyor) */
   const priceMap = new Map(data.prices.map((p) => [`${p.asset_type}:${p.symbol}`, p.price]));
   const curOf = new Map<string, Currency>(data.trades.map((t) => [`${t.asset_type}:${t.symbol}`, t.currency ?? "TRY"]));
+  /* nakit sayılan (para piyasası) fon anahtarları: settings.cash_funds = "AFA,TTE,..." */
+  const cashFundKeys = new Set(
+    (data.settings.cash_funds || "").split(",").map((s) => s.trim()).filter(Boolean).map((s) => `FON:${s}`),
+  );
   /* o güne dek elde tutulan miktarı çıkarmak için işlemleri tarihe göre sırala */
   const sortedTrades = [...data.trades].sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
   const assetsOn = (dayKey: string) => {
@@ -28,9 +35,15 @@ export function project(data: AllData, months: number, rates: Rates = { usdTry: 
       const k = `${t.asset_type}:${t.symbol}`;
       qty.set(k, (qty.get(k) || 0) + (t.side === "ALIŞ" ? t.qty : -t.qty));
     }
-    let v = 0;
-    qty.forEach((q, k) => { const p = priceMap.get(k); if (p && q > 0) v += convert(q * p, curOf.get(k) ?? "TRY", "TRY", rates); });
-    return v;
+    let assets = 0, cashFunds = 0;
+    qty.forEach((q, k) => {
+      const p = priceMap.get(k);
+      if (!p || q <= 0) return;
+      const v = convert(q * p, curOf.get(k) ?? "TRY", "TRY", rates);
+      assets += v;
+      if (cashFundKeys.has(k)) cashFunds += v;
+    });
+    return { assets, cashFunds };
   };
   let bal = data.accounts.reduce((s, a) => s + a.balance, 0);
   /* kart ekstre ödemeleri: son ödeme tarihine gider olarak düşer */
@@ -57,8 +70,8 @@ export function project(data: AllData, months: number, rates: Rates = { usdTry: 
     const net = ev.reduce((s, e) => s + e.a, 0);
     bal += net;
     const k = keyOf(d);
-    const assets = assetsOn(k);
-    days.push({ date: new Date(d), k, net, bal, assets, total: bal + assets, ev });
+    const { assets, cashFunds } = assetsOn(k);
+    days.push({ date: new Date(d), k, net, bal, assets, cashFunds, total: bal + assets, ev });
   }
   return days;
 }

@@ -103,6 +103,36 @@ describe("project", () => {
     expect(days[0].total).toBe(1000 + 1200);
   });
 
+  it("para piyasası fonu (settings.cash_funds) nakit sayılır: cashFunds dolar, assets'e de girer", () => {
+    const data = baseData({
+      accounts: [{ id: 1, name: "Vadesiz", balance: 1000 }],
+      trades: [
+        { id: 1, date: "2026-01-01", asset_type: "FON", symbol: "AFA", side: "ALIŞ", qty: 100, price: 10, fee: 0, currency: "TRY" },
+        { id: 2, date: "2026-01-01", asset_type: "FON", symbol: "TTE", side: "ALIŞ", qty: 50, price: 20, fee: 0, currency: "TRY" },
+      ],
+      prices: [
+        { symbol: "AFA", asset_type: "FON", price: 12, source: "manual", updated_at: "2026-01-01" },
+        { symbol: "TTE", asset_type: "FON", price: 20, source: "manual", updated_at: "2026-01-01" },
+      ],
+      settings: { cash_funds: "AFA" }, // yalnız AFA nakit sayılır
+    });
+    const days = project(data, 1);
+    expect(days[0].cashFunds).toBe(100 * 12); // 1200 — sadece AFA
+    expect(days[0].assets).toBe(100 * 12 + 50 * 20); // 2200 — tüm fonlar
+    expect(days[0].bal + days[0].cashFunds).toBe(1000 + 1200); // etkin nakit
+  });
+
+  it("cash_funds boşsa cashFunds sıfırdır", () => {
+    const data = baseData({
+      accounts: [{ id: 1, name: "Vadesiz", balance: 0 }],
+      trades: [{ id: 1, date: "2026-01-01", asset_type: "FON", symbol: "AFA", side: "ALIŞ", qty: 100, price: 10, fee: 0, currency: "TRY" }],
+      prices: [{ symbol: "AFA", asset_type: "FON", price: 12, source: "manual", updated_at: "2026-01-01" }],
+    });
+    const days = project(data, 1);
+    expect(days[0].cashFunds).toBe(0);
+    expect(days[0].assets).toBe(1200);
+  });
+
   it("USD-doğal varlık güncel FX ile TRY'ye çevrilerek toplam varlığa girer", () => {
     const data = baseData({
       accounts: [{ id: 1, name: "Vadesiz", balance: 1000 }],

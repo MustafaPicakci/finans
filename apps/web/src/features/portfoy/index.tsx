@@ -23,6 +23,15 @@ export function Portfoy({ data, pos, rates, ccy, reload, onAdd }: {
   const totReal = pos.reduce((s, p) => s + convert(p.realized, p.currency, ccy, rates), 0);
   const lastUpdate = data.prices.reduce((m, p) => (p.updated_at > m ? p.updated_at : m), "");
 
+  /* Para piyasası (nakit sayılan) fonlar — Nakit Akışı takviminde nakit gibi değerlenir */
+  const cashFunds = new Set((data.settings.cash_funds || "").split(",").map((s) => s.trim()).filter(Boolean));
+  const toggleCashFund = async (sym: string) => {
+    const next = new Set(cashFunds);
+    next.has(sym) ? next.delete(sym) : next.add(sym);
+    await api.put("settings", { cash_funds: [...next].join(",") });
+    reload();
+  };
+
   const refresh = async () => {
     setBusy(true);
     try { await api.refreshPrices(); await reload(); } finally { setBusy(false); }
@@ -76,6 +85,17 @@ export function Portfoy({ data, pos, rates, ccy, reload, onAdd }: {
             {p.cur != null && (
               <button style={{ ...css.del, fontSize: 12 }} title="fiyatı sil, otomatiğe dön"
                 onClick={async () => { await api.delPrice(p.type, p.sym); reload(); }}>sıfırla</button>
+            )}
+            {p.type === "FON" && (
+              <button
+                title={cashFunds.has(p.sym) ? "Nakit sayımından çıkar" : "Para piyasası fonu — nakit gibi say (takvimde etkin nakite eklenir)"}
+                onClick={() => toggleCashFund(p.sym)}
+                style={{
+                  fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 10, cursor: "pointer",
+                  border: `1px solid ${cashFunds.has(p.sym) ? T.pos : T.line}`,
+                  background: cashFunds.has(p.sym) ? T.posSoft : "transparent",
+                  color: cashFunds.has(p.sym) ? T.pos : T.mut,
+                }}>{cashFunds.has(p.sym) ? "✓ nakit sayılır" : "nakit say"}</button>
             )}
             {p.unreal != null && <span style={{ fontSize: 12, color: T.mut }}>açık K/Z: <Signed v={Math.round(p.unreal)} ccy={p.currency} /></span>}
             {p.realized !== 0 && <span style={{ fontSize: 12, color: T.mut }}>gerçekleşen: <Signed v={Math.round(p.realized)} ccy={p.currency} /></span>}
