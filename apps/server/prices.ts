@@ -1,4 +1,12 @@
-import { db } from "./db.js";
+import { db, nowLocal, todayLocal } from "./db.js";
+
+/* Fiyat upsert SQL'leri (eski prepared statement'ların yerine; `?` → db katmanında $n'e çevrilir) */
+const UPSERT_PRICE =
+  `INSERT INTO prices (symbol, asset_type, price, source, updated_at, currency) VALUES (?,?,?,?,?,?)
+   ON CONFLICT (symbol, asset_type) DO UPDATE SET price=excluded.price, source=excluded.source, updated_at=excluded.updated_at, currency=excluded.currency`;
+const UPSERT_HISTORY =
+  `INSERT INTO price_history (symbol, asset_type, date, price, currency) VALUES (?,?,?,?,?)
+   ON CONFLICT (symbol, asset_type, date) DO UPDATE SET price=excluded.price, currency=excluded.currency`;
 
 const UA = { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)" };
 
@@ -121,32 +129,23 @@ async function fetchPrice(assetType: string, symbol: string, usdTry: number | nu
 export type RefreshResult = { symbol: string; asset_type: string; ok: boolean; price?: number };
 
 export async function refreshAll(): Promise<RefreshResult[]> {
-  const held = db
-    .prepare("SELECT DISTINCT asset_type, symbol, currency FROM trades")
-    .all() as { asset_type: string; symbol: string; currency: string }[];
+  const held = await db.all<{ asset_type: string; symbol: string; currency: string }>(
+    "SELECT DISTINCT asset_type, symbol, currency FROM trades",
+  );
+  const now = nowLocal();
+  const today = todayLocal();
 
   /* Görüntü para birimi çevrimi için USD/TRY kuru her koşulda saklanır — portföyde hiç varlık
      olmasa bile net varlık (nakit) USD'ye çevrilebilsin diye holding kontrolünden ÖNCE. */
   const usdTry = await yahoo("USDTRY=X");
   if (usdTry != null) {
-    db.prepare("INSERT INTO settings (key,value) VALUES ('fx_usd_try',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(usdTry));
+    await db.run("INSERT INTO settings (key,value) VALUES ('fx_usd_try',?) ON CONFLICT (key) DO UPDATE SET value=excluded.value", String(usdTry));
   }
   if (!held.length) return [];
 
-  const upsert = db.prepare(
-    `INSERT INTO prices (symbol, asset_type, price, source, updated_at, currency) VALUES (?,?,?,?,datetime('now','localtime'),?)
-     ON CONFLICT(symbol, asset_type) DO UPDATE SET price=excluded.price, source=excluded.source, updated_at=excluded.updated_at, currency=excluded.currency`,
-  );
-  /* günde bir satır: aynı gün içindeki tekrar tazelemeler o günün fiyatını günceller, geçmişi çoğaltmaz */
-  const upsertHistory = db.prepare(
-    `INSERT INTO price_history (symbol, asset_type, date, price, currency) VALUES (?,?,date('now','localtime'),?,?)
-     ON CONFLICT(symbol, asset_type, date) DO UPDATE SET price=excluded.price, currency=excluded.currency`,
-  );
-
   /* TEFAS NAV'ı günde bir hesaplandığından fetchTefasSnapshot() da günde bir kez çağrılır
      (RapidAPI ücretsiz kotasını korumak için) — tefas_last_fetch bugüne eşitse atlanır. */
-  const today = (db.prepare("SELECT date('now','localtime') as d").get() as { d: string }).d;
-  const lastFetch = (db.prepare("SELECT value FROM settings WHERE key='tefas_last_fetch'").get() as { value: string } | undefined)?.value;
+  const lastFetch = (await db.get<{ value: string }>("SELECT value FROM settings WHERE key='tefas_last_fetch'"))?.value;
   const heldFon = held.filter((h) => h.asset_type === "FON");
   const neededCodes = new Set(heldFon.map((h) => h.symbol));
   const alreadySucceededToday = lastFetch === today;
@@ -156,20 +155,16 @@ export async function refreshAll(): Promise<RefreshResult[]> {
      göstermek yanıltıcı olur; diğer varlık türleriyle tutarlı şekilde ok:false dönülür */
   const tefasAttemptFailed = heldFon.length > 0 && !alreadySucceededToday && (!tefasMap || tefasMap.size === 0);
   if (tefasMap && tefasMap.size > 0) {
-    db.prepare("INSERT INTO settings (key,value) VALUES ('tefas_last_fetch',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(today);
     /* aranan fonları bulana kadar taranan sayfalarda görülen TÜM fonlar (bedavaya gelen
        yan veri) saklanır, sadece tuttuklarımız değil — aynı gün yeni bir fon eklenirse
-       fiyatı zaten hazır olabilir. */
-    db.exec("BEGIN");
-    try {
-      tefasMap.forEach((price, code) => {
-        upsert.run(code, "FON", price, "auto", "TRY"); // TEFAS NAV her zaman TRY
-        upsertHistory.run(code, "FON", price, "TRY");
-      });
-      db.exec("COMMIT");
-    } catch {
-      db.exec("ROLLBACK");
-    }
+       fiyatı zaten hazır olabilir. tefas_last_fetch de aynı işlemde atomik yazılır. */
+    await db.tx(async (t) => {
+      await t.run("INSERT INTO settings (key,value) VALUES ('tefas_last_fetch',?) ON CONFLICT (key) DO UPDATE SET value=excluded.value", today);
+      for (const [code, price] of tefasMap) {
+        await t.run(UPSERT_PRICE, code, "FON", price, "auto", now, "TRY"); // TEFAS NAV her zaman TRY
+        await t.run(UPSERT_HISTORY, code, "FON", today, price, "TRY");
+      }
+    });
   }
 
   const out: RefreshResult[] = [];
@@ -181,13 +176,16 @@ export async function refreshAll(): Promise<RefreshResult[]> {
         continue;
       }
       /* bugün başarıyla çekildi (bu çağrıda ya da daha önce) — prices tablosundan oku */
-      const existing = db.prepare("SELECT price FROM prices WHERE symbol=? AND asset_type='FON'").get(h.symbol) as { price: number } | undefined;
+      const existing = await db.get<{ price: number }>("SELECT price FROM prices WHERE symbol=? AND asset_type='FON'", h.symbol);
       out.push({ symbol: h.symbol, asset_type: h.asset_type, ok: existing != null, price: existing?.price });
       continue;
     } else {
       p = await fetchPrice(h.asset_type, h.symbol, usdTry, h.currency);
     }
-    if (p != null) { upsert.run(h.symbol, h.asset_type, p, "auto", h.currency); upsertHistory.run(h.symbol, h.asset_type, p, h.currency); }
+    if (p != null) {
+      await db.run(UPSERT_PRICE, h.symbol, h.asset_type, p, "auto", now, h.currency);
+      await db.run(UPSERT_HISTORY, h.symbol, h.asset_type, today, p, h.currency);
+    }
     out.push({ symbol: h.symbol, asset_type: h.asset_type, ok: p != null, price: p ?? undefined });
   }
   return out;

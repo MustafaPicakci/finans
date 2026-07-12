@@ -2,11 +2,13 @@
 
 Tek ekrandan: nakit hesapları, düzenli gelir/giderler (tarih aralıklı), kredi taksitleri, kredi kartları (ekstre/taksit takibi), günlük nakit akışı takvimi ve canlı fiyatlı çok varlıklı portföy (BIST, TEFAS fonları, altın/kıymetli maden, döviz, kripto, yurt dışı borsa ETF'leri).
 
-**Mimari:** pnpm monorepo — `apps/server` (Hono API), `apps/web` (React/Vite), `packages/engine` (paylaşılan finans matematiği) + SQLite (Node yerleşik `node:sqlite`, native bağımlılık yok). Tek süreç, tek konteyner. Tüm veri `data/finans.db` dosyasında — yedeklemek için bu dosyayı kopyalamak yeterli. Hedef roadmap için [docs/PLAN.md](docs/PLAN.md).
+**Mimari:** pnpm monorepo — `apps/server` (Hono API), `apps/web` (React/Vite), `packages/engine` (paylaşılan finans matematiği) + **PostgreSQL** (Faz 5.0'da `node:sqlite`'tan geçildi; SaaS'a evrim için — bkz. [docs/PLAN.md](docs/PLAN.md)). Bağlantı `DATABASE_URL` ile verilir (`apps/server/.env.example`). Hedef roadmap için [docs/PLAN.md](docs/PLAN.md).
 
 ## Lokal çalıştırma
 
-Gereksinim: Node.js 22+ (`node --version`), pnpm (`corepack enable` ile gelir).
+Gereksinim: Node.js 22+ (`node --version`), pnpm (`corepack enable` ile gelir), erişilebilir bir PostgreSQL (yerelde en kolayı Docker: `docker run -d --name pg -e POSTGRES_PASSWORD=1 -e POSTGRES_DB=finans -p 5432:5432 postgres:16`).
+
+`apps/server/.env` içine `DATABASE_URL` yaz (`.env.example`'ı kopyala). Eski SQLite verin varsa bir kez taşı: `pnpm --filter @finans/server migrate`.
 
 ```bash
 pnpm install
@@ -26,7 +28,7 @@ pnpm start      # http://localhost:8787
 docker compose up -d --build
 ```
 
-Veri `./data` klasöründe kalır; imajı silsen de veri durur. Traefik ile dışarı açacaksan `docker-compose.yml` içindeki label örneğini kullan — **uygulamanın kendi kimlik doğrulaması yok**, ya sadece Tailscale ağından eriş ya da Traefik basic-auth koy.
+Compose iki servis çalıştırır: `db` (PostgreSQL, veri `./data/pg` volume'ünde — imajı silsen de veri durur) + `finans` (uygulama, `db`'ye bağlanır). Traefik ile dışarı açacaksan `docker-compose.yml` içindeki label örneğini kullan — **uygulamanın kendi kimlik doğrulaması henüz yok** (Faz 5.1'de gelecek), ya sadece Tailscale ağından eriş ya da Traefik basic-auth koy.
 
 ## Canlı fiyat kaynakları ve dürüst kısıtlar
 
@@ -60,10 +62,11 @@ Kaynaklardan biri format değiştirirse sadece `apps/server/prices.ts` içindeki
 ## Yedekleme
 
 ```bash
-cp data/finans.db yedek/finans-$(date +%F).db   # hepsi bu
+pg_dump "$DATABASE_URL" > yedek/finans-$(date +%F).sql        # tek dosya döküm
+# Docker compose ile: docker exec finans-db pg_dump -U postgres finans > yedek/finans-$(date +%F).sql
 ```
 
-Sunucuda cron ile günlük kopya + istersen başka makineye rsync önerilir.
+Geri yükleme: `psql "$DATABASE_URL" < yedek/finans-YYYY-AA-GG.sql`. Sunucuda cron ile günlük `pg_dump` + istersen başka makineye rsync önerilir.
 
 ## Yol haritası (henüz yok, bilinçli olarak)
 

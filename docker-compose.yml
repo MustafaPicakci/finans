@@ -1,13 +1,36 @@
 services:
+  db:
+    image: postgres:16
+    container_name: finans-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-1}
+      POSTGRES_DB: finans
+    volumes:
+      - ./data/pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d finans"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   finans:
     build: .
     container_name: finans
     restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Uygulama compose ağında Postgres'e servis adıyla bağlanır (db:5432)
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-1}@db:5432/finans
+      # TEFAS fon fiyatları için (opsiyonel) — kendi .env'inden geçir:
+      RAPIDAPI_KEY: ${RAPIDAPI_KEY:-}
+      RAPIDAPI_KEY_2: ${RAPIDAPI_KEY_2:-}
     ports:
       - "8787:8787"
-    volumes:
-      - ./data:/data
-    # Traefik arkasında yayınlamak istersen (basic auth ŞART, uygulamanın kendi girişi yok):
+    # Traefik arkasında yayınlamak istersen (basic auth ŞART, uygulamanın kendi girişi Faz 5.1'e kadar yok):
     # labels:
     #   - traefik.enable=true
     #   - traefik.http.routers.finans.rule=Host(`finans.example.com`)

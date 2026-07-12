@@ -8,7 +8,7 @@ COPY packages/engine/package.json packages/engine/package.json
 RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm -r build
-ENV NODE_ENV=production DATA_DIR=/data PORT=8787
-VOLUME /data
+# Veri artık PostgreSQL'de (DATABASE_URL ile dışarıdan verilir — bkz. docker-compose.yml).
+ENV NODE_ENV=production PORT=8787
 EXPOSE 8787
 CMD ["pnpm", "--filter", "@finans/server", "start"]
