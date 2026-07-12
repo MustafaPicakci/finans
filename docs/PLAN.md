@@ -12,6 +12,7 @@
 - ✅ **Faz 4.6 tamamlandı** — bilgi mimarisi yeniden dizimi + global "+ Ekle" akışı: Bütçe/Borçlar sekmeleri kaldırılıp **Plan** (projeksiyonu besleyenler) ve **Harcamalar** (gerçekleşen defter) sekmeleri kuruldu; tüm işlem girişleri tek "+ Ekle" modal akışına toplandı. Bkz. aşağıdaki Faz 4.6 bölümü.
 - ✅ **Faz 4.7 tamamlandı** — gerçekleşen işlem artık hesap bakiyesini etkiliyor: Harcamalar sekmesi de kaldırıldı (Rapor'a birleşti), tek gelir/gider formu tarihe göre defter/plan'a yönleniyor, hesaba bağlı işlem bakiyeyi atomik oynatıyor, Plan kalemleri "Gerçekleşti" ile deftere geçiyor. Faz 1'in "bakiye defterden bağımsız" kararının yerini aldı. Bkz. aşağıdaki Faz 4.7 bölümü.
 - ✅ **Faz 4.8 tamamlandı** — çok para birimi (TRY + USD): portföy işlemleri döviz cinsinden girilebilir (kripto/ABD hisse/ETF USD), pozisyonlar native hesaplanır, üstte ₺/$ görüntü seçici net varlık özetini/KPI'ları çevirir. Bkz. aşağıdaki Faz 4.8 bölümü.
+- ✅ **Faz 4.9 tamamlandı** — para piyasası fonları nakit gibi değerlenir: Nakit Akışı takvimi gün rengini artık **etkin nakit (nakit + para piyasası fonu)** ile belirler, güne tıklayınca nakit/PPF/diğer portföy kırılımı + gün içi hareketler açılır; fonlar Portföy sekmesinde "nakit say" ile opt-in işaretlenir. Bkz. aşağıdaki Faz 4.9 bölümü.
 - ⬜ Faz 5 henüz başlamadı.
 
 ## Context (Neden)
@@ -268,6 +269,18 @@ Onaylanan kapsam (kullanıcı, 3 soruyla): **TRY + USD**; görüntü seçici **n
 **Web**: `theme.ts` `fmtMoney(v, ccy, dec?)`; `AmountField`'a `ccy` prop (canlı önizleme seçili birimde). `App.tsx`: ₺/$ görüntü seçici (başlıkta, localStorage `finans-ccy`, FX yoksa USD pasif), `portfolioValueTry`/`convert` ile net varlık + 4 KPI çevrimi, `project`'e `rates`. `TradeForm`: "Para birimi" seçici (varlık türüne göre varsayılan — KRIPTO/ETF→USD, diğerleri→TRY), fiyat/komisyon etiketleri ₺/$'a göre. `portfoy`: pozisyon satırları native (`$…` + USD rozeti), manuel fiyat native birimde, başlık K/Z toplamları görüntü birimine çevrilir. `ozet`: alokasyon pastası pozisyonları TRY'ye çevirip toplar, değer geçmişi `rates` ile.
 
 Doğrulama: `pnpm build` temiz, 75 engine testi yeşil. `data/finans.db` yedeği alındı. Gerçek veride API: 15 mevcut trade `currency:"TRY"` (migrasyon), `fx_usd_try` doldu (46.98), USD ETF işlemi `currency:"USD"` saklandı, elle USD fiyat native (×yapılmadan) saklandı. Playwright: net varlık ₺183.484 ↔ ₺/$ toggle → $3.906 (KPI'lar da çevrildi, Nakit Haritası TRY kaldı — kapsam doğru); Portföy'de VOO `ETF · USD · ort. $150,00 · $1.080 · açık K/Z +$180` native; TradeForm'da "Para birimi" seçici. Tüm test verisi silinip 15 trade'e dönüldü (0 kalıntı), konsol hatası yok.
+
+## Faz 4.9 — Para Piyasası Fonları Nakit Gibi Değerlenir ✅
+
+Kullanıcı gözlemi: Nakit Akışı takvimi yalnızca nakit bakiyesine bakıp bir günü kırmızıya boyuyordu, oysa para piyasası (likit) fonu nakit kadar erişilebilir — o fonla kapanan bir açık gerçek risk değil. Ayrıca güne tıklayınca sadece nakit/portföy/toplam görünüyor, günün *neden* eksi/artı olduğu (o günün hareketleri) net değildi.
+
+Onaylanan kapsam: para piyasası fonları **nakit gibi** sayılır; takvim gün rengi **etkin nakit = nakit + para piyasası fonu** ile belirlenir; güne tıklayınca kırılım + gün içi hareketler gösterilir. Hangi fonun para piyasası olduğu **opt-in** — uygulama bir FON'un likit mi hisse mi olduğunu bilemez, kullanıcı işaretler.
+
+**Engine** (`projection.ts`): `Day`'e `cashFunds` alanı (o gün elde tutulan para-piyasası fonlarının TRY değeri; `assets`'in bir alt kümesi). Nakit sayılan fon sembolleri `settings.cash_funds`'tan (virgülle ayrık, `FON:SYMBOL` eşlemesi) okunur. `assetsOn` artık hem toplam portföyü hem PPF payını döndürür. **2 yeni test → 77 test yeşil.**
+
+**Web**: `nakit/index.tsx` takvim gün rengi/ana sayısı `bal + cashFunds` (etkin nakit) ile; gün detayında **etkin nakit / gün sonu nakit / para piyasası fonu / diğer portföy / toplam varlık** kırılımı + "gün içi hareketler" başlığıyla o günün olayları. `portfoy/index.tsx`: FON satırlarında **"nakit say"** opt-in düğmesi (yeşil "✓ nakit sayılır" rozeti), `settings.cash_funds`'a yazar. Pür-nakit semantiği takvim dışında (Özet en düşük gün, Nakit Liste) korundu — sessiz anlam kayması yok.
+
+Doğrulama: `pnpm build` temiz, 77 engine testi yeşil. İzole sunucu (`:8799`, ayrı DATA_DIR — gerçek DB'ye dokunulmadı) + Playwright: senaryo nakit ₺2.000, Kira −₺9.000 (20 Tem → nakit −₺7.000), AFA para-piyasası ₺11.000, TTE hisse fonu ₺5.500. İşaretlemeden önce 20–31 Tem kırmızı (−7k); AFA "nakit say" işaretlenince aynı günler yeşile döndü (4k = −7.000 + 11.000); 20 Tem detayı: etkin nakit ₺4.000 · gün sonu nakit −₺7.000 · para piyasası fonu ₺11.000 · diğer portföy ₺5.500 · toplam ₺9.500 · gün içi: Kira −₺9.000. Konsol hatası yok.
 
 ## Faz 5 — Auth + Yayınlama (en son)
 
