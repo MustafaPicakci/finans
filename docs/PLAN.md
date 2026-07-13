@@ -13,7 +13,7 @@
 - ✅ **Faz 4.7 tamamlandı** — gerçekleşen işlem artık hesap bakiyesini etkiliyor: Harcamalar sekmesi de kaldırıldı (Rapor'a birleşti), tek gelir/gider formu tarihe göre defter/plan'a yönleniyor, hesaba bağlı işlem bakiyeyi atomik oynatıyor, Plan kalemleri "Gerçekleşti" ile deftere geçiyor. Faz 1'in "bakiye defterden bağımsız" kararının yerini aldı. Bkz. aşağıdaki Faz 4.7 bölümü.
 - ✅ **Faz 4.8 tamamlandı** — çok para birimi (TRY + USD): portföy işlemleri döviz cinsinden girilebilir (kripto/ABD hisse/ETF USD), pozisyonlar native hesaplanır, üstte ₺/$ görüntü seçici net varlık özetini/KPI'ları çevirir. Bkz. aşağıdaki Faz 4.8 bölümü.
 - ✅ **Faz 4.9 tamamlandı** — para piyasası fonları nakit gibi değerlenir: Nakit Akışı takvimi gün rengini artık **etkin nakit (nakit + para piyasası fonu)** ile belirler, güne tıklayınca nakit/PPF/diğer portföy kırılımı + gün içi hareketler açılır; fonlar Portföy sekmesinde "nakit say" ile opt-in işaretlenir. Bkz. aşağıdaki Faz 4.9 bölümü.
-- 🔄 **Faz 5 başladı (SaaS dönüşümü, Temmuz 2026)** — kendi auth'umuz + düz Postgres (taşınabilirlik öncelikli, Supabase Auth bilinçli elendi), `user_id` ile çok-kiracılık, global fiyat tazeleme, KVKK, yayınlama. Billing yok. **Faz 5.0 ✅** (SQLite→Postgres) + **Faz 5.1 ✅** (auth temeli: kendi scrypt+session auth'u, owner-bootstrap kayıt, giriş ekranı); sıradaki 5.2 (çok-kiracılık, `user_id` scoping). Bkz. aşağıdaki Faz 5 bölümü.
+- 🔄 **Faz 5 başladı (SaaS dönüşümü, Temmuz 2026)** — kendi auth'umuz + düz Postgres (taşınabilirlik öncelikli, Supabase Auth bilinçli elendi), `user_id` ile çok-kiracılık, global fiyat tazeleme, KVKK, yayınlama. Billing yok. **Faz 5.0 ✅** (SQLite→Postgres) + **Faz 5.1 ✅** (auth temeli) + **Faz 5.2 ✅** (çok-kiracılık: 9 tabloya `user_id` scoping, settings global/user ayrımı, owner-bootstrap veri devri, çapraz erişim izolasyonu doğrulandı); sıradaki 5.3 (global fiyat tazeleme — büyük ölçüde 5.2'de hazır geldi) / 5.4 (sertleştirme+KVKK). Bkz. aşağıdaki Faz 5 bölümü.
 
 ## Context (Neden)
 
@@ -316,12 +316,17 @@ Yapılanlar:
 
 Doğrulama: `pnpm build` temiz. Postgres API (izole port) + cookie jar: oturumsuz `/all`→401, register(owner)→200+cookie, oturumla `/all`→200 (gerçek veri), ikinci register→403, yanlış parola→401, case-insensitive login→200, logout→sonra `/all`→401. Playwright: giriş ekranı render → login → dashboard (net varlık ₺143.113) → ⏻ logout → tekrar giriş ekranı, sıfır konsol hatası. Test kullanıcısı silindi (owner slotu boş).
 
-### Faz 5.2 — Çok-kiracılık (en kritik alt faz)
-- Kiracıya özel tablolara `user_id` kolonu: `accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions`.
-- `crud(route, table, cols)` fabrikası her INSERT'e `userId` enjekte eder, her SELECT/DELETE'e `WHERE user_id=?` ekler — tek noktadan scoping, elle yazılmış rotalar (`transactions`, prices, settings) ayrıca elden geçirilir.
-- `GET /api/all` kullanıcıya scope'lanır; `settings` global/kullanıcı ayrımıyla birleştirilip döner (frontend sözleşmesi değişmez).
-- İsteğe bağlı ikinci katman: Postgres RLS politikaları (kaçan bir filtrenin sızıntıya dönüşmemesi için savunma).
-- Test: iki kullanıcılı senaryoda çapraz erişim denemeleri (A'nın verisi B'ye hiçbir uçtan sızmamalı) — otomatik test + elle doğrulama.
+### Faz 5.2 — Çok-kiracılık (en kritik alt faz) ✅
+Yapılanlar:
+- Kiracıya özel 9 tabloya `user_id integer REFERENCES users(id) ON DELETE CASCADE` (mevcut DB'lere `ALTER ADD COLUMN IF NOT EXISTS`, fresh'te de) — [db.ts](../apps/server/db.ts) `TENANT_TABLES`. `prices/price_history` **global** (piyasa verisi). `categories` benzersizliği `name` → `(user_id, name)` (kullanıcı başına).
+- `settings` ikiye bölündü: **global** (`fx_usd_try`, `tefas_last_fetch` — `GLOBAL_SETTING_KEYS`) vs **kullanıcı** (`horizon`, `cash_funds`) yeni `user_settings (user_id, key, value)` tablosunda. `GET /api/all` ikisini birleştirip tek düz `settings` objesi döner (frontend sözleşmesi değişmedi); `PUT /settings` anahtara göre doğru tabloya yazar.
+- `crud()` fabrikası tek noktadan scope'lar: POST `user_id` enjekte, PUT/DELETE `WHERE id=? AND user_id=?`. Elle yazılan `transactions` POST/DELETE de scope'lu (bakiye yan etkisi dahil `WHERE id=? AND user_id=?`). `GET /api/all` her tenant sorgusuna `WHERE user_id=?`.
+- **Owner bootstrap devri**: ilk kullanıcı kaydında (register) `user_id IS NULL` olan tüm sahipsiz satırlar o owner'a devredilir + per-user ayarlar global settings'ten user_settings'e taşınır (Faz 5.0/5.1'den kalan tek-kullanıcı verisi böyle sahiplenilir). Yeni kurulumda 0 satır — zararsız.
+- `refreshAll()` zaten `SELECT DISTINCT ... FROM trades` (tüm kullanıcılar) → global fiyat tazeleme; değişiklik gerekmedi (Faz 5.3 davranışı hazır geldi).
+
+Doğrulama (ayrı `finans_test` DB'de, gerçek veriye dokunmadan — `ON DELETE CASCADE` nedeniyle owner silme riski): sahipsiz veri (1 hesap+1 trade+global horizon/cash_funds) tohumlandı → owner register → **adoption**: satırlar user_id=1'e geçti, horizon/cash_funds user_settings'e taşındı, global settings sadece fx/tefas kaldı. İkinci kullanıcı (B, DB'ye elle) ile **çapraz erişim**: B'nin `/all`'ı 0 kayıt + sadece global settings (A'nın verisi/ayarı sızmadı); B → A'nın hesabını sil/düzenle → 0 satır (A dokunulmadı); B, A'nın account_id'siyle işlem → A'nın bakiyesi (5000) oynamadı, işlem A'ya sızmadı. Playwright: owner girişi → dashboard ₺8.335, projeksiyon horizon=6 (user_settings'ten), 0 konsol hatası. `pnpm build` temiz.
+
+**Not (bilinçli):** manuel fiyat girişi (`prices` global) tüm kullanıcıları etkiler — tek owner varken sorun değil; gerçek çok-kullanıcıda per-user fiyat override gerekirse ileride ele alınır. RLS ikinci savunma katmanı şimdilik eklenmedi (uygulama katmanı scoping + tek owner yeterli); açık kayıt Faz 5.2 sonrası hâlâ kapalı (owner-only) — çok-kullanıcı kaydı ileride onboarding ile açılacak.
 
 ### Faz 5.3 — Global fiyat tazeleme
 - `refreshAll()` tek kullanıcının `trades`'i yerine **tüm kullanıcıların tuttuğu sembollerin birleşimini** tazeler; `prices`/`price_history` global kalır.

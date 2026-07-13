@@ -4,7 +4,7 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import cron from "node-cron";
-import { db, initDb, nowLocal, todayLocal } from "./db.js";
+import { db, initDb, nowLocal, todayLocal, TENANT_TABLES, GLOBAL_SETTING_KEYS } from "./db.js";
 import { refreshAll } from "./prices.js";
 import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, SESSION_COOKIE, type SessionUser } from "./auth.js";
 
@@ -29,6 +29,18 @@ api.post("/auth/register", async (c) => {
     "INSERT INTO users (email, password_hash, created_at) VALUES (?,?,?) RETURNING id",
     email2, await hashPassword(password), new Date().toISOString(),
   );
+  /* owner bootstrap: Faz 5.2 öncesinden kalan sahipsiz (user_id NULL) veriyi bu ilk kullanıcıya devret;
+     per-user ayarları (horizon/cash_funds) global settings'ten user_settings'e taşı. Yeni kurulumda 0 satır (zararsız). */
+  const gk = [...GLOBAL_SETTING_KEYS];
+  const ph = gk.map(() => "?").join(",");
+  await db.tx(async (t) => {
+    for (const tbl of TENANT_TABLES) await t.run(`UPDATE ${tbl} SET user_id=? WHERE user_id IS NULL`, info.id);
+    await t.run(
+      `INSERT INTO user_settings (user_id, key, value) SELECT ?, key, value FROM settings WHERE key NOT IN (${ph}) ON CONFLICT (user_id, key) DO NOTHING`,
+      info.id, ...gk,
+    );
+    await t.run(`DELETE FROM settings WHERE key NOT IN (${ph})`, ...gk);
+  });
   const { token, expires } = await createSession(info.id!);
   setSessionCookie(c, token, expires);
   return c.json({ user: { id: info.id, email: email2 } });
@@ -65,26 +77,29 @@ api.use("*", async (c, next) => {
   await next();
 });
 
-/* ---- tek seferde tüm veri ---- */
+/* ---- tek seferde tüm veri (kullanıcıya scope'lu; prices/price_history GLOBAL) ---- */
 api.get("/all", async (c) => {
-  const [accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions, prices, price_history, settingsRows] =
+  const uid = c.get("user").id;
+  const [accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions, prices, price_history, globalSettings, userSettings] =
     await Promise.all([
-      db.all("SELECT * FROM accounts ORDER BY id"),
-      db.all("SELECT * FROM recurring ORDER BY day, id"),
-      db.all("SELECT * FROM loans ORDER BY id"),
-      db.all("SELECT * FROM oneoffs ORDER BY date"),
-      db.all("SELECT * FROM trades ORDER BY date, id"),
-      db.all("SELECT * FROM cards ORDER BY id"),
-      db.all("SELECT * FROM card_txs ORDER BY date, id"),
-      db.all("SELECT * FROM categories ORDER BY name"),
-      db.all("SELECT * FROM transactions ORDER BY date DESC, id DESC"),
+      db.all("SELECT * FROM accounts WHERE user_id=? ORDER BY id", uid),
+      db.all("SELECT * FROM recurring WHERE user_id=? ORDER BY day, id", uid),
+      db.all("SELECT * FROM loans WHERE user_id=? ORDER BY id", uid),
+      db.all("SELECT * FROM oneoffs WHERE user_id=? ORDER BY date", uid),
+      db.all("SELECT * FROM trades WHERE user_id=? ORDER BY date, id", uid),
+      db.all("SELECT * FROM cards WHERE user_id=? ORDER BY id", uid),
+      db.all("SELECT * FROM card_txs WHERE user_id=? ORDER BY date, id", uid),
+      db.all("SELECT * FROM categories WHERE user_id=? ORDER BY name", uid),
+      db.all("SELECT * FROM transactions WHERE user_id=? ORDER BY date DESC, id DESC", uid),
       db.all("SELECT * FROM prices"),
       db.all("SELECT * FROM price_history ORDER BY date"),
       db.all<{ key: string; value: string }>("SELECT key, value FROM settings"),
+      db.all<{ key: string; value: string }>("SELECT key, value FROM user_settings WHERE user_id=?", uid),
     ]);
   return c.json({
     accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions, prices, price_history,
-    settings: Object.fromEntries(settingsRows.map((s) => [s.key, s.value])),
+    // global (fx/tefas) + kullanıcı ayarları (horizon/cash_funds); kullanıcı çakışmada kazanır
+    settings: Object.fromEntries([...globalSettings, ...userSettings].map((s) => [s.key, s.value])),
   });
 });
 
@@ -96,10 +111,12 @@ function crud(route: string, table: string, cols: Col[]) {
     for (const col of cols) if (col.required && (b[col.name] === undefined || b[col.name] === "")) {
       return c.json({ error: `${col.name} zorunlu` }, 400);
     }
-    const names = cols.map((x) => x.name);
+    const uid = c.get("user").id;
+    const names = [...cols.map((x) => x.name), "user_id"]; // Faz 5.2: her kayıt sahibine bağlı
+    const values = [...cols.map((col) => b[col.name] ?? col.default ?? null), uid];
     const info = await db.run(
       `INSERT INTO ${table} (${names.join(",")}) VALUES (${names.map(() => "?").join(",")}) RETURNING id`,
-      ...cols.map((col) => b[col.name] ?? col.default ?? null),
+      ...values,
     );
     return c.json({ id: info.id });
   });
@@ -108,13 +125,13 @@ function crud(route: string, table: string, cols: Col[]) {
     const names = cols.map((x) => x.name).filter((n) => b[n] !== undefined);
     if (!names.length) return c.json({ error: "boş" }, 400);
     await db.run(
-      `UPDATE ${table} SET ${names.map((n) => `${n}=?`).join(",")} WHERE id=?`,
-      ...names.map((n) => b[n]), c.req.param("id"),
+      `UPDATE ${table} SET ${names.map((n) => `${n}=?`).join(",")} WHERE id=? AND user_id=?`,
+      ...names.map((n) => b[n]), c.req.param("id"), c.get("user").id,
     );
     return c.json({ ok: true });
   });
   api.delete(`/${route}/:id`, async (c) => {
-    await db.run(`DELETE FROM ${table} WHERE id=?`, c.req.param("id"));
+    await db.run(`DELETE FROM ${table} WHERE id=? AND user_id=?`, c.req.param("id"), c.get("user").id);
     return c.json({ ok: true });
   });
 }
@@ -158,26 +175,28 @@ api.post("/transactions", async (c) => {
   for (const f of ["date", "name", "amount"]) if (b[f] === undefined || b[f] === "") {
     return c.json({ error: `${f} zorunlu` }, 400);
   }
+  const uid = c.get("user").id;
   const id = await db.tx(async (t) => {
     const info = await t.run(
-      "INSERT INTO transactions (date,name,amount,category_id,account_id) VALUES (?,?,?,?,?) RETURNING id",
-      b.date, b.name, b.amount, b.category_id ?? null, b.account_id ?? null,
+      "INSERT INTO transactions (date,name,amount,category_id,account_id,user_id) VALUES (?,?,?,?,?,?) RETURNING id",
+      b.date, b.name, b.amount, b.category_id ?? null, b.account_id ?? null, uid,
     );
     if (b.account_id != null) {
-      await t.run("UPDATE accounts SET balance = balance + ? WHERE id=?", b.amount, b.account_id);
+      await t.run("UPDATE accounts SET balance = balance + ? WHERE id=? AND user_id=?", b.amount, b.account_id, uid);
     }
     return info.id;
   });
   return c.json({ id });
 });
 api.delete("/transactions/:id", async (c) => {
+  const uid = c.get("user").id;
   await db.tx(async (t) => {
     const row = await t.get<{ amount: number; account_id: number | null }>(
-      "SELECT amount, account_id FROM transactions WHERE id=?", c.req.param("id"),
+      "SELECT amount, account_id FROM transactions WHERE id=? AND user_id=?", c.req.param("id"), uid,
     );
-    await t.run("DELETE FROM transactions WHERE id=?", c.req.param("id"));
+    await t.run("DELETE FROM transactions WHERE id=? AND user_id=?", c.req.param("id"), uid);
     if (row?.account_id != null) {
-      await t.run("UPDATE accounts SET balance = balance - ? WHERE id=?", row.amount, row.account_id);
+      await t.run("UPDATE accounts SET balance = balance - ? WHERE id=? AND user_id=?", row.amount, row.account_id, uid);
     }
   });
   return c.json({ ok: true });
@@ -211,11 +230,19 @@ api.delete("/prices/:asset_type/:symbol", async (c) => {
   return c.json({ ok: true });
 });
 
-/* ---- ayarlar ---- */
+/* ---- ayarlar: global anahtarlar (fx/tefas) settings'te, gerisi kullanıcıya özel user_settings'te ---- */
 api.put("/settings", async (c) => {
+  const uid = c.get("user").id;
   const b = (await c.req.json()) as Record<string, string>;
   for (const [k, v] of Object.entries(b)) {
-    await db.run("INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT (key) DO UPDATE SET value=excluded.value", k, String(v));
+    if (GLOBAL_SETTING_KEYS.has(k)) {
+      await db.run("INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT (key) DO UPDATE SET value=excluded.value", k, String(v));
+    } else {
+      await db.run(
+        "INSERT INTO user_settings (user_id,key,value) VALUES (?,?,?) ON CONFLICT (user_id,key) DO UPDATE SET value=excluded.value",
+        uid, k, String(v),
+      );
+    }
   }
   return c.json({ ok: true });
 });
