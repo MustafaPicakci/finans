@@ -339,13 +339,24 @@ Doğrulama (finans_test): global auto THYAO=100 + orphan manual GARAN=50 → own
 
 ### Faz 5.4 — Sertleştirme + KVKK ✅
 Yapılanlar ([index.ts](../apps/server/index.ts)):
-- **Güvenlik başlıkları** tüm yanıtlara (`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`). CSP eklenmedi (SPA inline-style ağırlıklı; kırmamak için).
+- **Güvenlik başlıkları** tüm yanıtlara (`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy`, **CSP** ve prod'da **HSTS** — deploy-öncesi turda eklendi, aşağı bkz).
 - **Rate-limit** (in-memory, IP başına) `/auth/login` + `/auth/register` için (10/5dk → 429) — brute-force koruması. CSRF: cookie `SameSite=Lax` (Faz 5.1) modern standart korumayı sağlıyor, ek token eklenmedi.
 - **KVKK**: `GET /api/export` — kullanıcının tüm verisi JSON indirme (`Content-Disposition`); `POST /api/account/delete` — parola onaylı hesap+veri silme (`ON DELETE CASCADE` ile tenant verisi + oturumlar + user_settings). Frontend: Özet altında **"Hesap & Veri"** kartı (e-posta, "Verilerini indir", parola onaylı "Hesabı sil").
 
 Doğrulama (finans_test): başlıklar mevcut; login 10×401 → 11. **429**; export doğru içerik + Content-Disposition; hesap silme yanlış parola→401, doğru→200 + oturum düştü (`/all`→401) + DB cascade wipe (users/accounts/sessions=0). Playwright: "Hesap & Veri" kartı + silme onay kutusu render, 0 konsol hatası. `pnpm build` temiz.
 
 **Ertelendi (bilinçli):** girdi doğrulama zod şemaları (mevcut required-field kontrolü + owner-only kayıt yeterli, değeri düşük); Sentry/yapısal log (harici, DSN gerekir); parola sıfırlama e-postası (Resend). `pg_dump` yedeği README'de belgeli.
+
+#### Deploy-öncesi güvenlik turu (5.4 üstüne) ✅
+`index.ts`'e eklenenler:
+- **CSP** tüm yanıtlara (`script-src 'self'`, `style-src 'self' 'unsafe-inline' + fonts.googleapis`, `font-src + fonts.gstatic`, `frame-ancestors 'none'`, `object-src 'none'`) — XSS/clickjacking; SPA'da 0 ihlal doğrulandı. Prod'da **HSTS** (`max-age=180g; includeSubDomains`).
+- **Genel API rate-limit** tüm `/api`'ye (IP başına 300/dk → 429); `/prices/refresh` kullanıcı başına 6/dk (harici API/TEFAS kotası koruması).
+- **E-posta başına login brute-force**: 5 başarısız → 15dk 429 (IP-spoof'tan bağımsız hesap koruması); **zamanlama-güvenli login** (kullanıcı yoksa da dummy scrypt → e-posta enumerasyonu engellenir).
+- **İstek gövdesi sınırı** 256KB (413); **global hata yakalayıcı** (`app.onError` → jenerik 500, stack sızmaz); **güvenli JSON parse** tüm yazma uçlarında (bozuk gövde → 400, 500 değil). Rate-limit sayaçları periyodik temizlenir (bellek).
+
+Doğrulama (finans_test, prod+dev mod): tüm başlıklar (CSP+HSTS) API+statik yanıtta; bozuk JSON→400, 300KB gövde→413, e-posta brute-force 5×401→429; Playwright CSP aktifken SPA tam render, **0 CSP ihlali, 0 konsol hatası**. `pnpm build` temiz.
+
+Kalan artık riskler (kabul edildi, deploy-blocker değil): gövde sınırı Content-Length tabanlı (chunked'ı önündeki reverse proxy sınırlar); IP rate-limit güvenilir proxy XFF'ine dayanır (e-posta limiti telafi eder); owner-bootstrap kayıt teorik yarış (tek-owner'da düşük risk).
 
 ### Faz 5.5 — Yayınlama
 - Hosting kararı burada kesinleşir: **Neon + Fly.io/VPS** veya **tek VPS'te app+Postgres** (Hetzner ~€4/ay). Önde Caddy (otomatik HTTPS — PWA service worker şartı) veya Cloudflare.

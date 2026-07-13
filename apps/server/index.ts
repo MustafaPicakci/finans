@@ -11,15 +11,41 @@ import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSess
 const app = new Hono();
 const api = new Hono<{ Variables: { user: SessionUser } }>();
 
-/* ---- güvenlik başlıkları (Faz 5.4) — tüm yanıtlara ---- */
+const isProd = process.env.NODE_ENV === "production";
+
+/* ---- güvenlik başlıkları — tüm yanıtlara (Faz 5.5 sertleştirme) ----
+   CSP: script yalnız kendi origin'imizden (inline script yok); stiller inline (React style'ları +
+   tema <style>); görsel data: (ikonlar); connect kendi origin (API same-origin). */
+const CSP = [
+  "default-src 'self'", "script-src 'self'",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com", // tema fontları (Space Grotesk / IBM Plex Mono)
+  "font-src 'self' https://fonts.gstatic.com",
+  "img-src 'self' data:", "connect-src 'self'", "manifest-src 'self'", "worker-src 'self'",
+  "object-src 'none'", "base-uri 'self'", "frame-ancestors 'none'",
+].join("; ");
 app.use("*", async (c, next) => {
   await next();
-  c.res.headers.set("X-Content-Type-Options", "nosniff");
-  c.res.headers.set("X-Frame-Options", "DENY");
-  c.res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  const h = c.res.headers;
+  h.set("X-Content-Type-Options", "nosniff");
+  h.set("X-Frame-Options", "DENY");
+  h.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  h.set("Content-Security-Policy", CSP);
+  if (isProd) h.set("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
 });
 
-/* ---- basit in-memory rate-limit (Faz 5.4) — auth uçları için brute-force koruması ---- */
+/* ---- istek gövdesi boyutu sınırı (basit DoS koruması; JSON API için 256KB fazlasıyla yeter) ---- */
+app.use("/api/*", async (c, next) => {
+  if (Number(c.req.header("content-length") || 0) > 256 * 1024) return c.json({ error: "İstek çok büyük" }, 413);
+  await next();
+});
+
+/* ---- global hata yakalayıcı: stack sızdırma yok, temiz 500 ---- */
+app.onError((err, c) => {
+  console.error("[api] hata:", err);
+  return c.json({ error: "Sunucu hatası" }, 500);
+});
+
+/* ================= in-memory rate-limit ================= */
 const rlHits = new Map<string, { n: number; reset: number }>();
 function rateLimited(key: string, max: number, windowMs: number): boolean {
   const now = Date.now();
@@ -28,12 +54,33 @@ function rateLimited(key: string, max: number, windowMs: number): boolean {
   if (e.n >= max) return true;
   e.n++; return false;
 }
+/* başarısız giriş sayacı — e-posta başına (IP spoof'tan bağımsız hesap brute-force koruması) */
+const loginFails = new Map<string, { n: number; reset: number }>();
+const tooManyLoginFails = (email: string) => { const e = loginFails.get(email); return !!e && e.reset > Date.now() && e.n >= 5; };
+function recordLoginFail(email: string): void {
+  const now = Date.now();
+  const e = loginFails.get(email);
+  if (!e || e.reset <= now) loginFails.set(email, { n: 1, reset: now + 15 * 60_000 });
+  else e.n++;
+}
+/* süresi dolan sayaçları periyodik temizle (bellek sızmasın) */
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, e] of rlHits) if (e.reset <= now) rlHits.delete(k);
+  for (const [k, e] of loginFails) if (e.reset <= now) loginFails.delete(k);
+}, 5 * 60_000).unref();
 const clientIp = (c: any) => c.req.header("x-forwarded-for")?.split(",")[0].trim() || "local";
+/* zamanlama saldırısı/e-posta enumerasyonu: kullanıcı yoksa da scrypt maliyeti ödensin */
+const DUMMY_HASH = "0".repeat(32) + ":" + "0".repeat(128);
+
+/* genel API rate-limit — tüm /api isteklerine (IP başına) */
+api.use("*", async (c, next) => {
+  if (rateLimited(`api:${clientIp(c)}`, 300, 60_000)) return c.json({ error: "Çok fazla istek, biraz sonra tekrar dene" }, 429);
+  await next();
+});
 
 /* ================= AUTH (Faz 5.1) =================
-   Guard'tan ÖNCE tanımlanır → bu rotalar korunmaz. Çok-kiracılık (user_id scoping) Faz 5.2'de;
-   şimdilik veri paylaşımlı, kayıt yalnız ilk kullanıcıya (owner) açık. */
-const isProd = process.env.NODE_ENV === "production";
+   Guard'tan ÖNCE tanımlanır → bu rotalar (genel rate-limit hariç) korunmaz. Kayıt yalnız ilk owner'a açık. */
 const setSessionCookie = (c: any, token: string, expires: Date) =>
   setCookie(c, SESSION_COOKIE, token, { httpOnly: true, sameSite: "Lax", secure: isProd, path: "/", expires });
 
@@ -78,10 +125,14 @@ api.post("/auth/login", async (c) => {
   if (rateLimited(`login:${clientIp(c)}`, 10, 5 * 60_000)) return c.json({ error: "Çok fazla deneme, biraz sonra tekrar dene" }, 429);
   const { email, password } = await c.req.json().catch(() => ({}));
   if (!email || !password) return c.json({ error: "E-posta ve parola gerekli" }, 400);
+  const email2 = String(email).trim().toLowerCase();
+  if (tooManyLoginFails(email2)) return c.json({ error: "Çok fazla başarısız deneme, biraz sonra tekrar dene" }, 429);
   const user = await db.get<{ id: number; email: string; password_hash: string }>(
-    "SELECT id, email, password_hash FROM users WHERE email = ?", String(email).trim().toLowerCase(),
+    "SELECT id, email, password_hash FROM users WHERE email = ?", email2,
   );
-  if (!user || !(await verifyPassword(password, user.password_hash))) return c.json({ error: "E-posta veya parola hatalı" }, 401);
+  const ok = await verifyPassword(String(password), user?.password_hash ?? DUMMY_HASH); // kullanıcı yoksa da scrypt ödenir
+  if (!user || !ok) { recordLoginFail(email2); return c.json({ error: "E-posta veya parola hatalı" }, 401); }
+  loginFails.delete(email2);
   const { token, expires } = await createSession(user.id);
   setSessionCookie(c, token, expires);
   return c.json({ user: { id: user.id, email: user.email } });
@@ -141,7 +192,8 @@ api.get("/all", async (c) => {
 type Col = { name: string; required?: boolean; default?: unknown };
 function crud(route: string, table: string, cols: Col[]) {
   api.post(`/${route}`, async (c) => {
-    const b = await c.req.json();
+    const b = await c.req.json().catch(() => null);
+    if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
     for (const col of cols) if (col.required && (b[col.name] === undefined || b[col.name] === "")) {
       return c.json({ error: `${col.name} zorunlu` }, 400);
     }
@@ -155,7 +207,8 @@ function crud(route: string, table: string, cols: Col[]) {
     return c.json({ id: info.id });
   });
   api.put(`/${route}/:id`, async (c) => {
-    const b = await c.req.json();
+    const b = await c.req.json().catch(() => null);
+    if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
     const names = cols.map((x) => x.name).filter((n) => b[n] !== undefined);
     if (!names.length) return c.json({ error: "boş" }, 400);
     await db.run(
@@ -205,7 +258,8 @@ crud("categories", "categories", [
    account_id verilmişse INSERT bakiyeye ekler, DELETE geri alır — BEGIN/COMMIT ile atomik.
    PUT yok: kayıt düzenleme modeli sil + yeniden ekle'dir (bakiye tersinirliği böyle basit kalır). */
 api.post("/transactions", async (c) => {
-  const b = await c.req.json();
+  const b = await c.req.json().catch(() => null);
+  if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
   for (const f of ["date", "name", "amount"]) if (b[f] === undefined || b[f] === "") {
     return c.json({ error: `${f} zorunlu` }, 400);
   }
@@ -237,12 +291,15 @@ api.delete("/transactions/:id", async (c) => {
 });
 
 /* ---- fiyatlar ---- */
-api.post("/prices/refresh", async (c) => c.json(await refreshAll()));
+api.post("/prices/refresh", async (c) => {
+  if (rateLimited(`refresh:${c.get("user").id}`, 6, 60_000)) return c.json({ error: "Çok sık yenileme, biraz bekle" }, 429);
+  return c.json(await refreshAll());
+});
 /* elle fiyat KULLANICIYA ÖZEL (user_prices) — global otomatik fiyatı etkilemez, başka kullanıcıya sızmaz.
    Global price_history'e yazılmaz (bir kullanıcının eli global geçmişi kirletmesin). */
 api.put("/prices", async (c) => {
   const uid = c.get("user").id;
-  const { symbol, asset_type, price, currency } = await c.req.json();
+  const { symbol, asset_type, price, currency } = (await c.req.json().catch(() => ({}))) as any;
   if (!symbol || !asset_type || typeof price !== "number") return c.json({ error: "eksik alan" }, 400);
   const ccy = currency === "USD" ? "USD" : "TRY"; // elle girilen fiyat sembolün biriminde
   await db.run(
@@ -266,7 +323,7 @@ api.delete("/prices/:asset_type/:symbol", async (c) => {
 /* ---- ayarlar: global anahtarlar (fx/tefas) settings'te, gerisi kullanıcıya özel user_settings'te ---- */
 api.put("/settings", async (c) => {
   const uid = c.get("user").id;
-  const b = (await c.req.json()) as Record<string, string>;
+  const b = (await c.req.json().catch(() => ({}))) as Record<string, string>;
   for (const [k, v] of Object.entries(b)) {
     if (GLOBAL_SETTING_KEYS.has(k)) {
       await db.run("INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT (key) DO UPDATE SET value=excluded.value", k, String(v));
