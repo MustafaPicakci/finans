@@ -205,6 +205,16 @@ CREATE TABLE IF NOT EXISTS user_settings (
   value text NOT NULL,
   PRIMARY KEY (user_id, key)
 );
+-- elle girilen fiyat override'ları KULLANICIYA ÖZEL (global prices = otomatik/piyasa; kullanıcının eli global'i etkilemez)
+CREATE TABLE IF NOT EXISTS user_prices (
+  user_id integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  symbol text NOT NULL,
+  asset_type text NOT NULL,
+  price double precision NOT NULL,
+  updated_at text NOT NULL,
+  currency text NOT NULL DEFAULT 'TRY',
+  PRIMARY KEY (user_id, symbol, asset_type)
+);
 -- kategori adı artık KULLANICI BAŞINA benzersiz (eski global UNIQUE düşürülür)
 ALTER TABLE categories DROP CONSTRAINT IF EXISTS categories_name_key;
 DO $$ BEGIN

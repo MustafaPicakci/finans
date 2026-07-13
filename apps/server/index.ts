@@ -60,6 +60,14 @@ api.post("/auth/register", async (c) => {
       info.id, ...gk,
     );
     await t.run(`DELETE FROM settings WHERE key NOT IN (${ph})`, ...gk);
+    // elle girilmiş fiyatları (source='manual') owner'ın user_prices'ına taşı; global prices auto-only kalsın
+    await t.run(
+      `INSERT INTO user_prices (user_id, symbol, asset_type, price, updated_at, currency)
+       SELECT ?, symbol, asset_type, price, updated_at, currency FROM prices WHERE source='manual'
+       ON CONFLICT (user_id, symbol, asset_type) DO NOTHING`,
+      info.id,
+    );
+    await t.run(`DELETE FROM prices WHERE source='manual'`);
   });
   const { token, expires } = await createSession(info.id!);
   setSessionCookie(c, token, expires);
@@ -101,7 +109,7 @@ api.use("*", async (c, next) => {
 /* ---- tek seferde tüm veri (kullanıcıya scope'lu; prices/price_history GLOBAL) ---- */
 api.get("/all", async (c) => {
   const uid = c.get("user").id;
-  const [accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions, prices, price_history, globalSettings, userSettings] =
+  const [accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions, autoPrices, userPrices, price_history, globalSettings, userSettings] =
     await Promise.all([
       db.all("SELECT * FROM accounts WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM recurring WHERE user_id=? ORDER BY day, id", uid),
@@ -112,13 +120,18 @@ api.get("/all", async (c) => {
       db.all("SELECT * FROM card_txs WHERE user_id=? ORDER BY date, id", uid),
       db.all("SELECT * FROM categories WHERE user_id=? ORDER BY name", uid),
       db.all("SELECT * FROM transactions WHERE user_id=? ORDER BY date DESC, id DESC", uid),
-      db.all("SELECT * FROM prices"),
+      db.all<any>("SELECT symbol, asset_type, price, source, updated_at, currency FROM prices"),
+      db.all<any>("SELECT symbol, asset_type, price, updated_at, currency FROM user_prices WHERE user_id=?", uid),
       db.all("SELECT * FROM price_history ORDER BY date"),
       db.all<{ key: string; value: string }>("SELECT key, value FROM settings"),
       db.all<{ key: string; value: string }>("SELECT key, value FROM user_settings WHERE user_id=?", uid),
     ]);
+  // fiyatlar: global otomatik (piyasa) + kullanıcının elle override'ı (varsa o kazanır, source='manual')
+  const pm = new Map<string, any>(autoPrices.map((p) => [`${p.asset_type}:${p.symbol}`, { ...p, source: "auto" }]));
+  for (const up of userPrices) pm.set(`${up.asset_type}:${up.symbol}`, { ...up, source: "manual" });
   return c.json({
-    accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions, prices, price_history,
+    accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions,
+    prices: [...pm.values()], price_history,
     // global (fx/tefas) + kullanıcı ayarları (horizon/cash_funds); kullanıcı çakışmada kazanır
     settings: Object.fromEntries([...globalSettings, ...userSettings].map((s) => [s.key, s.value])),
   });
@@ -225,26 +238,25 @@ api.delete("/transactions/:id", async (c) => {
 
 /* ---- fiyatlar ---- */
 api.post("/prices/refresh", async (c) => c.json(await refreshAll()));
+/* elle fiyat KULLANICIYA ÖZEL (user_prices) — global otomatik fiyatı etkilemez, başka kullanıcıya sızmaz.
+   Global price_history'e yazılmaz (bir kullanıcının eli global geçmişi kirletmesin). */
 api.put("/prices", async (c) => {
+  const uid = c.get("user").id;
   const { symbol, asset_type, price, currency } = await c.req.json();
   if (!symbol || !asset_type || typeof price !== "number") return c.json({ error: "eksik alan" }, 400);
   const ccy = currency === "USD" ? "USD" : "TRY"; // elle girilen fiyat sembolün biriminde
   await db.run(
-    `INSERT INTO prices (symbol, asset_type, price, source, updated_at, currency) VALUES (?,?,?,'manual',?,?)
-     ON CONFLICT (symbol, asset_type) DO UPDATE SET price=excluded.price, source='manual', updated_at=excluded.updated_at, currency=excluded.currency`,
-    symbol, asset_type, price, nowLocal(), ccy,
-  );
-  await db.run(
-    `INSERT INTO price_history (symbol, asset_type, date, price, currency) VALUES (?,?,?,?,?)
-     ON CONFLICT (symbol, asset_type, date) DO UPDATE SET price=excluded.price, currency=excluded.currency`,
-    symbol, asset_type, todayLocal(), price, ccy,
+    `INSERT INTO user_prices (user_id, symbol, asset_type, price, updated_at, currency) VALUES (?,?,?,?,?,?)
+     ON CONFLICT (user_id, symbol, asset_type) DO UPDATE SET price=excluded.price, updated_at=excluded.updated_at, currency=excluded.currency`,
+    uid, symbol, asset_type, price, nowLocal(), ccy,
   );
   return c.json({ ok: true });
 });
-/* elle girilen (veya eski) fiyatı sil: sonraki tazelemede otomatik yeniden dolar */
+/* elle override'ı sil: değerleme yine global otomatik fiyata döner */
 api.delete("/prices/:asset_type/:symbol", async (c) => {
   await db.run(
-    "DELETE FROM prices WHERE asset_type=? AND symbol=?",
+    "DELETE FROM user_prices WHERE user_id=? AND asset_type=? AND symbol=?",
+    c.get("user").id,
     c.req.param("asset_type"),
     decodeURIComponent(c.req.param("symbol")),
   );
