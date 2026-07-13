@@ -13,7 +13,7 @@
 - ✅ **Faz 4.7 tamamlandı** — gerçekleşen işlem artık hesap bakiyesini etkiliyor: Harcamalar sekmesi de kaldırıldı (Rapor'a birleşti), tek gelir/gider formu tarihe göre defter/plan'a yönleniyor, hesaba bağlı işlem bakiyeyi atomik oynatıyor, Plan kalemleri "Gerçekleşti" ile deftere geçiyor. Faz 1'in "bakiye defterden bağımsız" kararının yerini aldı. Bkz. aşağıdaki Faz 4.7 bölümü.
 - ✅ **Faz 4.8 tamamlandı** — çok para birimi (TRY + USD): portföy işlemleri döviz cinsinden girilebilir (kripto/ABD hisse/ETF USD), pozisyonlar native hesaplanır, üstte ₺/$ görüntü seçici net varlık özetini/KPI'ları çevirir. Bkz. aşağıdaki Faz 4.8 bölümü.
 - ✅ **Faz 4.9 tamamlandı** — para piyasası fonları nakit gibi değerlenir: Nakit Akışı takvimi gün rengini artık **etkin nakit (nakit + para piyasası fonu)** ile belirler, güne tıklayınca nakit/PPF/diğer portföy kırılımı + gün içi hareketler açılır; fonlar Portföy sekmesinde "nakit say" ile opt-in işaretlenir. Bkz. aşağıdaki Faz 4.9 bölümü.
-- 🔄 **Faz 5 başladı (SaaS dönüşümü, Temmuz 2026)** — kendi auth'umuz + düz Postgres (taşınabilirlik öncelikli, Supabase Auth bilinçli elendi), `user_id` ile çok-kiracılık, global fiyat tazeleme, KVKK, yayınlama. Billing yok. **Faz 5.0 ✅** (SQLite→Postgres) + **Faz 5.1 ✅** (auth temeli) + **Faz 5.2 ✅** (çok-kiracılık: 9 tabloya `user_id` scoping, settings global/user ayrımı, owner-bootstrap veri devri, çapraz erişim izolasyonu doğrulandı); sıradaki 5.3 (global fiyat tazeleme — büyük ölçüde 5.2'de hazır geldi) / 5.4 (sertleştirme+KVKK). Bkz. aşağıdaki Faz 5 bölümü.
+- 🔄 **Faz 5 başladı (SaaS dönüşümü, Temmuz 2026)** — kendi auth'umuz + düz Postgres (taşınabilirlik öncelikli, Supabase Auth bilinçli elendi), `user_id` ile çok-kiracılık, global fiyat tazeleme, KVKK, yayınlama. Billing yok. **Faz 5.0–5.4 ✅** (Postgres geçişi, auth, çok-kiracılık, global fiyat, sertleştirme+KVKK). Sıradaki: **5.5 (yayınlama)** — son adım. Bkz. aşağıdaki Faz 5 bölümü.
 
 ## Context (Neden)
 
@@ -328,14 +328,19 @@ Doğrulama (ayrı `finans_test` DB'de, gerçek veriye dokunmadan — `ON DELETE 
 
 **Not (bilinçli):** manuel fiyat girişi (`prices` global) tüm kullanıcıları etkiler — tek owner varken sorun değil; gerçek çok-kullanıcıda per-user fiyat override gerekirse ileride ele alınır. RLS ikinci savunma katmanı şimdilik eklenmedi (uygulama katmanı scoping + tek owner yeterli); açık kayıt Faz 5.2 sonrası hâlâ kapalı (owner-only) — çok-kullanıcı kaydı ileride onboarding ile açılacak.
 
-### Faz 5.3 — Global fiyat tazeleme
-- `refreshAll()` tek kullanıcının `trades`'i yerine **tüm kullanıcıların tuttuğu sembollerin birleşimini** tazeler; `prices`/`price_history` global kalır.
-- TEFAS zaten tür başına tüm listeyi çekiyor → RapidAPI kotası kullanıcı sayısıyla **artmaz**. `fx_usd_try`/`tefas_last_fetch` global settings'te.
+### Faz 5.3 — Global fiyat tazeleme ✅ (5.2 mimarisiyle hazır geldi)
+- `refreshAll()` zaten `SELECT DISTINCT asset_type, symbol, currency FROM trades` (kullanıcı filtresi yok) → **tüm kullanıcıların tuttuğu sembollerin birleşimini** tazeler; `prices`/`price_history` global, `fx_usd_try`/`tefas_last_fetch` global settings'te (`GLOBAL_SETTING_KEYS`). Ek kod gerekmedi.
+- TEFAS zaten tür başına tüm listeyi günde bir çeker → RapidAPI kotası kullanıcı sayısıyla **artmaz**. Doğrulandı: 5.2 testinde owner'ın THYAO'su global fiyat tablosundan değerlendi.
 
-### Faz 5.4 — Sertleştirme + KVKK
-- Yazma rotalarında girdi doğrulama (zod), rate-limit (özellikle auth uçları), CSRF (cookie session olduğundan), güvenlik header'ları.
-- **KVKK**: hesap silme (tüm kiracı verisi + session'lar) ve JSON veri dışa-aktarımı ucu; aydınlatma/gizlilik metni sayfası.
-- Hata izleme (Sentry ücretsiz katman) + yapısal log; `pg_dump` cron yedeği (VPS senaryosu) veya Neon otomatik yedek notu.
+### Faz 5.4 — Sertleştirme + KVKK ✅
+Yapılanlar ([index.ts](../apps/server/index.ts)):
+- **Güvenlik başlıkları** tüm yanıtlara (`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`). CSP eklenmedi (SPA inline-style ağırlıklı; kırmamak için).
+- **Rate-limit** (in-memory, IP başına) `/auth/login` + `/auth/register` için (10/5dk → 429) — brute-force koruması. CSRF: cookie `SameSite=Lax` (Faz 5.1) modern standart korumayı sağlıyor, ek token eklenmedi.
+- **KVKK**: `GET /api/export` — kullanıcının tüm verisi JSON indirme (`Content-Disposition`); `POST /api/account/delete` — parola onaylı hesap+veri silme (`ON DELETE CASCADE` ile tenant verisi + oturumlar + user_settings). Frontend: Özet altında **"Hesap & Veri"** kartı (e-posta, "Verilerini indir", parola onaylı "Hesabı sil").
+
+Doğrulama (finans_test): başlıklar mevcut; login 10×401 → 11. **429**; export doğru içerik + Content-Disposition; hesap silme yanlış parola→401, doğru→200 + oturum düştü (`/all`→401) + DB cascade wipe (users/accounts/sessions=0). Playwright: "Hesap & Veri" kartı + silme onay kutusu render, 0 konsol hatası. `pnpm build` temiz.
+
+**Ertelendi (bilinçli):** girdi doğrulama zod şemaları (mevcut required-field kontrolü + owner-only kayıt yeterli, değeri düşük); Sentry/yapısal log (harici, DSN gerekir); parola sıfırlama e-postası (Resend). `pg_dump` yedeği README'de belgeli.
 
 ### Faz 5.5 — Yayınlama
 - Hosting kararı burada kesinleşir: **Neon + Fly.io/VPS** veya **tek VPS'te app+Postgres** (Hetzner ~€4/ay). Önde Caddy (otomatik HTTPS — PWA service worker şartı) veya Cloudflare.

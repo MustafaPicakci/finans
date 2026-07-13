@@ -11,6 +11,25 @@ import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSess
 const app = new Hono();
 const api = new Hono<{ Variables: { user: SessionUser } }>();
 
+/* ---- güvenlik başlıkları (Faz 5.4) — tüm yanıtlara ---- */
+app.use("*", async (c, next) => {
+  await next();
+  c.res.headers.set("X-Content-Type-Options", "nosniff");
+  c.res.headers.set("X-Frame-Options", "DENY");
+  c.res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+});
+
+/* ---- basit in-memory rate-limit (Faz 5.4) — auth uçları için brute-force koruması ---- */
+const rlHits = new Map<string, { n: number; reset: number }>();
+function rateLimited(key: string, max: number, windowMs: number): boolean {
+  const now = Date.now();
+  const e = rlHits.get(key);
+  if (!e || e.reset <= now) { rlHits.set(key, { n: 1, reset: now + windowMs }); return false; }
+  if (e.n >= max) return true;
+  e.n++; return false;
+}
+const clientIp = (c: any) => c.req.header("x-forwarded-for")?.split(",")[0].trim() || "local";
+
 /* ================= AUTH (Faz 5.1) =================
    Guard'tan ÖNCE tanımlanır → bu rotalar korunmaz. Çok-kiracılık (user_id scoping) Faz 5.2'de;
    şimdilik veri paylaşımlı, kayıt yalnız ilk kullanıcıya (owner) açık. */
@@ -19,6 +38,7 @@ const setSessionCookie = (c: any, token: string, expires: Date) =>
   setCookie(c, SESSION_COOKIE, token, { httpOnly: true, sameSite: "Lax", secure: isProd, path: "/", expires });
 
 api.post("/auth/register", async (c) => {
+  if (rateLimited(`reg:${clientIp(c)}`, 10, 5 * 60_000)) return c.json({ error: "Çok fazla deneme, biraz sonra tekrar dene" }, 429);
   const { email, password } = await c.req.json().catch(() => ({}));
   if (!email || typeof email !== "string" || !email.includes("@")) return c.json({ error: "Geçerli e-posta gir" }, 400);
   if (!password || typeof password !== "string" || password.length < 8) return c.json({ error: "Parola en az 8 karakter olmalı" }, 400);
@@ -47,6 +67,7 @@ api.post("/auth/register", async (c) => {
 });
 
 api.post("/auth/login", async (c) => {
+  if (rateLimited(`login:${clientIp(c)}`, 10, 5 * 60_000)) return c.json({ error: "Çok fazla deneme, biraz sonra tekrar dene" }, 429);
   const { email, password } = await c.req.json().catch(() => ({}));
   if (!email || !password) return c.json({ error: "E-posta ve parola gerekli" }, 400);
   const user = await db.get<{ id: number; email: string; password_hash: string }>(
@@ -244,6 +265,41 @@ api.put("/settings", async (c) => {
       );
     }
   }
+  return c.json({ ok: true });
+});
+
+/* ---- KVKK: kullanıcının tüm verisini JSON indir ---- */
+api.get("/export", async (c) => {
+  const uid = c.get("user").id;
+  const [accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions, userSettings] =
+    await Promise.all([
+      db.all("SELECT * FROM accounts WHERE user_id=? ORDER BY id", uid),
+      db.all("SELECT * FROM recurring WHERE user_id=? ORDER BY id", uid),
+      db.all("SELECT * FROM loans WHERE user_id=? ORDER BY id", uid),
+      db.all("SELECT * FROM oneoffs WHERE user_id=? ORDER BY id", uid),
+      db.all("SELECT * FROM trades WHERE user_id=? ORDER BY id", uid),
+      db.all("SELECT * FROM cards WHERE user_id=? ORDER BY id", uid),
+      db.all("SELECT * FROM card_txs WHERE user_id=? ORDER BY id", uid),
+      db.all("SELECT * FROM categories WHERE user_id=? ORDER BY id", uid),
+      db.all("SELECT * FROM transactions WHERE user_id=? ORDER BY id", uid),
+      db.all<{ key: string; value: string }>("SELECT key, value FROM user_settings WHERE user_id=?", uid),
+    ]);
+  c.header("Content-Disposition", `attachment; filename="finans-export-${todayLocal()}.json"`);
+  return c.json({
+    exported_at: nowLocal(), user: c.get("user"),
+    accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions,
+    settings: Object.fromEntries(userSettings.map((s) => [s.key, s.value])),
+  });
+});
+
+/* ---- KVKK: hesabı ve tüm verisini sil (parola onaylı; ON DELETE CASCADE ile tenant verisi + oturumlar) ---- */
+api.post("/account/delete", async (c) => {
+  const uid = c.get("user").id;
+  const { password } = await c.req.json().catch(() => ({}));
+  const u = await db.get<{ password_hash: string }>("SELECT password_hash FROM users WHERE id=?", uid);
+  if (!u || !(await verifyPassword(password ?? "", u.password_hash))) return c.json({ error: "Parola hatalı" }, 401);
+  await db.run("DELETE FROM users WHERE id=?", uid); // cascade: tüm veri + sessions + user_settings
+  deleteCookie(c, SESSION_COOKIE, { path: "/" });
   return c.json({ ok: true });
 });
 

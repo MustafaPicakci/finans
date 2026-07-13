@@ -10,8 +10,9 @@ import { Field, AmountField, Money, Empty, Row } from "../../ui";
 
 /* Özet grafikleri TRY canonical'dır (nakit projeksiyonu + portföy değeri geçmişi hep TRY).
    Görüntü para birimi çevrimi üstteki hero/KPI'da (App.tsx); pozisyon değerleri burada TRY'ye çevrilir. */
-export function Ozet({ data, days, pos, cash, rates, reload }: {
+export function Ozet({ data, days, pos, cash, rates, reload, user, onAccountDeleted }: {
   data: AllData; days: Day[]; pos: Position[]; cash: number; rates: Rates; reload: () => void;
+  user: { email: string }; onAccountDeleted: () => void;
 }) {
   const minDay = days.reduce((m, d) => (d.bal < m.bal ? d : m), days[0] ?? { bal: 0, date: new Date() } as Day);
   const negDays = days.filter((d) => d.bal < 0).length;
@@ -145,7 +146,56 @@ export function Ozet({ data, days, pos, cash, rates, reload }: {
     </div>
 
     <Hesaplar data={data} reload={reload} />
+    <HesapKvkk user={user} onDeleted={onAccountDeleted} />
   </>);
+}
+
+/* ————— HESAP & VERİ (KVKK: dışa aktarım + hesap silme) ————— */
+function HesapKvkk({ user, onDeleted }: { user: { email: string }; onDeleted: () => void }) {
+  const [confirm, setConfirm] = useState(false);
+  const [pw, setPw] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const download = async () => {
+    try {
+      const blob = await api.exportData();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `finans-export-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click(); URL.revokeObjectURL(url);
+    } catch { setErr("Dışa aktarılamadı"); }
+  };
+  const remove = async () => {
+    setErr(""); setBusy(true);
+    try { await api.deleteAccount(pw); onDeleted(); }
+    catch { setErr("Parola hatalı"); setBusy(false); }
+  };
+
+  return (
+    <div style={css.card}>
+      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Hesap & Veri</div>
+      <div style={{ fontSize: 13, color: T.mut, marginBottom: 12 }}>{user.email}</div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button style={css.ghost} onClick={download}>Verilerini indir (JSON)</button>
+        {!confirm && <button style={{ ...css.ghost, color: T.neg, borderColor: T.neg }} onClick={() => setConfirm(true)}>Hesabı sil</button>}
+      </div>
+      {confirm && (
+        <div style={{ marginTop: 12, padding: 12, border: `1px solid ${T.neg}`, borderRadius: 12, background: T.negSoft }}>
+          <div style={{ fontSize: 13, color: T.text, marginBottom: 8 }}>
+            <b>Hesabın ve tüm verilerin kalıcı olarak silinir.</b> Onaylamak için parolanı gir.
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <input style={{ ...css.input, width: 200 }} type="password" placeholder="parola" value={pw}
+              onChange={(e) => setPw(e.target.value)} autoComplete="current-password" />
+            <button style={{ ...css.btn, background: T.neg }} disabled={busy || !pw} onClick={remove}>{busy ? "…" : "Kalıcı olarak sil"}</button>
+            <button style={css.ghost} onClick={() => { setConfirm(false); setPw(""); setErr(""); }}>Vazgeç</button>
+          </div>
+          {err && <div style={{ fontSize: 13, color: T.neg, marginTop: 8 }}>{err}</div>}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /* ————— HESAPLAR (nakit) — tanım + bakiye güncelleme ————— */

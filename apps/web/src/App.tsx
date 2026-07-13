@@ -190,7 +190,7 @@ export default function App() {
           </div>
         </div>
 
-        {tab === "ozet" && <Ozet data={data} days={days} pos={pos} cash={cash} rates={rates} reload={reload} />}
+        {tab === "ozet" && <Ozet data={data} days={days} pos={pos} cash={cash} rates={rates} reload={reload} user={user} onAccountDeleted={() => { setUser(null); setData(null); }} />}
         {tab === "nakit" && <Nakit days={days} />}
         {tab === "plan" && <Plan data={data} reload={reload} onRealize={(p) => openAdd("kalem", p)} />}
         {tab === "kart" && <Kartlar data={data} reload={reload} onAdd={(k) => openAdd(k)} />}

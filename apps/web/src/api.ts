@@ -28,4 +28,8 @@ export const api = {
   register: (email: string, password: string) =>
     fetch("/api/auth/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) }).then((r) => j<{ user: SessionUser }>(r)),
   logout: () => fetch("/api/auth/logout", { method: "POST" }).then(j),
+  /* ---- KVKK (Faz 5.4) ---- */
+  exportData: () => fetch("/api/export").then((r) => { if (!r.ok) throw new ApiError(r.status, "İndirilemedi"); return r.blob(); }),
+  deleteAccount: (password: string) =>
+    fetch("/api/account/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password }) }).then(j),
 };
