@@ -1,0 +1,10 @@
+# Docker imajına GİRMEMESİ gerekenler (build bağlamını küçültür + sır sızmasını önler)
+node_modules
+**/node_modules
+**/dist
+data
+.git
+.env
+**/.env
+*.log
+.DS_Store

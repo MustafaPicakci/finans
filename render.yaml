@@ -1,0 +1,23 @@
+# Render Blueprint — Faz 5.5 yayınlama.
+# Render bu dosyayı görünce web servisini otomatik kurar. Docker imajı kök Dockerfile'dan build edilir.
+# Sırlar (DATABASE_URL, RAPIDAPI_KEY) BURAYA YAZILMAZ — Render panelinden girilir (sync: false).
+services:
+  - type: web
+    name: finans
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Neon bağlantı dizesi — Render panelinden gir (sslmode=require ile birlikte tam dizeyi yapıştır).
+      - key: DATABASE_URL
+        sync: false
+      # TEFAS fon fiyatları için (opsiyonel) — yoksa fonlar elle fiyatlanır.
+      - key: RAPIDAPI_KEY
+        sync: false
+      - key: RAPIDAPI_KEY_2
+        sync: false
+    # PORT'u Render otomatik verir; sunucu process.env.PORT'u okur.

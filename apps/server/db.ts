@@ -6,7 +6,14 @@ import pg from "pg";
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error("DATABASE_URL tanımlı değil (bkz. .env.example)");
 
-const pool = new pg.Pool({ connectionString });
+/* Faz 5.5 (yayınlama): yönetilen Postgres (Neon vb.) SSL zorunlu kılar; yerel Docker Postgres
+   (localhost) kılmaz. Localhost değilse SSL'i aç — rejectUnauthorized:false, sağlayıcının CA
+   zincirinden bağımsız çalışsın (bağlantı yine şifreli). Yerel geliştirme değişmeden kalır. */
+const isLocalDb = /@(localhost|127\.0\.0\.1|db)[:/]/.test(connectionString);
+const pool = new pg.Pool({
+  connectionString,
+  ...(isLocalDb ? {} : { ssl: { rejectUnauthorized: false } }),
+});
 
 /* pg tarafında double precision/integer → JS number; ama pg büyük sayı tiplerini bazen string
    döndürür. Bu şemada para/oran double precision, id integer — hepsi güvenle number'a sığar,
