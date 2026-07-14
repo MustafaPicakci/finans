@@ -24,14 +24,17 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ["**/*.{js,css,html,svg,png,ico}"],
-        /* /api/all: önce ağ dene (5sn), olmazsa son başarılı kopyayı göster — offline'da salt-okunur görünüm */
+        /* /api/all: önce ağ dene, olmazsa son başarılı kopyayı göster — offline'da salt-okunur görünüm.
+           Timeout 30sn: Render ücretsiz katmanı atıllıkta uyur, soğuk başlangıç 30-60sn sürebilir;
+           kısa timeout (eski 5sn) mutasyon sonrası ESKİ anlık görüntüyü sessizce gösteriyordu.
+           Çevrimdışıyken ağ anında hata verir → yine anında cache'e düşer (bu senaryo değişmez). */
         runtimeCaching: [
           {
             urlPattern: ({ url }) => url.pathname === "/api/all",
             handler: "NetworkFirst",
             options: {
               cacheName: "api-all",
-              networkTimeoutSeconds: 5,
+              networkTimeoutSeconds: 30,
               cacheableResponse: { statuses: [0, 200] },
             },
           },
