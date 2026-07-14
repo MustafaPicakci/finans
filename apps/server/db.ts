@@ -206,6 +206,8 @@ CREATE TABLE IF NOT EXISTS sessions (
      zararsız). users bu noktada kesin var (yukarıda oluşturuldu). prices/price_history GLOBAL kalır. */
   await pool.query(`
 ${TENANT_TABLES.map((t) => `ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS user_id integer REFERENCES users(id) ON DELETE CASCADE;`).join("\n")}
+-- Faz 6: portföy işlemi opsiyonel bir nakit hesaba bağlanabilir (SATIŞ +bakiye / ALIŞ −bakiye, TRY işlemde)
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS account_id integer REFERENCES accounts(id) ON DELETE SET NULL;
 CREATE TABLE IF NOT EXISTS user_settings (
   user_id integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   key text NOT NULL,

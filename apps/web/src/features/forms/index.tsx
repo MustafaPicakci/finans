@@ -195,17 +195,17 @@ export function LoanForm({ reload, onClose }: FormProps) {
 }
 
 /** Portföy işlemi (alış/satış) → pozisyonlara ve net varlığa yansır */
-export function TradeForm({ reload, onClose }: FormProps) {
+export function TradeForm({ data, reload, onClose }: FormProps) {
   const [f, setF] = useState({
     date: todayStr(), asset_type: "BIST" as AssetType, symbol: "", side: "ALIŞ" as Trade["side"],
-    qty: "", price: "", fee: "", currency: "TRY" as Currency,
+    qty: "", price: "", fee: "", currency: "TRY" as Currency, account_id: "",
   });
   const symbolRef = useRef<HTMLInputElement>(null);
   const ok = !!f.symbol && num(f.qty) > 0 && num(f.price) > 0 && !!f.date;
   const reason = !f.symbol ? "Sembol gerekli" : !(num(f.qty) > 0) ? "Adet/miktar 0'dan büyük olmalı" : !(num(f.price) > 0) ? "Birim fiyat 0'dan büyük olmalı" : null;
   const save = async (andNew: boolean) => {
     if (!ok) return;
-    await api.post("trades", { ...f, symbol: f.symbol.trim(), qty: num(f.qty), price: num(f.price), fee: num(f.fee), currency: f.currency });
+    await api.post("trades", { ...f, symbol: f.symbol.trim(), qty: num(f.qty), price: num(f.price), fee: num(f.fee), currency: f.currency, account_id: f.currency === "TRY" && f.account_id ? +f.account_id : null });
     reload();
     if (andNew) { setF({ ...f, symbol: "", qty: "", price: "", fee: "" }); symbolRef.current?.focus(); } else onClose();
   };
@@ -245,9 +245,32 @@ export function TradeForm({ reload, onClose }: FormProps) {
         <AmountField label={`Birim fiyat (${f.currency === "USD" ? "$" : "₺"})`} value={f.price} onChange={(v) => setF({ ...f, price: v })} ccy={f.currency} />
         <AmountField label={`Komisyon (${f.currency === "USD" ? "$" : "₺"})`} value={f.fee} onChange={(v) => setF({ ...f, fee: v })} ccy={f.currency} />
       </div>
+      {f.currency === "TRY" && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+          <Field label="Nakit hesap (opsiyonel)" flex={2}>
+            <select style={css.input} value={f.account_id} onChange={(e) => setF({ ...f, account_id: e.target.value })}>
+              <option value="">— (bakiyeye işleme)</option>
+              {data.accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+          </Field>
+        </div>
+      )}
       {ok && (
         <div style={{ fontSize: 12, color: T.mut, marginTop: 8 }}>
           İşlem tutarı: <span style={{ ...css.mono, color: T.text }}>{fmtMoney(num(f.qty) * num(f.price), f.currency, true)}</span>
+          {f.currency === "TRY" && f.account_id && (() => {
+            const acc = data.accounts.find((a) => a.id === +f.account_id);
+            if (!acc) return null;
+            const proceeds = num(f.qty) * num(f.price) - num(f.fee);
+            const cost = num(f.qty) * num(f.price) + num(f.fee);
+            return (
+              <div style={{ marginTop: 4 }}>
+                {f.side === "SATIŞ"
+                  ? <><b>{acc.name}</b> bakiyesine <span style={{ color: T.pos }}>+{fmtMoney(proceeds, "TRY", true)}</span> işlenir</>
+                  : <><b>{acc.name}</b> bakiyesinden <span style={{ color: T.neg }}>−{fmtMoney(cost, "TRY", true)}</span> düşülür</>}
+              </div>
+            );
+          })()}
         </div>
       )}
       <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} />

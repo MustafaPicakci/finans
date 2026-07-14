@@ -5,7 +5,7 @@ export type OneOff = { id: number; date: string; name: string; amount: number };
 export type AssetType = "BIST" | "FON" | "ALTIN" | "DOVIZ" | "KRIPTO" | "ETF";
 /** Bir varlığın/işlemin doğal (native) para birimi. TRY taban birimidir; USD döviz varlıklar içindir. */
 export type Currency = "TRY" | "USD";
-export type Trade = { id: number; date: string; asset_type: AssetType; symbol: string; side: "ALIŞ" | "SATIŞ"; qty: number; price: number; fee: number; currency: Currency };
+export type Trade = { id: number; date: string; asset_type: AssetType; symbol: string; side: "ALIŞ" | "SATIŞ"; qty: number; price: number; fee: number; currency: Currency; account_id?: number | null };
 export type Card = { id: number; name: string; limit_amount: number; statement_day: number; due_day: number };
 export type CardTx = { id: number; card_id: number; date: string; name: string; amount: number; installments: number };
 export type Price = { symbol: string; asset_type: string; price: number; source: string; updated_at: string; currency?: Currency };

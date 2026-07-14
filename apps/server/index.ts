@@ -236,11 +236,49 @@ crud("loans", "loans", [
 crud("oneoffs", "oneoffs", [
   { name: "date", required: true }, { name: "name", required: true }, { name: "amount", required: true },
 ]);
-crud("trades", "trades", [
-  { name: "date", required: true }, { name: "asset_type", required: true }, { name: "symbol", required: true },
-  { name: "side", required: true }, { name: "qty", required: true }, { name: "price", required: true }, { name: "fee" },
-  { name: "currency", default: "TRY" },
-]);
+/* trades: jenerik crud yerine elle — transactions gibi opsiyonel yan etkisi var.
+   account_id verilmişse SATIŞ hesabın bakiyesini artırır (proceeds = qty*price − fee),
+   ALIŞ azaltır (cost = qty*price + fee); DELETE geri alır. İkisi de atomik (tx).
+   Bakiye etkisi YALNIZ TRY işlemde: hesaplar TRY, USD çevrimi güncel FX'e bağlı olurdu ve
+   DELETE'te FX değişirse geri-alım tutmaz (kayma) → USD portföy akışı bilinçli olarak elle kalır.
+   qty/price/fee/side'dan deterministik türetildiği için ekle/geri-al her zaman eşitlenir. */
+const tradeBalanceDelta = (side: string, qty: number, price: number, fee: number) =>
+  side === "SATIŞ" ? qty * price - fee : -(qty * price + fee);
+
+api.post("/trades", async (c) => {
+  const b = await c.req.json().catch(() => null);
+  if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
+  for (const f of ["date", "asset_type", "symbol", "side", "qty", "price"])
+    if (b[f] === undefined || b[f] === "") return c.json({ error: `${f} zorunlu` }, 400);
+  const uid = c.get("user").id;
+  const currency = b.currency ?? "TRY";
+  const qty = Number(b.qty), price = Number(b.price), fee = Number(b.fee ?? 0);
+  const accountId = b.account_id != null && b.account_id !== "" ? Number(b.account_id) : null;
+  const affects = currency === "TRY" && accountId != null; // bakiye etkisi yalnız TRY işlemde
+  const id = await db.tx(async (t) => {
+    const info = await t.run(
+      "INSERT INTO trades (date,asset_type,symbol,side,qty,price,fee,currency,account_id,user_id) VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id",
+      b.date, b.asset_type, b.symbol, b.side, qty, price, fee, currency, accountId, uid,
+    );
+    if (affects) await t.run("UPDATE accounts SET balance = balance + ? WHERE id=? AND user_id=?", tradeBalanceDelta(b.side, qty, price, fee), accountId, uid);
+    return info.id;
+  });
+  return c.json({ id });
+});
+
+api.delete("/trades/:id", async (c) => {
+  const uid = c.get("user").id;
+  await db.tx(async (t) => {
+    const row = await t.get<{ side: string; qty: number; price: number; fee: number; currency: string; account_id: number | null }>(
+      "SELECT side, qty, price, fee, currency, account_id FROM trades WHERE id=? AND user_id=?", c.req.param("id"), uid,
+    );
+    await t.run("DELETE FROM trades WHERE id=? AND user_id=?", c.req.param("id"), uid);
+    if (row && row.currency === "TRY" && row.account_id != null) {
+      await t.run("UPDATE accounts SET balance = balance - ? WHERE id=? AND user_id=?", tradeBalanceDelta(row.side, row.qty, row.price, row.fee), row.account_id, uid);
+    }
+  });
+  return c.json({ ok: true });
+});
 crud("cards", "cards", [
   { name: "name", required: true }, { name: "limit_amount" },
   { name: "statement_day", required: true }, { name: "due_day", required: true },
