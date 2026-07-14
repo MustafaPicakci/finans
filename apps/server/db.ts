@@ -208,6 +208,19 @@ CREATE TABLE IF NOT EXISTS sessions (
 ${TENANT_TABLES.map((t) => `ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS user_id integer REFERENCES users(id) ON DELETE CASCADE;`).join("\n")}
 -- Faz 6: portföy işlemi opsiyonel bir nakit hesaba bağlanabilir (SATIŞ +bakiye / ALIŞ −bakiye, TRY işlemde)
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS account_id integer REFERENCES accounts(id) ON DELETE SET NULL;
+-- Faz 6: e-posta doğrulama. ADD ... DEFAULT true → MEVCUT (owner) kullanıcılar doğrulanmış sayılır
+-- (kilitlenmesin); ardından default'u false'a çevir → YENİ kayıtlar aktivasyon ister. İkisi de idempotent.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified boolean NOT NULL DEFAULT true;
+ALTER TABLE users ALTER COLUMN email_verified SET DEFAULT false;
+-- e-posta token'ları: hem aktivasyon ('verify') hem şifre sıfırlama ('reset')
+CREATE TABLE IF NOT EXISTS email_tokens (
+  token text PRIMARY KEY,
+  user_id integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind text NOT NULL CHECK (kind IN ('verify','reset')),
+  expires_at text NOT NULL,
+  used boolean NOT NULL DEFAULT false,
+  created_at text NOT NULL
+);
 CREATE TABLE IF NOT EXISTS user_settings (
   user_id integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   key text NOT NULL,

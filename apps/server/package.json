@@ -14,11 +14,13 @@
     "dotenv": "^17.4.2",
     "hono": "^4.6.16",
     "node-cron": "^3.0.3",
+    "nodemailer": "^6.9.16",
     "pg": "^8.22.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
     "@types/node-cron": "^3.0.11",
+    "@types/nodemailer": "^6.4.17",
     "@types/pg": "^8.20.0",
     "cross-env": "^7.0.3",
     "tsx": "^4.19.2",

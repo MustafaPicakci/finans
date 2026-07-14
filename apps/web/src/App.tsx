@@ -3,7 +3,7 @@ import { project, positions, cardInfos, loanRemaining, portfolioValueTry, conver
 import { api, ApiError, type SessionUser } from "./api";
 import { T, css, fmtMoney, themeCSS, THEME_KEY, CCY_KEY, type ThemeMode } from "./theme";
 import { Center } from "./ui";
-import { Auth } from "./features/auth";
+import { Auth, type UrlAuth } from "./features/auth";
 import { Ozet } from "./features/ozet";
 import { Nakit } from "./features/nakit";
 import { Plan } from "./features/plan";
@@ -21,6 +21,11 @@ export default function App() {
   const [ccy, setCcy] = useState<Currency>(() => (localStorage.getItem(CCY_KEY) as Currency) || "TRY");
   const [add, setAdd] = useState<AddState | null>(null); // global "+ Ekle" akışı
   const [user, setUser] = useState<SessionUser | null | undefined>(undefined); // undefined = oturum kontrol ediliyor
+  const [urlAuth, setUrlAuth] = useState<UrlAuth>(() => { // e-posta bağlantısındaki reset/verify token'ı
+    const p = new URLSearchParams(window.location.search);
+    const reset = p.get("reset"), verify = p.get("verify");
+    return reset ? { kind: "reset", token: reset } : verify ? { kind: "verify", token: verify } : null;
+  });
 
   const reload = useCallback(() => api.all().then(setData).catch((e) => {
     if (e instanceof ApiError && e.status === 401) { setUser(null); setData(null); } // oturum düştü → giriş ekranı
@@ -54,6 +59,8 @@ export default function App() {
   }, [data]);
 
   if (err) return <Center>API'ye ulaşılamadı: {err}. Sunucu çalışıyor mu? (npm run dev)</Center>;
+  // E-posta bağlantısıyla gelen reset/verify token'ı: oturum yüklenmesini beklemeden Auth ekranını göster
+  if (urlAuth) return <Auth urlAuth={urlAuth} onAuthed={(u) => { setUser(u); setErr(""); setUrlAuth(null); reload(); }} />;
   if (user === undefined) return <Center>Yükleniyor…</Center>;
   if (user === null) return <Auth onAuthed={(u) => { setUser(u); setErr(""); reload(); }} />;
   if (!data) return <Center>Yükleniyor…</Center>;

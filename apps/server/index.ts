@@ -6,7 +6,8 @@ import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import cron from "node-cron";
 import { db, initDb, nowLocal, todayLocal, TENANT_TABLES, GLOBAL_SETTING_KEYS } from "./db.js";
 import { refreshAll } from "./prices.js";
-import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, SESSION_COOKIE, type SessionUser } from "./auth.js";
+import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, SESSION_COOKIE, type SessionUser } from "./auth.js";
+import { sendMail, resetEmail, verifyEmail } from "./mail.js";
 
 const app = new Hono();
 const api = new Hono<{ Variables: { user: SessionUser } }>();
@@ -92,9 +93,11 @@ api.post("/auth/register", async (c) => {
   const { count } = (await db.get<{ count: number }>("SELECT COUNT(*)::int AS count FROM users"))!;
   if (count > 0) return c.json({ error: "Kayıt kapalı (çok kullanıcı Faz 5.2'de açılacak)" }, 403);
   const email2 = email.trim().toLowerCase();
+  // Kayıt owner-only (yalnız users boşken çalışır) → oluşan kullanıcı owner, doğrulanmış sayılır.
+  // Çok-kullanıcı açıldığında: email_verified=false + createEmailToken('verify') + sendMail(verifyEmail(...)).
   const info = await db.run(
-    "INSERT INTO users (email, password_hash, created_at) VALUES (?,?,?) RETURNING id",
-    email2, await hashPassword(password), new Date().toISOString(),
+    "INSERT INTO users (email, password_hash, email_verified, created_at) VALUES (?,?,?,?) RETURNING id",
+    email2, await hashPassword(password), true, new Date().toISOString(),
   );
   /* owner bootstrap: Faz 5.2 öncesinden kalan sahipsiz (user_id NULL) veriyi bu ilk kullanıcıya devret;
      per-user ayarları (horizon/cash_funds) global settings'ten user_settings'e taşı. Yeni kurulumda 0 satır (zararsız). */
@@ -127,12 +130,14 @@ api.post("/auth/login", async (c) => {
   if (!email || !password) return c.json({ error: "E-posta ve parola gerekli" }, 400);
   const email2 = String(email).trim().toLowerCase();
   if (tooManyLoginFails(email2)) return c.json({ error: "Çok fazla başarısız deneme, biraz sonra tekrar dene" }, 429);
-  const user = await db.get<{ id: number; email: string; password_hash: string }>(
-    "SELECT id, email, password_hash FROM users WHERE email = ?", email2,
+  const user = await db.get<{ id: number; email: string; password_hash: string; email_verified: boolean }>(
+    "SELECT id, email, password_hash, email_verified FROM users WHERE email = ?", email2,
   );
   const ok = await verifyPassword(String(password), user?.password_hash ?? DUMMY_HASH); // kullanıcı yoksa da scrypt ödenir
   if (!user || !ok) { recordLoginFail(email2); return c.json({ error: "E-posta veya parola hatalı" }, 401); }
   loginFails.delete(email2);
+  // Aktivasyon kapısı (parola doğrulandıktan SONRA → enumerasyon sızmaz). Owner doğrulanmış geldiği için etkilenmez.
+  if (!user.email_verified) return c.json({ error: "Hesabın henüz aktive edilmemiş. E-postana gönderilen bağlantıya tıkla." }, 403);
   const { token, expires } = await createSession(user.id);
   setSessionCookie(c, token, expires);
   return c.json({ user: { id: user.id, email: user.email } });
@@ -147,6 +152,48 @@ api.post("/auth/logout", async (c) => {
 api.get("/auth/me", async (c) => {
   const user = await getSessionUser(getCookie(c, SESSION_COOKIE));
   return user ? c.json({ user }) : c.json({ user: null });
+});
+
+/* Uygulamanın herkese açık kök URL'i (e-posta bağlantıları için). Env > tarayıcı Origin > istek host'u. */
+const appBaseUrl = (c: any) => process.env.APP_URL || c.req.header("origin") || new URL(c.req.url).origin;
+
+/* Şifre sıfırlama isteği — DAİMA 200 (e-posta enumerasyonu/varlık sızmasın). */
+api.post("/auth/forgot", async (c) => {
+  if (rateLimited(`forgot:${clientIp(c)}`, 5, 15 * 60_000)) return c.json({ error: "Çok fazla deneme, biraz sonra tekrar dene" }, 429);
+  const { email } = await c.req.json().catch(() => ({}));
+  const email2 = String(email ?? "").trim().toLowerCase();
+  if (email2.includes("@")) {
+    const user = await db.get<{ id: number }>("SELECT id FROM users WHERE email = ?", email2);
+    if (user) {
+      const token = await createEmailToken(user.id, "reset", 60 * 60_000); // 1 saat
+      const link = `${appBaseUrl(c)}/?reset=${token}`;
+      const { subject, html } = resetEmail(link);
+      await sendMail(email2, subject, html).catch((e) => console.error("[mail] reset gönderilemedi:", e));
+    }
+  }
+  return c.json({ ok: true });
+});
+
+/* Şifre sıfırla (token ile) — tüketir, parolayı günceller, tüm oturumları düşürür. */
+api.post("/auth/reset", async (c) => {
+  if (rateLimited(`reset:${clientIp(c)}`, 10, 15 * 60_000)) return c.json({ error: "Çok fazla deneme, biraz sonra tekrar dene" }, 429);
+  const { token, password } = await c.req.json().catch(() => ({}));
+  if (!token || typeof password !== "string" || password.length < 8) return c.json({ error: "Parola en az 8 karakter olmalı" }, 400);
+  const userId = await consumeEmailToken(String(token), "reset");
+  if (!userId) return c.json({ error: "Bağlantı geçersiz veya süresi dolmuş" }, 400);
+  await db.run("UPDATE users SET password_hash = ? WHERE id = ?", await hashPassword(password), userId);
+  await revokeUserSessions(userId); // güvenlik: sıfırlama sonrası eski oturumlar düşer
+  return c.json({ ok: true });
+});
+
+/* Hesap aktivasyonu (token ile). Kayıt owner-only iken dormant; çok-kullanıcı açılınca devreye girer. */
+api.post("/auth/verify", async (c) => {
+  if (rateLimited(`verify:${clientIp(c)}`, 20, 15 * 60_000)) return c.json({ error: "Çok fazla deneme, biraz sonra tekrar dene" }, 429);
+  const { token } = await c.req.json().catch(() => ({}));
+  const userId = await consumeEmailToken(String(token ?? ""), "verify");
+  if (!userId) return c.json({ error: "Bağlantı geçersiz veya süresi dolmuş" }, 400);
+  await db.run("UPDATE users SET email_verified = true WHERE id = ?", userId);
+  return c.json({ ok: true });
 });
 
 /* ---- guard: bundan sonraki tüm /api rotaları geçerli oturum ister ---- */

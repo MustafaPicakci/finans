@@ -57,3 +57,33 @@ export async function deleteSession(token: string | undefined): Promise<void> {
   if (!token) return;
   await db.run("DELETE FROM sessions WHERE token = ?", token);
 }
+
+/** Kullanıcının TÜM oturumlarını düşür (şifre sıfırlama sonrası güvenlik). */
+export async function revokeUserSessions(userId: number): Promise<void> {
+  await db.run("DELETE FROM sessions WHERE user_id = ?", userId);
+}
+
+/* ---- e-posta token'ları (Faz 6: aktivasyon + şifre sıfırlama) ---- */
+export type EmailTokenKind = "verify" | "reset";
+
+export async function createEmailToken(userId: number, kind: EmailTokenKind, ttlMs: number): Promise<string> {
+  const token = randomBytes(32).toString("hex");
+  const now = new Date();
+  const expires = new Date(now.getTime() + ttlMs);
+  await db.run(
+    "INSERT INTO email_tokens (token, user_id, kind, expires_at, used, created_at) VALUES (?,?,?,?,?,?)",
+    token, userId, kind, expires.toISOString(), false, now.toISOString(),
+  );
+  return token;
+}
+
+/** Token'ı doğrular ve TÜKETİR (tek kullanımlık); geçerliyse user_id, değilse null döner. */
+export async function consumeEmailToken(token: string, kind: EmailTokenKind): Promise<number | null> {
+  if (!token) return null;
+  const row = await db.get<{ user_id: number; expires_at: string; used: boolean }>(
+    "SELECT user_id, expires_at, used FROM email_tokens WHERE token = ? AND kind = ?", token, kind,
+  );
+  if (!row || row.used || row.expires_at <= new Date().toISOString()) return null;
+  await db.run("UPDATE email_tokens SET used = true WHERE token = ?", token);
+  return row.user_id;
+}

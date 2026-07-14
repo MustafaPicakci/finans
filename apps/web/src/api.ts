@@ -28,6 +28,13 @@ export const api = {
   register: (email: string, password: string) =>
     fetch("/api/auth/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) }).then((r) => j<{ user: SessionUser }>(r)),
   logout: () => fetch("/api/auth/logout", { method: "POST" }).then(j),
+  /* ---- şifre sıfırlama + aktivasyon (Faz 6) ---- */
+  forgot: (email: string) =>
+    fetch("/api/auth/forgot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) }).then(j),
+  reset: (token: string, password: string) =>
+    fetch("/api/auth/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, password }) }).then(j),
+  verify: (token: string) =>
+    fetch("/api/auth/verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) }).then(j),
   /* ---- KVKK (Faz 5.4) ---- */
   exportData: () => fetch("/api/export").then((r) => { if (!r.ok) throw new ApiError(r.status, "İndirilemedi"); return r.blob(); }),
   deleteAccount: (password: string) =>
