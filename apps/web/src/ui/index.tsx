@@ -18,7 +18,8 @@ export const AmountField = ({ label, value, onChange, placeholder, flex, inputRe
         onChange={(e) => onChange(e.target.value)} />
       {value.trim() !== "" && (
         <div style={{ fontSize: 11, color: parsed > 0 ? T.mut3 : T.neg, marginTop: 4 }}>
-          {parsed > 0 ? fmtMoney(parsed, ccy, true) : "geçersiz tutar"}
+          {/* raw: girdi alanı zaten rakamları gösterdiğinden önizleme gizlilik modunda maskelenmez */}
+          {parsed > 0 ? fmtMoney(parsed, ccy, true, true) : "geçersiz tutar"}
         </div>
       )}
     </Field>

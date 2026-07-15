@@ -4,6 +4,7 @@ import { api, ApiError, type SessionUser } from "./api";
 import { T, css, fmtMoney, themeCSS, THEME_KEY, CCY_KEY, type ThemeMode } from "./theme";
 import { Center } from "./ui";
 import { NAV, NavIcon, type TabKey } from "./nav";
+import { useBalancesHidden, toggleBalancesHidden } from "./privacy";
 import { Auth, type UrlAuth } from "./features/auth";
 import { Ozet } from "./features/ozet";
 import { Hesaplar } from "./features/hesaplar";
@@ -20,6 +21,7 @@ export default function App() {
   const [err, setErr] = useState("");
   const [tab, setTab] = useState<TabKey>("ozet");
   const [refreshing, setRefreshing] = useState(false);
+  const balancesHidden = useBalancesHidden(); // gizlilik modu: açıkken tüm tutarlar maskelenir
   const [theme, setTheme] = useState<ThemeMode>(() => (localStorage.getItem(THEME_KEY) as ThemeMode) || "light");
   const [ccy, setCcy] = useState<Currency>(() => (localStorage.getItem(CCY_KEY) as Currency) || "TRY");
   const [add, setAdd] = useState<AddState | null>(null); // global "+ Ekle" akışı
@@ -112,6 +114,21 @@ export default function App() {
     width: 34, height: 34, borderRadius: 10, border: `1px solid ${T.line}`, background: T.panel,
     color: T.mut, cursor: "pointer", display: "grid", placeItems: "center", fontSize: 15, flexShrink: 0,
   };
+  const EyeIcon = ({ off }: { off: boolean }) => (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1.5 10S4.5 4 10 4s8.5 6 8.5 6-3 6-8.5 6-8.5-6-8.5-6Z" />
+      <circle cx="10" cy="10" r="2.6" />
+      {off && <path d="M3 3l14 14" />}
+    </svg>
+  );
+  const privacyBtn = (extra?: React.CSSProperties, cls = "") => (
+    <button className={`icon-btn ${cls}`} onClick={toggleBalancesHidden}
+      title={balancesHidden ? "Bakiyeleri göster" : "Bakiyeleri gizle"}
+      aria-label={balancesHidden ? "Bakiyeleri göster" : "Bakiyeleri gizle"}
+      style={{ ...iconBtn, ...(balancesHidden ? { color: T.acc, borderColor: T.acc } : {}), ...extra }}>
+      <EyeIcon off={balancesHidden} />
+    </button>
+  );
 
   return (
     <div style={{ display: "flex", minHeight: "100vh", background: T.bg, color: T.text, fontFamily: T.disp }}>
@@ -137,12 +154,12 @@ export default function App() {
         @media (max-width:900px){ .hero-grid,.grid2,.grid3{grid-template-columns:1fr} }
         .bottom-nav{display:none}
         .add-fab{display:none}
-        .mobile-only{display:none}
+        .mobile-only{display:none!important}
         @media (max-width:900px){
           .sidebar{display:none!important}
           .bottom-nav{display:flex}
           .add-fab{display:flex}
-          .mobile-only{display:grid}
+          .mobile-only{display:grid!important}
           .content-pad{padding:18px 16px calc(90px + env(safe-area-inset-bottom))!important}
           .topbar{padding:14px 16px!important}
           .btn-label{display:none}
@@ -193,6 +210,7 @@ export default function App() {
             <div style={{ fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{user?.email?.split("@")[0]}</div>
             <div style={{ fontSize: 11, color: T.mut3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{user?.email}</div>
           </div>
+          {privacyBtn({ width: 30, height: 30, borderRadius: 9 })}
           <button className="icon-btn" title="Açık / koyu tema" onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))} style={{ ...iconBtn, width: 30, height: 30, borderRadius: 9 }}>◐</button>
           <button className="icon-btn" title="Çıkış yap" onClick={logout} style={{ ...iconBtn, width: 30, height: 30, borderRadius: 9 }}>⏻</button>
         </div>
@@ -217,6 +235,7 @@ export default function App() {
             <span className="btn-label">{refreshing ? "Yenileniyor…" : "Fiyatları yenile"}</span>
           </button>
           {ccyToggle}
+          {privacyBtn({}, "mobile-only")}
           <button className="icon-btn mobile-only" title="Açık / koyu tema" onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))} style={iconBtn}>◐</button>
           <button className="icon-btn mobile-only" title="Çıkış yap" onClick={logout} style={iconBtn}>⏻</button>
         </div>

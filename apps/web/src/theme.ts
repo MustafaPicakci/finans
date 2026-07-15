@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import type { AssetType, Currency } from "@finans/engine";
+import { isBalancesHidden, maskMoney } from "./privacy";
 
 /**
  * Token sistemi: renkler CSS custom property olarak `themeCSS` içinde tanımlanır
@@ -103,14 +104,23 @@ export const CATEGORY_PALETTE = [
   "var(--cat-5)", "var(--cat-6)", "var(--cat-7)", "var(--cat-8)",
 ];
 
-export const tl = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", maximumFractionDigits: 0 });
-export const tl2 = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", minimumFractionDigits: 2 });
-const usd = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
-const usd2 = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "USD", minimumFractionDigits: 2 });
+const rawTl = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", maximumFractionDigits: 0 });
+const rawTl2 = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", minimumFractionDigits: 2 });
+const rawUsd = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+const rawUsd2 = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "USD", minimumFractionDigits: 2 });
+const maybeMask = (s: string) => (isBalancesHidden() ? maskMoney(s) : s);
 
-/** Para birimine göre biçimler; `dec` iki ondalık ister. ccy verilmezse TRY. */
-export const fmtMoney = (v: number, ccy: Currency = "TRY", dec = false) =>
-  ccy === "USD" ? (dec ? usd2 : usd).format(v) : (dec ? tl2 : tl).format(v);
+/* tl/tl2 gizlilik moduna duyarlı: her `.format()` çağrısı, mod açıkken tutarı maskeler —
+   böylece tüm çağrı yerleri (38+) ek değişiklik olmadan otomatik gizlenir. */
+export const tl = { format: (v: number) => maybeMask(rawTl.format(v)) };
+export const tl2 = { format: (v: number) => maybeMask(rawTl2.format(v)) };
+
+/** Para birimine göre biçimler; `dec` iki ondalık ister, `raw` gizlilik maskesini atlar
+    (örn. kullanıcının o an yazdığı tutar önizlemesi). ccy verilmezse TRY. */
+export const fmtMoney = (v: number, ccy: Currency = "TRY", dec = false, raw = false) => {
+  const s = ccy === "USD" ? (dec ? rawUsd2 : rawUsd).format(v) : (dec ? rawTl2 : rawTl).format(v);
+  return raw ? s : maybeMask(s);
+};
 
 export const css: Record<string, CSSProperties> = {
   card: { background: T.panel, border: `1px solid ${T.line}`, borderRadius: 20, padding: 22, boxShadow: "var(--shadow-sm)" },

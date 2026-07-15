@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { fmtD, parseD, keyOf, type AllData, type Day } from "@finans/engine";
 import { T, css, tl } from "../../theme";
+import { maskBrief } from "../../privacy";
 import { Money, Empty } from "../../ui";
 
 /** Takvimde gösterilen gerçekleşen (defter) hareketi; `card` doluysa kart harcaması (nakdi o gün oynatmaz) */
@@ -103,7 +104,7 @@ function Takvim({ month, ledger }: { month: { y: number; mo: number; days: Day[]
   for (let i = 0; i < lead; i++) cells.push(null);
   for (let dd = 1; dd <= daysInMonth; dd++) cells.push(dd);
   const wd = ["Pt", "Sa", "Ça", "Pe", "Cu", "Ct", "Pz"];
-  const kBrief = (v: number) => (Math.abs(v) >= 1000 ? `${Math.round(v / 1000)}k` : String(Math.round(v)));
+  const kBrief = (v: number) => maskBrief(Math.abs(v) >= 1000 ? `${Math.round(v / 1000)}k` : String(Math.round(v)));
   const check = <span style={{ fontSize: 9, color: T.pos, lineHeight: 1 }}>✓</span>; // gerçekleşen işareti
 
   const selDay = selK ? month.days.find((d) => d.k === selK) ?? null : null;
