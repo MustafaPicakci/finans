@@ -143,16 +143,28 @@ export async function refreshAll(): Promise<RefreshResult[]> {
   }
   if (!held.length) return [];
 
-  /* TEFAS NAV'ı günde bir hesaplandığından fetchTefasSnapshot() da günde bir kez çağrılır
+  /* TEFAS NAV'ı günde bir hesaplandığından fetchTefasSnapshot() da günde bir kez ÇEKİLİR
      (RapidAPI ücretsiz kotasını korumak için) — tefas_last_fetch bugüne eşitse atlanır. */
   const lastFetch = (await db.get<{ value: string }>("SELECT value FROM settings WHERE key='tefas_last_fetch'"))?.value;
+  const lastAttempt = Number((await db.get<{ value: string }>("SELECT value FROM settings WHERE key='tefas_last_attempt'"))?.value ?? 0);
   const heldFon = held.filter((h) => h.asset_type === "FON");
   const neededCodes = new Set(heldFon.map((h) => h.symbol));
   const alreadySucceededToday = lastFetch === today;
-  const tefasMap = heldFon.length && !alreadySucceededToday ? await fetchTefasSnapshot(neededCodes) : null;
-  /* bugün için gerçekten denendi ama (kota/hız sınırı, ağ hatası vb.) başarısız oldu —
-     bu durumda prices tablosundaki bayat (önceki günden kalma) fiyatı "başarılı" gibi
-     göstermek yanıltıcı olur; diğer varlık türleriyle tutarlı şekilde ok:false dönülür */
+  /* Boş/başarısız deneme tefas_last_fetch'i işaretlemez → aksi halde cron her 15 dk yeniden
+     dener (log spam + boşa kota; ör. resmi tatilde NAV yayınlanmaz). Geri-çekilme: başarısız
+     denemeden sonra 1 saat bekle. Böylece geç yayınlanan NAV / geçici hata için gün içinde
+     saatte bir tekrar denenir, ama 15 dakikada bir hammering yapılmaz. */
+  const TEFAS_RETRY_BACKOFF_MS = 60 * 60_000;
+  const recentlyAttempted = Date.now() - lastAttempt < TEFAS_RETRY_BACKOFF_MS;
+  const shouldTryTefas = heldFon.length > 0 && !alreadySucceededToday && !recentlyAttempted;
+  const tefasMap = shouldTryTefas ? await fetchTefasSnapshot(neededCodes) : null;
+  if (shouldTryTefas) {
+    /* denemeyi (başarı/başarısızlık fark etmez) işaretle — başarısızsa geri-çekilme bundan sayılır */
+    await db.run("INSERT INTO settings (key,value) VALUES ('tefas_last_attempt',?) ON CONFLICT (key) DO UPDATE SET value=excluded.value", String(Date.now()));
+  }
+  /* bugün taze FON fiyatı gelmedi (kota/hız/ağ/boş yanıt) VEYA geri-çekilmede atlandı —
+     prices tablosundaki bayat (önceki günden kalma) fiyatı "başarılı" gibi göstermek
+     yanıltıcı olur; diğer varlık türleriyle tutarlı şekilde ok:false dönülür */
   const tefasAttemptFailed = heldFon.length > 0 && !alreadySucceededToday && (!tefasMap || tefasMap.size === 0);
   if (tefasMap && tefasMap.size > 0) {
     /* aranan fonları bulana kadar taranan sayfalarda görülen TÜM fonlar (bedavaya gelen
