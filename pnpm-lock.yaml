@@ -17,6 +17,9 @@ importers:
 
   apps/server:
     dependencies:
+      '@finans/engine':
+        specifier: workspace:*
+        version: link:../../packages/engine
       '@hono/node-server':
         specifier: ^1.13.7
         version: 1.19.14(hono@4.12.28)

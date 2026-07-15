@@ -4,7 +4,7 @@ import type { AllData } from "./types.js";
 
 const baseData = (over: Partial<AllData> = {}): AllData => ({
   accounts: [], recurring: [], loans: [], oneoffs: [], trades: [], cards: [], card_txs: [], prices: [], price_history: [],
-  categories: [], transactions: [], deposits: [], settings: {},
+  categories: [], transactions: [], deposits: [], recurring_realized: [], statement_payments: [], settings: {},
   ...over,
 });
 
@@ -44,6 +44,19 @@ describe("project", () => {
     expect(payDay!.ev).toEqual([{ n: "Maaş", a: 5000 }]);
     // ödeme gününden sonraki bakiye kalıcı olarak artmış olmalı
     expect(days[days.length - 1].bal).toBe(5000);
+  });
+
+  it("gerçekleşmiş (kalem, ay) çifti tahminde tekrar işlenmez, diğer aylar işlenir", () => {
+    const data = baseData({
+      accounts: [{ id: 1, name: "Vadesiz", balance: 0 }],
+      recurring: [{ id: 1, kind: "income", name: "Maaş", amount: 5000, day: 15, from_month: null, to_month: null }],
+      recurring_realized: [{ recurring_id: 1, ym: "2026-01" }], // Ocak gerçekleşti
+    });
+    const days = project(data, 2); // Ocak + Şubat
+    const jan = days.find((d) => d.date.getMonth() === 0 && d.date.getDate() === 15)!;
+    const feb = days.find((d) => d.date.getMonth() === 1 && d.date.getDate() === 15)!;
+    expect(jan.ev).toEqual([]);            // Ocak gerçekleşti → tahminde yok (çift sayım engellendi)
+    expect(feb.ev).toEqual([{ n: "Maaş", a: 5000 }]); // Şubat hâlâ tahminde
   });
 
   it("from_month/to_month aralığı dışındaki aylarda düzenli kalem işlemez", () => {
@@ -90,6 +103,18 @@ describe("project", () => {
     const days = project(data, 2);
     const due = days.find((d) => d.k === "2026-02-05")!;
     expect(due.net).toBe(-300);
+  });
+
+  it("ödendi işaretlenen kart ekstresi projeksiyonda gider olarak düşmez", () => {
+    const data = baseData({
+      accounts: [{ id: 1, name: "Vadesiz", balance: 0 }],
+      cards: [{ id: 1, name: "Kart", limit_amount: 10000, statement_day: 15, due_day: 5 }],
+      card_txs: [{ id: 1, card_id: 1, date: "2026-01-10", name: "Market", amount: 300, installments: 1 }],
+      statement_payments: [{ card_id: 1, due: "2026-02-05" }], // ekstre ödendi (transactions'a yazıldı)
+    });
+    const days = project(data, 2);
+    const due = days.find((d) => d.k === "2026-02-05")!;
+    expect(due.net).toBe(0); // tekrar düşülmez — çift sayım engellendi
   });
 
   it("portföy değeri güncel fiyatla o günün toplam varlığına eklenir", () => {

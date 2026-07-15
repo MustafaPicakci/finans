@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { project, positions, cardInfos, loanRemaining, portfolioValueTry, depositValueOn, convert, type Currency } from "@finans/engine";
+import { project, positions, cardInfos, stmtKey, loanRemaining, portfolioValueTry, depositValueOn, convert, type Currency } from "@finans/engine";
 import { api, ApiError, type SessionUser } from "./api";
 import { T, css, fmtMoney, themeCSS, THEME_KEY, CCY_KEY, type ThemeMode } from "./theme";
 import { Center } from "./ui";
@@ -55,7 +55,8 @@ export default function App() {
   const cardInfoList = useMemo(() => {
     if (!data) return [];
     const t = new Date(); t.setHours(0, 0, 0, 0);
-    return cardInfos(data.cards, data.card_txs, t);
+    const paid = new Set(data.statement_payments.map((p) => stmtKey(p.card_id, p.due)));
+    return cardInfos(data.cards, data.card_txs, t, paid);
   }, [data]);
   const cardDebt = useMemo(() => cardInfoList.reduce((s, c) => s + c.debt, 0), [cardInfoList]);
   const loanDebt = useMemo(() => {
@@ -205,7 +206,7 @@ export default function App() {
 
         {tab === "ozet" && <Ozet data={data} days={days} pos={pos} cash={cash} rates={rates} reload={reload} />}
         {tab === "hesaplar" && <Hesaplar data={data} reload={reload} user={user} onAccountDeleted={() => { setUser(null); setData(null); }} />}
-        {tab === "nakit" && <Nakit days={days} />}
+        {tab === "nakit" && <Nakit days={days} data={data} />}
         {tab === "plan" && <Plan data={data} reload={reload} onRealize={(p) => openAdd("kalem", p)} />}
         {tab === "kart" && <Kartlar data={data} reload={reload} onAdd={(k) => openAdd(k)} />}
         {tab === "portfoy" && <Portfoy data={data} pos={pos} rates={rates} ccy={ccy} reload={reload} onAdd={(k) => openAdd(k)} />}

@@ -34,29 +34,37 @@ export function txShares(tx: CardTx, card: Card): Share[] {
 
 export type CardInfo = {
   card: Card; debt: number; nextDue: Date | null; nextAmount: number;
-  statements: { due: Date; amount: number }[];
+  statements: { due: Date; amount: number; paid: boolean }[];
 };
 
-/** Kart başına: güncel borç (bugünden sonra vadesi gelen paylar), yaklaşan ekstreler */
-export function cardInfos(cards: Card[], txs: CardTx[], today: Date): CardInfo[] {
+/** Ödenmiş ekstre kümesi anahtarı (bkz. statement_payments) */
+export const stmtKey = (cardId: number, due: Date | string) =>
+  `${cardId}:${typeof due === "string" ? due : keyOf(due)}`;
+
+/** Kart başına: güncel borç (bugünden sonra vadesi gelen paylar), yaklaşan ekstreler.
+    `paid` (stmtKey kümesi) ile ödendi işaretlenen ekstre listede kalır ama borca/sıradakine sayılmaz —
+    UI "ödendi ✓ / geri al" gösterebilsin; projeksiyon da gider olarak işlemez. */
+export function cardInfos(cards: Card[], txs: CardTx[], today: Date, paid: Set<string> = new Set()): CardInfo[] {
   return cards.map((card) => {
-    const byDue = new Map<string, { due: Date; amount: number }>();
+    const byDue = new Map<string, { due: Date; amount: number; paid: boolean }>();
     let debt = 0;
     txs.filter((t) => t.card_id === card.id).forEach((t) => {
       txShares(t, card).forEach((s) => {
         if (s.due >= today) {
-          debt += s.amount;
           const k = keyOf(s.due);
-          if (!byDue.has(k)) byDue.set(k, { due: s.due, amount: 0 });
+          const isPaid = paid.has(stmtKey(card.id, k));
+          if (!isPaid) debt += s.amount;
+          if (!byDue.has(k)) byDue.set(k, { due: s.due, amount: 0, paid: isPaid });
           byDue.get(k)!.amount += s.amount;
         }
       });
     });
     const statements = [...byDue.values()].sort((a, b) => +a.due - +b.due);
+    const nextUnpaid = statements.find((s) => !s.paid);
     return {
       card, debt,
-      nextDue: statements[0]?.due ?? null,
-      nextAmount: statements[0]?.amount ?? 0,
+      nextDue: nextUnpaid?.due ?? null,
+      nextAmount: nextUnpaid?.amount ?? 0,
       statements,
     };
   });

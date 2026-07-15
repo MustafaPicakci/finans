@@ -87,7 +87,7 @@ export function todayLocal(): string {
    prices/price_history GLOBAL (piyasa verisi, herkes için aynı); settings global (fx/tefas),
    kullanıcı ayarları (horizon/cash_funds) user_settings'te. */
 export const TENANT_TABLES = [
-  "accounts", "recurring", "loans", "oneoffs", "trades", "cards", "card_txs", "categories", "transactions", "deposits",
+  "accounts", "recurring", "loans", "oneoffs", "trades", "cards", "card_txs", "categories", "transactions", "deposits", "recurring_realized", "statement_payments",
 ] as const;
 /** settings tablosunda GLOBAL kalan anahtarlar (piyasa verisi); gerisi kullanıcıya özel (user_settings). */
 export const GLOBAL_SETTING_KEYS = new Set(["fx_usd_try", "tefas_last_fetch", "tefas_last_attempt"]);
@@ -198,6 +198,27 @@ CREATE TABLE IF NOT EXISTS deposits (
   withholding double precision NOT NULL DEFAULT 0,
   account_id integer REFERENCES accounts(id) ON DELETE SET NULL
 );
+/* Faz 8 — düzenli kalemin (recurring) belirli bir ayının (ym) gerçekleştiğini işaretler; tahminde çift
+   sayımı önler. tx_id/card_tx_id: "geri al"da üretilen kaydı de silmek için. user_id, diğer tenant
+   tablolarındaki gibi ikinci sorgudaki TENANT_TABLES ALTER döngüsüyle eklenir (users o noktada var). */
+CREATE TABLE IF NOT EXISTS recurring_realized (
+  recurring_id integer NOT NULL REFERENCES recurring(id) ON DELETE CASCADE,
+  ym text NOT NULL,
+  tx_id integer REFERENCES transactions(id) ON DELETE SET NULL,
+  card_tx_id integer REFERENCES card_txs(id) ON DELETE SET NULL,
+  created_at text NOT NULL,
+  PRIMARY KEY (recurring_id, ym)
+);
+/* Faz 8.2 — kart ekstresi ödemesi: (kart, son ödeme günü) ödendi işareti. tx_id = üretilen gider kaydı
+   ("geri al" onu da siler). Borç/projeksiyon engine'de bu işaretlere göre ekstreyi düşer. user_id
+   TENANT_TABLES ALTER döngüsüyle eklenir. */
+CREATE TABLE IF NOT EXISTS statement_payments (
+  card_id integer NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+  due text NOT NULL,
+  tx_id integer REFERENCES transactions(id) ON DELETE SET NULL,
+  created_at text NOT NULL,
+  PRIMARY KEY (card_id, due)
+);
 /* Faz 5.1 — auth. users: kayıtlı kullanıcı; sessions: server-side oturum (revoke edilebilir).
    Çok-kiracılık (user_id scoping) Faz 5.2'de gelir; şimdilik veri paylaşımlı, kayıt yalnız ilk owner'a açık. */
 CREATE TABLE IF NOT EXISTS users (
@@ -220,6 +241,14 @@ CREATE TABLE IF NOT EXISTS sessions (
 ${TENANT_TABLES.map((t) => `ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS user_id integer REFERENCES users(id) ON DELETE CASCADE;`).join("\n")}
 -- Faz 6: portföy işlemi opsiyonel bir nakit hesaba bağlanabilir (SATIŞ +bakiye / ALIŞ −bakiye, TRY işlemde)
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS account_id integer REFERENCES accounts(id) ON DELETE SET NULL;
+-- Faz 8: düzenli kalem opsiyonel bir hesaba VEYA karta bağlanır (günü gelince gerçek kayda dönüşür);
+-- category_id hesap-hedefli gerçekleşen işlemin Rapor kategorisi; auto → cron otomatik gerçekleştirir
+ALTER TABLE recurring ADD COLUMN IF NOT EXISTS account_id integer REFERENCES accounts(id) ON DELETE SET NULL;
+ALTER TABLE recurring ADD COLUMN IF NOT EXISTS card_id integer REFERENCES cards(id) ON DELETE SET NULL;
+ALTER TABLE recurring ADD COLUMN IF NOT EXISTS category_id integer REFERENCES categories(id) ON DELETE SET NULL;
+ALTER TABLE recurring ADD COLUMN IF NOT EXISTS auto boolean NOT NULL DEFAULT false;
+-- Faz 8.2: kart otomatik ödeme talimatı — doluysa vadesi gelen ekstre cron ile bu hesaptan ödenir
+ALTER TABLE cards ADD COLUMN IF NOT EXISTS pay_account_id integer REFERENCES accounts(id) ON DELETE SET NULL;
 -- Faz 6: e-posta doğrulama. ADD ... DEFAULT true → MEVCUT (owner) kullanıcılar doğrulanmış sayılır
 -- (kilitlenmesin); ardından default'u false'a çevir → YENİ kayıtlar aktivasyon ister. İkisi de idempotent.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified boolean NOT NULL DEFAULT true;

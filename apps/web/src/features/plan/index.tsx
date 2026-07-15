@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { todayStr, parseD, fmtD, num, ymOf, loanPayDay, loanRemaining, type AllData, type Recurring, type OneOff } from "@finans/engine";
+import { todayStr, parseD, fmtD, keyOf, num, ymOf, recActiveOn, recOccurrenceDate, loanPayDay, loanRemaining, type AllData, type Recurring, type OneOff } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, tl } from "../../theme";
 import { Field, AmountField, Money, Empty, Row } from "../../ui";
@@ -14,9 +14,18 @@ import type { KalemPrefill } from "../forms";
 export function Plan({ data, reload, onRealize }: { data: AllData; reload: () => void; onRealize: (p: KalemPrefill) => void }) {
   const [changing, setChanging] = useState<Recurring | null>(null);
   const [chVal, setChVal] = useState({ amount: "", from_month: "" });
+  const [realizing, setRealizing] = useState<number | null>(null); // hedefsiz kalem için hesap/kategori seçimi
+  const [rp, setRp] = useState({ account_id: "", category_id: "" });
   const curYm = ymOf(new Date());
   const now = new Date();
   const today = todayStr();
+  /* gerçekleşmiş (kalem, bu ay) çiftleri — "Gerçekleşti"/"Geri al" durumu için */
+  const realizedSet = new Set(data.recurring_realized.map((x) => `${x.recurring_id}:${x.ym}`));
+  const realizeRec = async (r: Recurring, body: { account_id?: number | null; category_id?: number | null } = {}) => {
+    await api.realizeRecurring(r.id, curYm, body);
+    setRealizing(null); setRp({ account_id: "", category_id: "" }); reload();
+  };
+  const undoRealize = async (id: number) => { await api.unrealizeRecurring(id, curYm); reload(); };
   const prevYm = (ym: string) => {
     const [y, m] = ym.split("-").map(Number);
     return ymOf(new Date(y, m - 2, 1));
@@ -50,20 +59,69 @@ export function Plan({ data, reload, onRealize }: { data: AllData; reload: () =>
           ? `${r.from_month ? fmtYm(r.from_month) : "baştan"} – ${r.to_month ? fmtYm(r.to_month) : "süresiz"}`
           : "süresiz";
         const ended = r.to_month && r.to_month < curYm;
+        const isCard = r.card_id != null;
+        const targetName = r.account_id != null ? data.accounts.find((a) => a.id === r.account_id)?.name
+          : isCard ? data.cards.find((c) => c.id === r.card_id)?.name : null;
+        const hasTarget = r.account_id != null || isCard;
+        const active = recActiveOn(r, now) && !ended;
+        const due = keyOf(recOccurrenceDate(r, curYm)) <= today; // bu ayın günü geçti mi
+        const realizedNow = realizedSet.has(`${r.id}:${curYm}`);
+        const cats = data.categories.filter((c) => c.kind === r.kind);
         return (
           <div key={r.id} style={{ padding: "9px 0", borderBottom: i === data.recurring.length - 1 ? "none" : `1px solid ${T.line}`, opacity: ended ? 0.5 : 1 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <div style={{ flex: 1 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <div style={{ flex: 1, minWidth: 160 }}>
                 <div style={{ fontSize: 14 }}>{r.name} {ended && <span style={{ fontSize: 11, color: T.mut }}>· bitti</span>}</div>
-                <div style={{ fontSize: 11, color: T.mut }}>her ayın {r.day}. günü · {period}</div>
+                <div style={{ fontSize: 11, color: T.mut }}>
+                  her ayın {r.day}. günü · {period}
+                  {targetName && <> · <span style={{ color: T.mut3 }}>→ {targetName}{isCard ? " (kart)" : ""}</span></>}
+                  {r.auto && <> · <span style={{ color: T.acc }}>⚡ oto</span></>}
+                </div>
               </div>
               <Money v={r.kind === "income" ? r.amount : -r.amount} sign />
+              {realizedNow
+                ? (<>
+                    <span style={{ fontSize: 11, color: T.pos, ...css.mono }}>{fmtYm(curYm)} ✓</span>
+                    <button style={{ ...css.ghost, padding: "5px 10px", fontSize: 12 }} title={`${fmtYm(curYm)} gerçekleşmesini geri al`}
+                      onClick={() => undoRealize(r.id)}>Geri al</button>
+                  </>)
+                : active && due
+                  ? <button style={{ ...css.ghost, padding: "5px 10px", fontSize: 12, color: T.acc, borderColor: T.acc }}
+                      title={`${fmtYm(curYm)} ayı için deftere geçir`}
+                      onClick={() => (hasTarget ? realizeRec(r) : setRealizing(realizing === r.id ? null : r.id))}>
+                      {fmtYm(curYm)} gerçekleşti</button>
+                  : null}
               <button style={{ ...css.ghost, padding: "5px 10px", fontSize: 12 }}
                 onClick={() => { setChanging(changing?.id === r.id ? null : r); setChVal({ amount: String(r.amount), from_month: curYm }); }}>
                 Değiştir
               </button>
               <button style={css.del} onClick={async () => { await api.del("recurring", r.id); reload(); }}>✕</button>
             </div>
+            {realizing === r.id && !hasTarget && (
+              <form style={{ background: T.panel2, borderRadius: 8, padding: 10, marginTop: 8 }}
+                onSubmit={(e) => { e.preventDefault(); realizeRec(r, { account_id: rp.account_id ? +rp.account_id : null, category_id: rp.category_id ? +rp.category_id : null }); }}>
+                <div style={{ fontSize: 12, color: T.mut, marginBottom: 8 }}>
+                  Bu kalemin <b>{fmtYm(curYm)}</b> ayını deftere geçir. Hesap seçersen bakiyeye işler; boş bırakırsan yalnız Rapor'a girer.
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+                  <Field label="Hesap (ops.)">
+                    <select style={css.input} value={rp.account_id} onChange={(e) => setRp({ ...rp, account_id: e.target.value })}>
+                      <option value="">— (bakiyeye işleme)</option>
+                      {data.accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                    </select>
+                  </Field>
+                  {cats.length > 0 && (
+                    <Field label="Kategori (ops.)">
+                      <select style={css.input} value={rp.category_id} onChange={(e) => setRp({ ...rp, category_id: e.target.value })}>
+                        <option value="">Kategorisiz</option>
+                        {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                      </select>
+                    </Field>
+                  )}
+                  <button type="submit" style={css.btn}>Gerçekleştir</button>
+                </div>
+              </form>
+            )}
             {changing?.id === r.id && (
               <form style={{ background: T.panel2, borderRadius: 8, padding: 10, marginTop: 8 }}
                 onSubmit={(e) => { e.preventDefault(); applyChange(r); }}>

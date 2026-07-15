@@ -10,6 +10,7 @@
     "migrate": "cross-env NODE_OPTIONS=--experimental-sqlite tsx scripts/migrate-sqlite-to-pg.mjs"
   },
   "dependencies": {
+    "@finans/engine": "workspace:*",
     "@hono/node-server": "^1.13.7",
     "dotenv": "^17.4.2",
     "hono": "^4.6.16",

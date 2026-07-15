@@ -137,17 +137,27 @@ export function CardTxForm({ data, reload, onClose }: FormProps) {
   );
 }
 
-/** Düzenli gelir/gider → her ay tekrarlar, nakit projeksiyonuna girer */
-export function RecurringForm({ reload, onClose }: FormProps) {
-  const [rec, setRec] = useState({ kind: "income" as Recurring["kind"], name: "", amount: "", day: "", from_month: "", to_month: "" });
+/** Düzenli gelir/gider → her ay tekrarlar, nakit projeksiyonuna girer.
+    Opsiyonel hedef (hesap veya kart) bağlanırsa günü gelince Plan'dan "Gerçekleşti" ile (veya "otomatik"
+    açıksa cron ile) gerçek kayda dönüşür: hesap → transactions (bakiye+Rapor), kart → o ayki ekstreye. */
+export function RecurringForm({ data, reload, onClose }: FormProps) {
+  const [rec, setRec] = useState({
+    kind: "income" as Recurring["kind"], name: "", amount: "", day: "", from_month: "", to_month: "",
+    target: "", category_id: "", auto: false, // target: "" | "acc:<id>" | "card:<id>"
+  });
   const nameRef = useRef<HTMLInputElement>(null);
   const ok = !!rec.name && num(rec.amount) > 0 && +rec.day >= 1 && +rec.day <= 31;
   const reason = !rec.name ? "Ad gerekli" : !(num(rec.amount) > 0) ? "Tutar 0'dan büyük olmalı" : !(+rec.day >= 1 && +rec.day <= 31) ? "Gün 1-31 arası olmalı" : null;
+  const isAcc = rec.target.startsWith("acc:");
+  const cats = data.categories.filter((c) => c.kind === rec.kind);
   const save = async (andNew: boolean) => {
     if (!ok) return;
+    const account_id = rec.target.startsWith("acc:") ? +rec.target.slice(4) : null;
+    const card_id = rec.target.startsWith("card:") ? +rec.target.slice(5) : null;
     await api.post("recurring", {
       kind: rec.kind, name: rec.name, amount: num(rec.amount), day: +rec.day,
       from_month: rec.from_month || null, to_month: rec.to_month || null,
+      account_id, card_id, category_id: account_id && rec.category_id ? +rec.category_id : null, auto: rec.auto,
     });
     reload();
     if (andNew) { setRec({ ...rec, name: "", amount: "", day: "" }); nameRef.current?.focus(); } else onClose();
@@ -156,7 +166,8 @@ export function RecurringForm({ reload, onClose }: FormProps) {
     <form onSubmit={(e) => { e.preventDefault(); save(false); }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <Field label="Tür">
-          <select style={css.input} value={rec.kind} onChange={(e) => setRec({ ...rec, kind: e.target.value as Recurring["kind"] })}>
+          <select style={css.input} value={rec.kind}
+            onChange={(e) => { const kind = e.target.value as Recurring["kind"]; setRec({ ...rec, kind, category_id: "", ...(kind === "income" && rec.target.startsWith("card:") ? { target: "" } : {}) }); }}>
             <option value="income">Gelir</option><option value="expense">Gider</option>
           </select>
         </Field>
@@ -165,8 +176,39 @@ export function RecurringForm({ reload, onClose }: FormProps) {
         <Field label="Gün (1-31)"><input style={css.input} inputMode="numeric" placeholder="1" value={rec.day} onChange={(e) => setRec({ ...rec, day: e.target.value })} /></Field>
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+        <Field label="Hedef (ops.)" flex={2}>
+          <select style={css.input} value={rec.target} onChange={(e) => setRec({ ...rec, target: e.target.value, category_id: "" })}>
+            <option value="">Hedef yok (yalnız tahmin)</option>
+            {data.accounts.map((a) => <option key={`a${a.id}`} value={`acc:${a.id}`}>Hesap: {a.name}</option>)}
+            {rec.kind === "expense" && data.cards.map((c) => <option key={`c${c.id}`} value={`card:${c.id}`}>Kart: {c.name}</option>)}
+          </select>
+        </Field>
+        {isAcc && cats.length > 0 && (
+          <Field label="Kategori (ops.)" flex={2}>
+            <select style={css.input} value={rec.category_id} onChange={(e) => setRec({ ...rec, category_id: e.target.value })}>
+              <option value="">Kategorisiz</option>
+              {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </Field>
+        )}
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
         <Field label="Başlangıç ayı (ops.)"><input type="month" style={css.input} value={rec.from_month} onChange={(e) => setRec({ ...rec, from_month: e.target.value })} /></Field>
         <Field label="Bitiş ayı (ops.)"><input type="month" style={css.input} value={rec.to_month} onChange={(e) => setRec({ ...rec, to_month: e.target.value })} /></Field>
+      </div>
+      {rec.target && (
+        <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, fontSize: 13, color: T.text, cursor: "pointer" }}>
+          <input type="checkbox" checked={rec.auto} onChange={(e) => setRec({ ...rec, auto: e.target.checked })} />
+          Otomatik gerçekleştir — günü gelince kendiliğinden {rec.target.startsWith("card:") ? "ekstreye" : "hesaba"} işlensin
+        </label>
+      )}
+      <div style={{ fontSize: 12, color: T.mut, marginTop: 8, background: T.panel2, borderRadius: 8, padding: "8px 12px" }}>
+        {!rec.target
+          ? "Hedef yok: yalnız Nakit Akışı tahminine girer, bakiyeye/Rapor'a dokunmaz."
+          : rec.target.startsWith("card:")
+            ? "Kart hedefi: gerçekleşince o ayki kart ekstresine düşer; son ödeme günü nakit akışına gider olarak girer."
+            : "Hesap hedefi: gerçekleşince seçili hesabın bakiyesine işler ve Rapor'a girer."}
+        {rec.target && " Günü gelince Plan'dan “Gerçekleşti” ile, otomatik açıksa kendiliğinden işlenir."}
       </div>
       <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} />
     </form>

@@ -4,7 +4,8 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import cron from "node-cron";
-import { db, initDb, nowLocal, todayLocal, TENANT_TABLES, GLOBAL_SETTING_KEYS } from "./db.js";
+import { txShares, keyOf, type Card, type CardTx } from "@finans/engine";
+import { db, initDb, nowLocal, todayLocal, TENANT_TABLES, GLOBAL_SETTING_KEYS, type TxClient } from "./db.js";
 import { refreshAll } from "./prices.js";
 import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, SESSION_COOKIE, type SessionUser } from "./auth.js";
 import { sendMail, resetEmail, verifyEmail } from "./mail.js";
@@ -207,7 +208,7 @@ api.use("*", async (c, next) => {
 /* ---- tek seferde tüm veri (kullanıcıya scope'lu; prices/price_history GLOBAL) ---- */
 api.get("/all", async (c) => {
   const uid = c.get("user").id;
-  const [accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions, deposits, autoPrices, userPrices, price_history, globalSettings, userSettings] =
+  const [accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, autoPrices, userPrices, price_history, globalSettings, userSettings] =
     await Promise.all([
       db.all("SELECT * FROM accounts WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM recurring WHERE user_id=? ORDER BY day, id", uid),
@@ -219,6 +220,8 @@ api.get("/all", async (c) => {
       db.all("SELECT * FROM categories WHERE user_id=? ORDER BY name", uid),
       db.all("SELECT * FROM transactions WHERE user_id=? ORDER BY date DESC, id DESC", uid),
       db.all("SELECT * FROM deposits WHERE user_id=? ORDER BY open_date, id", uid),
+      db.all("SELECT recurring_id, ym FROM recurring_realized WHERE user_id=?", uid),
+      db.all("SELECT card_id, due FROM statement_payments WHERE user_id=?", uid),
       db.all<any>("SELECT symbol, asset_type, price, source, updated_at, currency FROM prices"),
       db.all<any>("SELECT symbol, asset_type, price, updated_at, currency FROM user_prices WHERE user_id=?", uid),
       db.all("SELECT * FROM price_history ORDER BY date"),
@@ -229,7 +232,7 @@ api.get("/all", async (c) => {
   const pm = new Map<string, any>(autoPrices.map((p) => [`${p.asset_type}:${p.symbol}`, { ...p, source: "auto" }]));
   for (const up of userPrices) pm.set(`${up.asset_type}:${up.symbol}`, { ...up, source: "manual" });
   return c.json({
-    accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions, deposits,
+    accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments,
     prices: [...pm.values()], price_history,
     // global (fx/tefas) + kullanıcı ayarları (horizon/cash_funds); kullanıcı çakışmada kazanır
     settings: Object.fromEntries([...globalSettings, ...userSettings].map((s) => [s.key, s.value])),
@@ -276,7 +279,91 @@ crud("recurring", "recurring", [
   { name: "kind", required: true }, { name: "name", required: true },
   { name: "amount", required: true }, { name: "day", required: true },
   { name: "from_month" }, { name: "to_month" },
+  { name: "account_id" }, { name: "card_id" }, { name: "category_id" }, { name: "auto" },
 ]);
+
+/* ---- düzenli kalemin (recurring) bir ayını (ym) gerçekleştirme ----
+   Hedefe göre gerçek kayıt üretir: kart → card_txs (ilgili ekstreye düşer), hesap → transactions
+   (bakiyeyi oynatır, Rapor'a girer). recurring_realized (recurring_id, ym) PK'si ile TAM-BİR-KEZ
+   (idempotent); tahmin (project) o ayı artık göstermez → çift sayım önlenir. */
+type RecurringRow = {
+  id: number; kind: "income" | "expense"; name: string; amount: number; day: number;
+  from_month: string | null; to_month: string | null;
+  account_id: number | null; card_id: number | null; category_id: number | null;
+};
+const YM_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+const recActiveInYm = (r: RecurringRow, ym: string) =>
+  (!r.from_month || ym >= r.from_month) && (!r.to_month || ym <= r.to_month);
+/** ym ('YYYY-MM') ayında ödeme günü; kısa ayda ay sonuna kayar → 'YYYY-MM-DD' */
+function occurrenceDate(ym: string, day: number): string {
+  const [y, m] = ym.split("-").map(Number);
+  const dim = new Date(y, m, 0).getDate(); // m 1-indexli → o ayın gün sayısı
+  return `${ym}-${String(Math.min(day, dim)).padStart(2, "0")}`;
+}
+/** Tek tx içinde, idempotent. Yeni işaretlendiyse true; zaten gerçekleşmişse false döner. */
+async function realizeOccurrence(
+  t: TxClient, uid: number, r: RecurringRow, ym: string, opts?: { account_id?: number | null; category_id?: number | null },
+): Promise<boolean> {
+  const mark = await t.run(
+    "INSERT INTO recurring_realized (recurring_id, ym, created_at, user_id) VALUES (?,?,?,?) ON CONFLICT (recurring_id, ym) DO NOTHING",
+    r.id, ym, nowLocal(), uid,
+  );
+  if (!mark.changes) return false; // zaten gerçekleşmiş
+  const date = occurrenceDate(ym, r.day);
+  if (r.card_id != null && r.kind === "expense") {
+    const info = await t.run(
+      "INSERT INTO card_txs (card_id,date,name,amount,installments,user_id) VALUES (?,?,?,?,?,?) RETURNING id",
+      r.card_id, date, r.name, r.amount, 1, uid,
+    );
+    await t.run("UPDATE recurring_realized SET card_tx_id=? WHERE recurring_id=? AND ym=?", info.id, r.id, ym);
+  } else {
+    const signed = (r.kind === "income" ? 1 : -1) * r.amount;
+    const accountId = opts?.account_id ?? r.account_id ?? null;
+    const categoryId = opts?.category_id ?? r.category_id ?? null;
+    const info = await t.run(
+      "INSERT INTO transactions (date,name,amount,category_id,account_id,user_id) VALUES (?,?,?,?,?,?) RETURNING id",
+      date, r.name, signed, categoryId, accountId, uid,
+    );
+    if (accountId != null) await t.run("UPDATE accounts SET balance = balance + ? WHERE id=? AND user_id=?", signed, accountId, uid);
+    await t.run("UPDATE recurring_realized SET tx_id=? WHERE recurring_id=? AND ym=?", info.id, r.id, ym);
+  }
+  return true;
+}
+
+api.post("/recurring/:id/realize", async (c) => {
+  const uid = c.get("user").id;
+  const b = await c.req.json().catch(() => ({}));
+  const ym = String((b as any).ym ?? "");
+  if (!YM_RE.test(ym)) return c.json({ error: "ym 'YYYY-MM' olmalı" }, 400);
+  const r = await db.get<RecurringRow>("SELECT * FROM recurring WHERE id=? AND user_id=?", c.req.param("id"), uid);
+  if (!r) return c.json({ error: "kalem yok" }, 404);
+  if (!recActiveInYm(r, ym)) return c.json({ error: "kalem o ay aktif değil" }, 400);
+  const acc = (b as any).account_id != null && (b as any).account_id !== "" ? Number((b as any).account_id) : undefined;
+  const cat = (b as any).category_id != null && (b as any).category_id !== "" ? Number((b as any).category_id) : undefined;
+  const created = await db.tx((t) => realizeOccurrence(t, uid, r, ym, { account_id: acc, category_id: cat }));
+  return c.json({ ok: true, already: !created });
+});
+
+api.delete("/recurring/:id/realize/:ym", async (c) => {
+  const uid = c.get("user").id;
+  const id = c.req.param("id"), ym = c.req.param("ym");
+  await db.tx(async (t) => {
+    const row = await t.get<{ tx_id: number | null; card_tx_id: number | null }>(
+      "SELECT tx_id, card_tx_id FROM recurring_realized WHERE recurring_id=? AND ym=? AND user_id=?", id, ym, uid,
+    );
+    if (!row) return;
+    if (row.tx_id != null) {
+      const tx = await t.get<{ amount: number; account_id: number | null }>(
+        "SELECT amount, account_id FROM transactions WHERE id=? AND user_id=?", row.tx_id, uid,
+      );
+      await t.run("DELETE FROM transactions WHERE id=? AND user_id=?", row.tx_id, uid);
+      if (tx?.account_id != null) await t.run("UPDATE accounts SET balance = balance - ? WHERE id=? AND user_id=?", tx.amount, tx.account_id, uid);
+    }
+    if (row.card_tx_id != null) await t.run("DELETE FROM card_txs WHERE id=? AND user_id=?", row.card_tx_id, uid);
+    await t.run("DELETE FROM recurring_realized WHERE recurring_id=? AND ym=? AND user_id=?", id, ym, uid);
+  });
+  return c.json({ ok: true });
+});
 crud("loans", "loans", [
   { name: "name", required: true }, { name: "amount", required: true },
   { name: "first_date", required: true }, { name: "total", required: true },
@@ -367,11 +454,78 @@ api.delete("/deposits/:id", async (c) => {
 crud("cards", "cards", [
   { name: "name", required: true }, { name: "limit_amount" },
   { name: "statement_day", required: true }, { name: "due_day", required: true },
+  { name: "pay_account_id" }, // otomatik ödeme talimatı hesabı (ops.)
 ]);
 crud("cardtxs", "card_txs", [
   { name: "card_id", required: true }, { name: "date", required: true },
   { name: "name", required: true }, { name: "amount", required: true }, { name: "installments" },
 ]);
+
+/* ---- kart ekstresi ödeme (Faz 8.2) ----
+   Ekstre olayı projeksiyonda sanaldı; "Ödedim" onu gerçek kayda çevirir: transactions'a −tutar yazılır
+   (hesap seçildiyse bakiye düşer, Rapor'a girer), (card_id, due) statement_payments ile işaretlenir →
+   borç ve projeksiyon o ekstreyi artık saymaz (çift sayım yok). Tutar SUNUCUDA hesaplanır (engine
+   txShares — istemciden gelen tutara güvenilmez). Geçmiş vadeli ekstre de ödenebilir (kayıt altına almak
+   için); o zaten borçta/projeksiyonda olmadığından yalnız defter kaydı üretir. */
+const DUE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const statementAmount = (card: Card, txs: CardTx[], dueK: string): number =>
+  txs.reduce((s, t) => s + txShares(t, card).filter((sh) => keyOf(sh.due) === dueK).reduce((a, x) => a + x.amount, 0), 0);
+
+/** Tek tx içinde idempotent ekstre ödemesi (elle "Ödedim" + otomatik talimat ortak yazıcısı).
+    Yeni ödendiyse true; (card, due) zaten işaretliyse false döner. */
+async function payStatementTx(
+  t: TxClient, uid: number, card: { id: number; name: string }, dueK: string, amount: number,
+  accountId: number | null, categoryId: number | null,
+): Promise<boolean> {
+  const mark = await t.run(
+    "INSERT INTO statement_payments (card_id, due, created_at, user_id) VALUES (?,?,?,?) ON CONFLICT (card_id, due) DO NOTHING",
+    card.id, dueK, nowLocal(), uid,
+  );
+  if (!mark.changes) return false;
+  const info = await t.run(
+    "INSERT INTO transactions (date,name,amount,category_id,account_id,user_id) VALUES (?,?,?,?,?,?) RETURNING id",
+    todayLocal(), `${card.name} ekstresi`, -amount, categoryId, accountId, uid,
+  );
+  if (accountId != null) await t.run("UPDATE accounts SET balance = balance - ? WHERE id=? AND user_id=?", amount, accountId, uid);
+  await t.run("UPDATE statement_payments SET tx_id=? WHERE card_id=? AND due=?", info.id, card.id, dueK);
+  return true;
+}
+
+api.post("/cards/:id/pay-statement", async (c) => {
+  const uid = c.get("user").id;
+  const b = await c.req.json().catch(() => ({}));
+  const due = String((b as any).due ?? "");
+  if (!DUE_RE.test(due)) return c.json({ error: "due 'YYYY-MM-DD' olmalı" }, 400);
+  const card = await db.get<Card>("SELECT * FROM cards WHERE id=? AND user_id=?", c.req.param("id"), uid);
+  if (!card) return c.json({ error: "kart yok" }, 404);
+  const txs = await db.all<CardTx>("SELECT * FROM card_txs WHERE card_id=? AND user_id=?", card.id, uid);
+  const amount = statementAmount(card, txs, due);
+  if (!(amount > 0)) return c.json({ error: "bu tarihte ekstre yok" }, 400);
+  const accountId = (b as any).account_id != null && (b as any).account_id !== "" ? Number((b as any).account_id) : null;
+  const categoryId = (b as any).category_id != null && (b as any).category_id !== "" ? Number((b as any).category_id) : null;
+  const created = await db.tx((t) => payStatementTx(t, uid, card, due, amount, accountId, categoryId));
+  return c.json({ ok: true, already: !created, amount });
+});
+
+api.delete("/cards/:id/pay-statement/:due", async (c) => {
+  const uid = c.get("user").id;
+  const cardId = c.req.param("id"), due = c.req.param("due");
+  await db.tx(async (t) => {
+    const row = await t.get<{ tx_id: number | null }>(
+      "SELECT tx_id FROM statement_payments WHERE card_id=? AND due=? AND user_id=?", cardId, due, uid,
+    );
+    if (!row) return;
+    if (row.tx_id != null) {
+      const tx = await t.get<{ amount: number; account_id: number | null }>(
+        "SELECT amount, account_id FROM transactions WHERE id=? AND user_id=?", row.tx_id, uid,
+      );
+      await t.run("DELETE FROM transactions WHERE id=? AND user_id=?", row.tx_id, uid);
+      if (tx?.account_id != null) await t.run("UPDATE accounts SET balance = balance - ? WHERE id=? AND user_id=?", tx.amount, tx.account_id, uid);
+    }
+    await t.run("DELETE FROM statement_payments WHERE card_id=? AND due=? AND user_id=?", cardId, due, uid);
+  });
+  return c.json({ ok: true });
+});
 crud("categories", "categories", [
   { name: "name", required: true }, { name: "kind", required: true }, { name: "color" },
 ]);
@@ -463,7 +617,7 @@ api.put("/settings", async (c) => {
 /* ---- KVKK: kullanıcının tüm verisini JSON indir ---- */
 api.get("/export", async (c) => {
   const uid = c.get("user").id;
-  const [accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions, deposits, userSettings] =
+  const [accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, userSettings] =
     await Promise.all([
       db.all("SELECT * FROM accounts WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM recurring WHERE user_id=? ORDER BY id", uid),
@@ -475,12 +629,14 @@ api.get("/export", async (c) => {
       db.all("SELECT * FROM categories WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM transactions WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM deposits WHERE user_id=? ORDER BY id", uid),
+      db.all("SELECT * FROM recurring_realized WHERE user_id=? ORDER BY recurring_id, ym", uid),
+      db.all("SELECT * FROM statement_payments WHERE user_id=? ORDER BY card_id, due", uid),
       db.all<{ key: string; value: string }>("SELECT key, value FROM user_settings WHERE user_id=?", uid),
     ]);
   c.header("Content-Disposition", `attachment; filename="finans-export-${todayLocal()}.json"`);
   return c.json({
     exported_at: nowLocal(), user: c.get("user"),
-    accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions, deposits,
+    accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments,
     settings: Object.fromEntries(userSettings.map((s) => [s.key, s.value])),
   });
 });
@@ -503,12 +659,73 @@ app.route("/api", api);
 app.use("/*", serveStatic({ root: "../web/dist" }));
 app.get("*", serveStatic({ path: "../web/dist/index.html" }));
 
-/* saat başı + her 15 dk fiyat tazele (piyasa dışı saatlerde de zararsız) */
-cron.schedule("*/15 * * * *", () => {
+/* ---- otonom gerçekleştirme: auto=true + hedefli düzenli kalemleri günü gelince gerçek kayda çevir ----
+   Yalnız cari + (kaçmışsa) önceki ay, occurrence günü geçmiş ve son ~45 gün içindekiler
+   (yeni açılan auto kaleme derin geçmiş doldurtma yok). recurring_realized PK'si ile idempotent. */
+async function materializeDueRecurring(): Promise<void> {
+  const today = todayLocal();
+  const [ty, tm] = today.split("-").map(Number);
+  const ymCur = `${ty}-${String(tm).padStart(2, "0")}`;
+  const pd = new Date(ty, tm - 2, 1); // önceki ay
+  const ymPrev = `${pd.getFullYear()}-${String(pd.getMonth() + 1).padStart(2, "0")}`;
+  const dateMs = (s: string) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d).getTime(); };
+  const rows = await db.all<RecurringRow & { user_id: number }>(
+    "SELECT * FROM recurring WHERE auto = true AND (account_id IS NOT NULL OR card_id IS NOT NULL)",
+  );
+  for (const r of rows) {
+    for (const ym of [ymPrev, ymCur]) {
+      if (!recActiveInYm(r, ym)) continue;
+      const date = occurrenceDate(ym, r.day);
+      if (date > today) continue; // günü gelmemiş
+      if (dateMs(today) - dateMs(date) > 45 * 86_400_000) continue; // pencere
+      await db.tx((t) => realizeOccurrence(t, r.user_id, r, ym)).catch((e) => console.error("[recurring] auto gerçekleştirme hatası:", e));
+    }
+  }
+}
+
+/* ---- otomatik ekstre ödeme talimatı: pay_account_id tanımlı kartların vadesi gelen ekstrelerini öde ----
+   Banka talimatı gibi: son ödeme günü geldiğinde (son ~10 gün penceresi — sunucu kapalıysa kaçanı telafi
+   eder, derin geçmişi doldurmaz) ödenmemiş ekstre kartın hesabından ödenir. statement_payments PK'si ile
+   idempotent; hesap kullanıcıda yoksa (silinmiş vb.) atlanır. */
+async function materializeDueStatements(): Promise<void> {
+  const today = todayLocal();
+  const dateMs = (s: string) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d).getTime(); };
+  const cards = await db.all<Card & { user_id: number; pay_account_id: number }>(
+    "SELECT * FROM cards WHERE pay_account_id IS NOT NULL",
+  );
+  for (const card of cards) {
+    const account = await db.get("SELECT id FROM accounts WHERE id=? AND user_id=?", card.pay_account_id, card.user_id);
+    if (!account) continue; // talimat hesabı yok/başkasının — otomatik ödeme yapma
+    const txs = await db.all<CardTx>("SELECT * FROM card_txs WHERE card_id=? AND user_id=?", card.id, card.user_id);
+    /* vadesi bugüne dek gelmiş (pencere içi) ekstre vadeleri ve tutarları */
+    const dues = new Map<string, number>();
+    for (const t of txs) for (const sh of txShares(t, card)) {
+      const k = keyOf(sh.due);
+      if (k <= today && dateMs(today) - dateMs(k) <= 10 * 86_400_000) dues.set(k, (dues.get(k) || 0) + sh.amount);
+    }
+    for (const [dueK, amount] of dues) {
+      if (!(amount > 0)) continue;
+      await db.tx((t) => payStatementTx(t, card.user_id, card, dueK, amount, card.pay_account_id, null))
+        .catch((e) => console.error("[kart] otomatik ekstre ödeme hatası:", e));
+    }
+  }
+}
+
+/* saat başı + her 15 dk fiyat tazele (piyasa dışı saatlerde de zararsız) + otonom kalemleri/ekstreleri işle */
+const runScheduledJobs = () => {
   refreshAll().catch(() => {});
-});
+  materializeDueRecurring().catch(() => {});
+  materializeDueStatements().catch(() => {});
+};
+cron.schedule("*/15 * * * *", runScheduledJobs);
 
 const port = Number(process.env.PORT || 8787);
 /* şema hazır olsun, sonra sun */
 await initDb();
 serve({ fetch: app.fetch, port }, () => console.log(`finans → http://localhost:${port}`));
+
+/* Başlangıç catch-up'ı: Render free tier trafik yokken süreci uyutur; uyanışta node-cron ilk 15-dk
+   tıkına dek beklerdi → kullanıcı bayat fiyat/işlenmemiş otonom kalem görürdü. Sunar sunmaz bir kez
+   çalıştır — uykuda kaçan vadeler telafi pencereleriyle (45/10 gün) yakalanır. Sık uyanışlar zararsız:
+   TEFAS günde-bir/geri-çekilme kapıları DB'de, otonom işler idempotent (PK'ler çift kaydı engeller). */
+setTimeout(runScheduledJobs, 3_000).unref();

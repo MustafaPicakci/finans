@@ -1,5 +1,5 @@
 import type { AllData, Currency } from "./types.js";
-import { keyOf, hits } from "./date.js";
+import { keyOf, hits, ymOf } from "./date.js";
 import { recActiveOn } from "./recurring.js";
 import { loanPayDay, loanRemaining, loanActiveOn } from "./loans.js";
 import { cardInfos } from "./cards.js";
@@ -17,6 +17,9 @@ export type Day = { date: Date; k: string; net: number; bal: number; assets: num
 export function project(data: AllData, months: number, rates: Rates = { usdTry: 0 }): Day[] {
   const start = new Date(); start.setHours(0, 0, 0, 0);
   const end = new Date(start); end.setMonth(end.getMonth() + months);
+  /* gerçekleşmiş (kalem, ay) çiftleri: o ay artık gerçek kayıt (transaction/card_tx) olduğundan
+     recurring döngüsünde tekrar EKLENMEZ — aksi halde tahmin çift sayardı */
+  const realized = new Set((data.recurring_realized ?? []).map((r) => `${r.recurring_id}:${r.ym}`));
   const oneMap = new Map<string, { n: string; a: number }[]>();
   data.oneoffs.forEach((o) => {
     if (!oneMap.has(o.date)) oneMap.set(o.date, []);
@@ -49,10 +52,13 @@ export function project(data: AllData, months: number, rates: Rates = { usdTry: 
     return { assets, cashFunds };
   };
   let bal = data.accounts.reduce((s, a) => s + a.balance, 0);
-  /* kart ekstre ödemeleri: son ödeme tarihine gider olarak düşer */
+  /* kart ekstre ödemeleri: son ödeme tarihine gider olarak düşer; ödendi işaretlenen ekstre atlanır
+     (ödeme zaten transactions'a yazıldı → başlangıç bakiyesinde; tekrar düşmek çift sayım olurdu) */
+  const paidStmts = new Set((data.statement_payments ?? []).map((p) => `${p.card_id}:${p.due}`));
   const stmtMap = new Map<string, { n: string; a: number }[]>();
-  cardInfos(data.cards, data.card_txs, start).forEach((ci) => {
+  cardInfos(data.cards, data.card_txs, start, paidStmts).forEach((ci) => {
     ci.statements.forEach((s) => {
+      if (s.paid) return;
       const k = keyOf(s.due);
       if (!stmtMap.has(k)) stmtMap.set(k, []);
       stmtMap.get(k)!.push({ n: `${ci.card.name} ekstresi`, a: -s.amount });
@@ -62,7 +68,8 @@ export function project(data: AllData, months: number, rates: Rates = { usdTry: 
   for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
     const ev: { n: string; a: number }[] = [];
     data.recurring.forEach((r) => {
-      if (recActiveOn(r, d) && hits(d, r.day)) ev.push({ n: r.name, a: r.kind === "income" ? r.amount : -r.amount });
+      if (recActiveOn(r, d) && hits(d, r.day) && !realized.has(`${r.id}:${ymOf(d)}`))
+        ev.push({ n: r.name, a: r.kind === "income" ? r.amount : -r.amount });
     });
     data.loans.forEach((l) => {
       if (loanActiveOn(l, d) && hits(d, loanPayDay(l)))

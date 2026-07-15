@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { clampDay, firstCutoff, dueOf, txShares, cardInfos } from "./cards.js";
+import { clampDay, firstCutoff, dueOf, txShares, cardInfos, stmtKey } from "./cards.js";
 import type { Card, CardTx } from "./types.js";
 
 const card: Card = { id: 1, name: "Test Kart", limit_amount: 50000, statement_day: 15, due_day: 5 };
@@ -92,5 +92,20 @@ describe("cardInfos", () => {
     const [info] = cardInfos([card], txs, today);
     expect(info.statements).toHaveLength(1);
     expect(info.statements[0].amount).toBeCloseTo(300);
+  });
+  it("ödendi işaretlenen ekstre listede kalır (paid) ama borca ve sıradakine sayılmaz", () => {
+    const today = new Date(2026, 5, 1); // 1 Haziran
+    const txs: CardTx[] = [
+      { id: 1, card_id: 1, date: "2026-06-10", name: "A", amount: 300, installments: 2 }, // 5 Tem + 5 Ağu ekstreleri
+    ];
+    // 5 Temmuz ekstresi ödendi
+    const paid = new Set([stmtKey(1, "2026-07-05")]);
+    const [info] = cardInfos([card], txs, today, paid);
+    expect(info.statements).toHaveLength(2);
+    expect(info.statements[0].paid).toBe(true);
+    expect(info.statements[1].paid).toBe(false);
+    expect(info.debt).toBeCloseTo(150);           // yalnız ödenmemiş pay
+    expect(info.nextDue).toEqual(new Date(2026, 7, 5)); // sıradaki = ilk ÖDENMEMİŞ ekstre
+    expect(info.nextAmount).toBeCloseTo(150);
   });
 });

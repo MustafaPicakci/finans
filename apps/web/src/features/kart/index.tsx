@@ -1,20 +1,74 @@
 import React, { useRef, useState } from "react";
-import { parseD, fmtD, num, cardInfos, txShares, type AllData } from "@finans/engine";
+import { parseD, fmtD, keyOf, num, cardInfos, stmtKey, txShares, type AllData, type Card } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, tl } from "../../theme";
 import { Field, AmountField, Hint, Empty, Row } from "../../ui";
 import type { AddKind } from "../forms";
 
 /* ————— KARTLAR ————— */
-/* Kart TANIMI burada yapılır; kart HARCAMASI girişi global "+" akışındadır. */
+/* Kart TANIMI burada yapılır; kart HARCAMASI girişi global "+" akışındadır.
+   Ekstre ödeme (Faz 8.2): "Ödedim" ekstreyi gerçek gider kaydına çevirir (hesap seçilirse bakiye düşer,
+   Rapor'a girer) ve borç/projeksiyondan düşer; "Geri al" kaydı ve işareti siler. */
+
+/** Son ~40 gün içinde vadesi GEÇMİŞ en yakın ekstre (kayıt altına almak için) — cardInfos yalnız
+    bugünden sonrakileri döndürdüğünden geçmişteki son ekstre burada ayrıca hesaplanır. */
+function lastPastStatement(card: Card, txs: AllData["card_txs"], today: Date): { due: Date; amount: number } | null {
+  const byDue = new Map<string, { due: Date; amount: number }>();
+  txs.filter((t) => t.card_id === card.id).forEach((t) => {
+    txShares(t, card).forEach((s) => {
+      if (s.due < today && today.getTime() - s.due.getTime() <= 40 * 86_400_000) {
+        const k = keyOf(s.due);
+        if (!byDue.has(k)) byDue.set(k, { due: s.due, amount: 0 });
+        byDue.get(k)!.amount += s.amount;
+      }
+    });
+  });
+  const list = [...byDue.values()].sort((a, b) => +b.due - +a.due);
+  return list[0] ?? null;
+}
+
 export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => void; onAdd: (k: AddKind) => void }) {
   const [cf, setCf] = useState({ name: "", limit_amount: "", statement_day: "", due_day: "" });
   const cardNameRef = useRef<HTMLInputElement>(null);
   const cardOk = !!cf.name && +cf.statement_day >= 1 && +cf.statement_day <= 31 && +cf.due_day >= 1 && +cf.due_day <= 31;
   const cardReason = !cf.name ? "Kart adı gerekli" : !(+cf.statement_day >= 1 && +cf.statement_day <= 31) ? "Kesim günü 1-31 arası olmalı" : !(+cf.due_day >= 1 && +cf.due_day <= 31) ? "Son ödeme günü 1-31 arası olmalı" : null;
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const infos = cardInfos(data.cards, data.card_txs, today);
+  const paidSet = new Set(data.statement_payments.map((p) => stmtKey(p.card_id, p.due)));
+  const infos = cardInfos(data.cards, data.card_txs, today, paidSet);
   const totalDebt = infos.reduce((s, c) => s + c.debt, 0);
+  /* ödeme mini-formu: hangi (kart, vade) için açık + hesap/kategori seçimi */
+  const [paying, setPaying] = useState<{ cardId: number; dueK: string; amount: number } | null>(null);
+  const [pp, setPp] = useState({ account_id: "", category_id: "" });
+  const expCats = data.categories.filter((c) => c.kind === "expense");
+  const doPay = async () => {
+    if (!paying) return;
+    await api.payStatement(paying.cardId, paying.dueK, {
+      account_id: pp.account_id ? +pp.account_id : null,
+      category_id: pp.category_id ? +pp.category_id : null,
+    });
+    setPaying(null); setPp({ account_id: "", category_id: "" }); reload();
+  };
+  const unpay = async (cardId: number, dueK: string) => { await api.unpayStatement(cardId, dueK); reload(); };
+  /* tek satırlık ekstre görünümü: durum + Ödedim/Geri al */
+  const StmtRow = ({ cardId, label, due, amount, paid, first }: { cardId: number; label: string; due: Date; amount: number; paid: boolean; first: boolean }) => {
+    const dueK = keyOf(due);
+    return (
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, fontSize: 12, marginTop: first ? 8 : 4 }}>
+        <span style={{ color: T.mut }}>
+          {label} · <span style={css.mono}>{fmtD(due, { day: "2-digit", month: "short" })}</span>
+          {paid && <span style={{ color: T.pos }}> · ödendi ✓</span>}
+        </span>
+        <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ ...css.mono, color: paid ? T.mut3 : T.text, textDecoration: paid ? "line-through" : "none" }}>{tl.format(Math.round(amount))}</span>
+          {paid
+            ? <button style={{ ...css.ghost, padding: "3px 8px", fontSize: 11 }} title="Ödemeyi geri al (gider kaydı silinir, bakiye iade edilir)"
+                onClick={() => unpay(cardId, dueK)}>Geri al</button>
+            : <button style={{ ...css.ghost, padding: "3px 8px", fontSize: 11, color: T.acc, borderColor: T.acc }}
+                onClick={() => { setPaying(paying?.cardId === cardId && paying.dueK === dueK ? null : { cardId, dueK, amount }); setPp({ account_id: "", category_id: "" }); }}>Ödedim</button>}
+        </span>
+      </div>
+    );
+  };
 
   return (<>
     <div style={css.card}>
@@ -58,14 +112,58 @@ export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => 
                 </div>
               </div>
             )}
-            {ci.statements.slice(0, 3).map((s, j) => (
-              <div key={j} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginTop: j === 0 ? 8 : 4 }}>
-                <span style={{ color: T.mut }}>
-                  {j === 0 ? "sıradaki ekstre" : "sonraki"} · <span style={css.mono}>{fmtD(s.due, { day: "2-digit", month: "short" })}</span>
-                </span>
-                <span style={{ ...css.mono, color: T.text }}>{tl.format(Math.round(s.amount))}</span>
-              </div>
-            ))}
+            {/* otomatik ödeme talimatı: hesap seçiliyse vadesi gelen ekstre cron ile o hesaptan ödenir */}
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, fontSize: 12, color: T.mut }}>
+              <span title="Vade günü geldiğinde ekstre seçili hesaptan kendiliğinden ödenir (bakiye düşer, Rapor'a girer)">
+                {ci.card.pay_account_id ? <span style={{ color: T.acc }}>⚡</span> : null} otomatik ödeme:
+              </span>
+              <select style={{ ...css.input, width: "auto", padding: "4px 8px", fontSize: 12 }} value={ci.card.pay_account_id ?? ""}
+                onChange={async (e) => { await api.put(`cards/${ci.card.id}`, { pay_account_id: e.target.value ? +e.target.value : null }); reload(); }}>
+                <option value="">talimat yok (elle)</option>
+                {data.accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select>
+            </div>
+            {(() => {
+              const past = lastPastStatement(ci.card, data.card_txs, today);
+              const pastPaid = past ? paidSet.has(stmtKey(ci.card.id, keyOf(past.due))) : false;
+              return (<>
+                {past && (
+                  <StmtRow cardId={ci.card.id} label="geçen ekstre" due={past.due} amount={past.amount} paid={pastPaid} first />
+                )}
+                {ci.statements.slice(0, 3).map((s, j) => (
+                  <StmtRow key={j} cardId={ci.card.id} label={j === 0 ? "sıradaki ekstre" : "sonraki"}
+                    due={s.due} amount={s.amount} paid={s.paid} first={j === 0 && !past} />
+                ))}
+              </>);
+            })()}
+            {paying?.cardId === ci.card.id && (
+              <form style={{ background: T.panel2, borderRadius: 8, padding: 10, marginTop: 8 }}
+                onSubmit={(e) => { e.preventDefault(); doPay(); }}>
+                <div style={{ fontSize: 12, color: T.mut, marginBottom: 8 }}>
+                  <span style={css.mono}>{fmtD(parseD(paying.dueK), { day: "2-digit", month: "short" })}</span> ekstresi
+                  (<span style={css.mono}>{tl.format(Math.round(paying.amount))}</span>) gider olarak deftere geçirilir.
+                  Hesap seçersen bakiyeden düşer; boş bırakırsan yalnız Rapor'a girer.
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+                  <Field label="Hesap (ops.)">
+                    <select style={css.input} value={pp.account_id} onChange={(e) => setPp({ ...pp, account_id: e.target.value })}>
+                      <option value="">— (bakiyeye işleme)</option>
+                      {data.accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                    </select>
+                  </Field>
+                  {expCats.length > 0 && (
+                    <Field label="Kategori (ops.)">
+                      <select style={css.input} value={pp.category_id} onChange={(e) => setPp({ ...pp, category_id: e.target.value })}>
+                        <option value="">Kategorisiz</option>
+                        {expCats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                      </select>
+                    </Field>
+                  )}
+                  <button type="submit" style={css.btn}>Ödendi olarak kaydet</button>
+                  <button type="button" style={css.ghost} onClick={() => setPaying(null)}>Vazgeç</button>
+                </div>
+              </form>
+            )}
           </div>
         );
       })}
