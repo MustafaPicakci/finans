@@ -1,6 +1,6 @@
 import type { AllData, Currency } from "./types.js";
 import { keyOf, hits, ymOf } from "./date.js";
-import { recActiveOn } from "./recurring.js";
+import { recActiveOn, recurringAmountIndex, recAmountOn } from "./recurring.js";
 import { loanPayDay, loanRemaining, loanActiveOn } from "./loans.js";
 import { cardInfos } from "./cards.js";
 import { convert, type Rates } from "./portfolio.js";
@@ -20,6 +20,8 @@ export function project(data: AllData, months: number, rates: Rates = { usdTry: 
   /* gerçekleşmiş (kalem, ay) çiftleri: o ay artık gerçek kayıt (transaction/card_tx) olduğundan
      recurring döngüsünde tekrar EKLENMEZ — aksi halde tahmin çift sayardı */
   const realized = new Set((data.recurring_realized ?? []).map((r) => `${r.recurring_id}:${r.ym}`));
+  /* tutar zaman çizelgesi: kalemin o aydaki tutarı buradan çözülür */
+  const amountIdx = recurringAmountIndex(data.recurring_amounts);
   const oneMap = new Map<string, { n: string; a: number }[]>();
   data.oneoffs.forEach((o) => {
     if (!oneMap.has(o.date)) oneMap.set(o.date, []);
@@ -67,9 +69,12 @@ export function project(data: AllData, months: number, rates: Rates = { usdTry: 
   const days: Day[] = [];
   for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
     const ev: { n: string; a: number }[] = [];
+    const ym = ymOf(d);
     data.recurring.forEach((r) => {
-      if (recActiveOn(r, d) && hits(d, r.day) && !realized.has(`${r.id}:${ymOf(d)}`))
-        ev.push({ n: r.name, a: r.kind === "income" ? r.amount : -r.amount });
+      if (recActiveOn(r, d) && hits(d, r.day) && !realized.has(`${r.id}:${ym}`)) {
+        const a = recAmountOn(amountIdx.get(r.id), ym); // tutarı tanımsız kalem event üretmez
+        if (a != null) ev.push({ n: r.name, a: r.kind === "income" ? a : -a });
+      }
     });
     data.loans.forEach((l) => {
       if (loanActiveOn(l, d) && hits(d, loanPayDay(l)))

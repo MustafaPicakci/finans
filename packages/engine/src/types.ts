@@ -1,7 +1,10 @@
 export type Account = { id: number; name: string; balance: number };
 /** Düzenli gelir/gider. Opsiyonel hedef (`account_id` VEYA `card_id`; en fazla biri) verilirse günü
     gelince gerçek kayda dönüştürülebilir (transactions / card_txs). `auto` → cron otomatik gerçekleştirir. */
-export type Recurring = { id: number; kind: "income" | "expense"; name: string; amount: number; day: number; from_month: string | null; to_month: string | null; account_id?: number | null; card_id?: number | null; category_id?: number | null; auto?: boolean };
+export type Recurring = { id: number; kind: "income" | "expense"; name: string; day: number; from_month: string | null; to_month: string | null; account_id?: number | null; card_id?: number | null; category_id?: number | null; auto?: boolean };
+/** Düzenli kalemin tutar zaman çizelgesi: YM ayındaki tutar = from_month <= YM olan en büyük
+    from_month'lu satır. from_month REC_AMOUNT_BEGIN ('0000-01') = baştan (PG PK kolonu NULL olamaz). */
+export type RecurringAmount = { recurring_id: number; from_month: string; amount: number };
 /** Bir recurring kaleminin belirli bir ayının (YYYY-MM) gerçekleştiğini işaretler — tahminde çift sayımı önler */
 export type RecurringRealized = { recurring_id: number; ym: string };
 export type Loan = { id: number; name: string; amount: number; first_date: string; total: number };
@@ -29,4 +32,5 @@ export type AllData = {
   accounts: Account[]; recurring: Recurring[]; loans: Loan[]; oneoffs: OneOff[];
   trades: Trade[]; cards: Card[]; card_txs: CardTx[]; prices: Price[]; price_history: PriceHistoryEntry[];
   categories: Category[]; transactions: Transaction[]; deposits: Deposit[]; recurring_realized: RecurringRealized[]; statement_payments: StatementPayment[]; settings: Record<string, string>;
+  recurring_amounts: RecurringAmount[];
 };

@@ -4,7 +4,7 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import cron from "node-cron";
-import { txShares, keyOf, type Card, type CardTx } from "@finans/engine";
+import { txShares, keyOf, REC_AMOUNT_BEGIN, type Card, type CardTx } from "@finans/engine";
 import { db, initDb, nowLocal, todayLocal, TENANT_TABLES, GLOBAL_SETTING_KEYS, type TxClient } from "./db.js";
 import { refreshAll } from "./prices.js";
 import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, SESSION_COOKIE, type SessionUser } from "./auth.js";
@@ -208,10 +208,11 @@ api.use("*", async (c, next) => {
 /* ---- tek seferde tüm veri (kullanıcıya scope'lu; prices/price_history GLOBAL) ---- */
 api.get("/all", async (c) => {
   const uid = c.get("user").id;
-  const [accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, autoPrices, userPrices, price_history, globalSettings, userSettings] =
+  const [accounts, recurring, recurring_amounts, loans, oneoffs, trades, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, autoPrices, userPrices, price_history, globalSettings, userSettings] =
     await Promise.all([
       db.all("SELECT * FROM accounts WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM recurring WHERE user_id=? ORDER BY day, id", uid),
+      db.all("SELECT recurring_id, from_month, amount FROM recurring_amounts WHERE user_id=? ORDER BY recurring_id, from_month", uid),
       db.all("SELECT * FROM loans WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM oneoffs WHERE user_id=? ORDER BY date", uid),
       db.all("SELECT * FROM trades WHERE user_id=? ORDER BY date, id", uid),
@@ -232,7 +233,7 @@ api.get("/all", async (c) => {
   const pm = new Map<string, any>(autoPrices.map((p) => [`${p.asset_type}:${p.symbol}`, { ...p, source: "auto" }]));
   for (const up of userPrices) pm.set(`${up.asset_type}:${up.symbol}`, { ...up, source: "manual" });
   return c.json({
-    accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments,
+    accounts, recurring, recurring_amounts, loans, oneoffs, trades, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments,
     prices: [...pm.values()], price_history,
     // global (fx/tefas) + kullanıcı ayarları (horizon/cash_funds); kullanıcı çakışmada kazanır
     settings: Object.fromEntries([...globalSettings, ...userSettings].map((s) => [s.key, s.value])),
@@ -275,19 +276,92 @@ function crud(route: string, table: string, cols: Col[]) {
 }
 
 crud("accounts", "accounts", [{ name: "name", required: true }, { name: "balance" }]);
-crud("recurring", "recurring", [
-  { name: "kind", required: true }, { name: "name", required: true },
-  { name: "amount", required: true }, { name: "day", required: true },
-  { name: "from_month" }, { name: "to_month" },
-  { name: "account_id" }, { name: "card_id" }, { name: "category_id" }, { name: "auto" },
-]);
+
+/* ---- recurring: elle yazılmış CRUD (Faz 9) ----
+   Kimlik (recurring) ile tutar (recurring_amounts zaman çizelgesi) ayrı tablolarda yaşadığından
+   jenerik crud yetmez: POST iki tabloya atomik yazar (gövde eski şekliyle amount taşır — form
+   değişmedi), PUT yalnız kimlik kolonlarını günceller, tutar değişikliği /recurring/:id/amount'tan. */
+const REC_ID_COLS = ["kind", "name", "day", "from_month", "to_month", "account_id", "card_id", "category_id", "auto"] as const;
+api.post("/recurring", async (c) => {
+  const b = await c.req.json().catch(() => null);
+  if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
+  for (const n of ["kind", "name", "day"]) if (b[n] === undefined || b[n] === "") return c.json({ error: `${n} zorunlu` }, 400);
+  if (!(Number(b.amount) > 0)) return c.json({ error: "amount zorunlu" }, 400);
+  const uid = c.get("user").id;
+  const id = await db.tx(async (t) => {
+    const info = await t.run(
+      `INSERT INTO recurring (${REC_ID_COLS.join(",")},user_id) VALUES (${REC_ID_COLS.map(() => "?").join(",")},?) RETURNING id`,
+      b.kind, b.name, b.day, b.from_month ?? null, b.to_month ?? null,
+      b.account_id ?? null, b.card_id ?? null, b.category_id ?? null, b.auto ?? false, uid,
+    );
+    await t.run(
+      "INSERT INTO recurring_amounts (recurring_id, from_month, amount, user_id) VALUES (?,?,?,?)",
+      info.id, REC_AMOUNT_BEGIN, Number(b.amount), uid,
+    );
+    return info.id;
+  });
+  return c.json({ id });
+});
+api.put("/recurring/:id", async (c) => {
+  const b = await c.req.json().catch(() => null);
+  if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
+  const names = REC_ID_COLS.filter((n) => b[n] !== undefined); // amount bilinçli listede yok → sessizce yok sayılır
+  if (!names.length) return c.json({ error: "boş" }, 400);
+  await db.run(
+    `UPDATE recurring SET ${names.map((n) => `${n}=?`).join(",")} WHERE id=? AND user_id=?`,
+    ...names.map((n) => b[n]), c.req.param("id"), c.get("user").id,
+  );
+  return c.json({ ok: true });
+});
+api.delete("/recurring/:id", async (c) => {
+  await db.run("DELETE FROM recurring WHERE id=? AND user_id=?", c.req.param("id"), c.get("user").id); // cascade: amounts + realized
+  return c.json({ ok: true });
+});
+
+/* Tutar değişikliği — atomik "Değiştir": from_month'tan itibaren yeni tutar (aynı aya ikinci yazım = düzeltme) */
+api.post("/recurring/:id/amount", async (c) => {
+  const uid = c.get("user").id;
+  const b = await c.req.json().catch(() => null);
+  if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
+  const amount = Number(b.amount);
+  if (!(amount > 0)) return c.json({ error: "amount > 0 olmalı" }, 400);
+  const fromMonth = b.from_month ? String(b.from_month) : REC_AMOUNT_BEGIN;
+  if (fromMonth !== REC_AMOUNT_BEGIN && !YM_RE.test(fromMonth)) return c.json({ error: "from_month 'YYYY-MM' olmalı" }, 400);
+  const r = await db.get("SELECT id FROM recurring WHERE id=? AND user_id=?", c.req.param("id"), uid);
+  if (!r) return c.json({ error: "kalem yok" }, 404);
+  await db.run(
+    `INSERT INTO recurring_amounts (recurring_id, from_month, amount, user_id) VALUES (?,?,?,?)
+     ON CONFLICT (recurring_id, from_month) DO UPDATE SET amount = excluded.amount`,
+    r.id, fromMonth, amount, uid,
+  );
+  return c.json({ ok: true });
+});
+api.delete("/recurring/:id/amount/:from_month", async (c) => {
+  const uid = c.get("user").id;
+  const fromMonth = c.req.param("from_month");
+  if (fromMonth !== REC_AMOUNT_BEGIN && !YM_RE.test(fromMonth)) return c.json({ error: "from_month 'YYYY-MM' olmalı" }, 400);
+  const id = c.req.param("id");
+  const res = await db.tx(async (t) => {
+    const cnt = await t.get<{ total: number; hit: number }>(
+      "SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE from_month=?)::int AS hit FROM recurring_amounts WHERE recurring_id=? AND user_id=?",
+      fromMonth, id, uid,
+    );
+    if (!cnt?.hit) return "yok";
+    if (cnt.total <= 1) return "son"; // her kalemin her an en az bir tutarı olmalı
+    await t.run("DELETE FROM recurring_amounts WHERE recurring_id=? AND from_month=? AND user_id=?", id, fromMonth, uid);
+    return "ok";
+  });
+  if (res === "yok") return c.json({ error: "tutar satırı yok" }, 404);
+  if (res === "son") return c.json({ error: "son tutar satırı silinemez" }, 400);
+  return c.json({ ok: true });
+});
 
 /* ---- düzenli kalemin (recurring) bir ayını (ym) gerçekleştirme ----
    Hedefe göre gerçek kayıt üretir: kart → card_txs (ilgili ekstreye düşer), hesap → transactions
    (bakiyeyi oynatır, Rapor'a girer). recurring_realized (recurring_id, ym) PK'si ile TAM-BİR-KEZ
    (idempotent); tahmin (project) o ayı artık göstermez → çift sayım önlenir. */
 type RecurringRow = {
-  id: number; kind: "income" | "expense"; name: string; amount: number; day: number;
+  id: number; kind: "income" | "expense"; name: string; day: number;
   from_month: string | null; to_month: string | null;
   account_id: number | null; card_id: number | null; category_id: number | null;
 };
@@ -304,6 +378,13 @@ function occurrenceDate(ym: string, day: number): string {
 async function realizeOccurrence(
   t: TxClient, uid: number, r: RecurringRow, ym: string, opts?: { account_id?: number | null; category_id?: number | null },
 ): Promise<boolean> {
+  /* tutar hedef ayın zaman çizelgesinden çözülür — İŞARETLEMEDEN ÖNCE: tutarı olmayan kalem
+     "gerçekleşti ama kayıt yok" durumuna düşmesin */
+  const amt = await t.get<{ amount: number }>(
+    "SELECT amount FROM recurring_amounts WHERE recurring_id=? AND from_month<=? ORDER BY from_month DESC LIMIT 1",
+    r.id, ym,
+  );
+  if (!amt) return false;
   const mark = await t.run(
     "INSERT INTO recurring_realized (recurring_id, ym, created_at, user_id) VALUES (?,?,?,?) ON CONFLICT (recurring_id, ym) DO NOTHING",
     r.id, ym, nowLocal(), uid,
@@ -313,11 +394,11 @@ async function realizeOccurrence(
   if (r.card_id != null && r.kind === "expense") {
     const info = await t.run(
       "INSERT INTO card_txs (card_id,date,name,amount,installments,user_id) VALUES (?,?,?,?,?,?) RETURNING id",
-      r.card_id, date, r.name, r.amount, 1, uid,
+      r.card_id, date, r.name, amt.amount, 1, uid,
     );
     await t.run("UPDATE recurring_realized SET card_tx_id=? WHERE recurring_id=? AND ym=?", info.id, r.id, ym);
   } else {
-    const signed = (r.kind === "income" ? 1 : -1) * r.amount;
+    const signed = (r.kind === "income" ? 1 : -1) * amt.amount;
     const accountId = opts?.account_id ?? r.account_id ?? null;
     const categoryId = opts?.category_id ?? r.category_id ?? null;
     const info = await t.run(
@@ -617,10 +698,11 @@ api.put("/settings", async (c) => {
 /* ---- KVKK: kullanıcının tüm verisini JSON indir ---- */
 api.get("/export", async (c) => {
   const uid = c.get("user").id;
-  const [accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, userSettings] =
+  const [accounts, recurring, recurring_amounts, loans, oneoffs, trades, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, userSettings] =
     await Promise.all([
       db.all("SELECT * FROM accounts WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM recurring WHERE user_id=? ORDER BY id", uid),
+      db.all("SELECT recurring_id, from_month, amount FROM recurring_amounts WHERE user_id=? ORDER BY recurring_id, from_month", uid),
       db.all("SELECT * FROM loans WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM oneoffs WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM trades WHERE user_id=? ORDER BY id", uid),
@@ -636,7 +718,7 @@ api.get("/export", async (c) => {
   c.header("Content-Disposition", `attachment; filename="finans-export-${todayLocal()}.json"`);
   return c.json({
     exported_at: nowLocal(), user: c.get("user"),
-    accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments,
+    accounts, recurring, recurring_amounts, loans, oneoffs, trades, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments,
     settings: Object.fromEntries(userSettings.map((s) => [s.key, s.value])),
   });
 });

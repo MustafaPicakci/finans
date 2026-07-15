@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { todayStr, parseD, fmtD, keyOf, num, ymOf, recActiveOn, recOccurrenceDate, loanPayDay, loanRemaining, type AllData, type Recurring, type OneOff } from "@finans/engine";
+import { todayStr, parseD, fmtD, keyOf, num, ymOf, recActiveOn, recOccurrenceDate, recurringAmountIndex, recAmountOn, loanPayDay, loanRemaining, type AllData, type Recurring, type OneOff } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, tl } from "../../theme";
 import { Field, AmountField, Money, Empty, Row } from "../../ui";
@@ -21,29 +21,24 @@ export function Plan({ data, reload, onRealize }: { data: AllData; reload: () =>
   const today = todayStr();
   /* gerçekleşmiş (kalem, bu ay) çiftleri — "Gerçekleşti"/"Geri al" durumu için */
   const realizedSet = new Set(data.recurring_realized.map((x) => `${x.recurring_id}:${x.ym}`));
+  /* tutar zaman çizelgesi: satırda bu ayın tutarı gösterilir, gelecek değişiklikler ipucu olur */
+  const amtIdx = recurringAmountIndex(data.recurring_amounts ?? []);
   const realizeRec = async (r: Recurring, body: { account_id?: number | null; category_id?: number | null } = {}) => {
     await api.realizeRecurring(r.id, curYm, body);
     setRealizing(null); setRp({ account_id: "", category_id: "" }); reload();
   };
   const undoRealize = async (id: number) => { await api.unrealizeRecurring(id, curYm); reload(); };
-  const prevYm = (ym: string) => {
-    const [y, m] = ym.split("-").map(Number);
-    return ymOf(new Date(y, m - 2, 1));
-  };
   const fmtYm = (ym: string) => {
     const [y, m] = ym.split("-").map(Number);
     return new Date(y, m - 1, 1).toLocaleDateString("tr-TR", { month: "short", year: "numeric" });
   };
   const chYm = chVal.from_month || curYm;
   const chOk = num(chVal.amount) > 0 && !!chYm;
-  /* "Değiştir": eski kaydı yeni tutarın geçerli olacağı aydan bir önceki ayda bitir, yeni değerle yeni kayıt aç */
+  /* "Değiştir": kayıt bölünmez — seçilen aydan itibaren geçerli tutar satırı eklenir (atomik, tek istek);
+     önceki aylar eski tutarla kalır, aynı aya ikinci yazım düzeltmedir. */
   const applyChange = async (r: Recurring) => {
     if (!chOk) return;
-    await api.put(`recurring/${r.id}`, { to_month: prevYm(chYm) });
-    await api.post("recurring", {
-      kind: r.kind, name: r.name, amount: num(chVal.amount), day: r.day,
-      from_month: chYm, to_month: null,
-    });
+    await api.setRecurringAmount(r.id, { amount: num(chVal.amount), from_month: chYm });
     setChanging(null); setChVal({ amount: "", from_month: "" }); reload();
   };
   const realize = (o: OneOff) =>
@@ -67,6 +62,9 @@ export function Plan({ data, reload, onRealize }: { data: AllData; reload: () =>
         const due = keyOf(recOccurrenceDate(r, curYm)) <= today; // bu ayın günü geçti mi
         const realizedNow = realizedSet.has(`${r.id}:${curYm}`);
         const cats = data.categories.filter((c) => c.kind === r.kind);
+        const amtRows = amtIdx.get(r.id);
+        const amountNow = recAmountOn(amtRows, curYm) ?? 0;
+        const futureAmts = (amtRows ?? []).filter((a) => a.from_month > curYm); // planlı tutar değişiklikleri
         return (
           <div key={r.id} style={{ padding: "9px 0", borderBottom: i === data.recurring.length - 1 ? "none" : `1px solid ${T.line}`, opacity: ended ? 0.5 : 1 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -77,8 +75,15 @@ export function Plan({ data, reload, onRealize }: { data: AllData; reload: () =>
                   {targetName && <> · <span style={{ color: T.mut3 }}>→ {targetName}{isCard ? " (kart)" : ""}</span></>}
                   {r.auto && <> · <span style={{ color: T.acc }}>⚡ oto</span></>}
                 </div>
+                {futureAmts.map((a) => (
+                  <div key={a.from_month} style={{ fontSize: 11, color: T.acc, marginTop: 2 }}>
+                    ↗ {fmtYm(a.from_month)} itibarıyla {tl.format(r.kind === "income" ? a.amount : -a.amount)}
+                    <button style={{ ...css.del, fontSize: 11, marginLeft: 6 }} title="planlı tutar değişikliğini geri al"
+                      onClick={async () => { await api.delRecurringAmount(r.id, a.from_month); reload(); }}>✕</button>
+                  </div>
+                ))}
               </div>
-              <Money v={r.kind === "income" ? r.amount : -r.amount} sign />
+              <Money v={r.kind === "income" ? amountNow : -amountNow} sign />
               {realizedNow
                 ? (<>
                     <span style={{ fontSize: 11, color: T.pos, ...css.mono }}>{fmtYm(curYm)} ✓</span>
@@ -92,7 +97,7 @@ export function Plan({ data, reload, onRealize }: { data: AllData; reload: () =>
                       {fmtYm(curYm)} gerçekleşti</button>
                   : null}
               <button style={{ ...css.ghost, padding: "5px 10px", fontSize: 12 }}
-                onClick={() => { setChanging(changing?.id === r.id ? null : r); setChVal({ amount: String(r.amount), from_month: curYm }); }}>
+                onClick={() => { setChanging(changing?.id === r.id ? null : r); setChVal({ amount: String(amountNow || ""), from_month: curYm }); }}>
                 Değiştir
               </button>
               <button style={css.del} onClick={async () => { await api.del("recurring", r.id); reload(); }}>✕</button>
@@ -126,7 +131,8 @@ export function Plan({ data, reload, onRealize }: { data: AllData; reload: () =>
               <form style={{ background: T.panel2, borderRadius: 8, padding: 10, marginTop: 8 }}
                 onSubmit={(e) => { e.preventDefault(); applyChange(r); }}>
                 <div style={{ fontSize: 12, color: T.mut, marginBottom: 8 }}>
-                  Yeni tutar girilen aydan itibaren geçerli olur; eski tutar bir önceki aya kadar geçmiş projeksiyonda korunur.
+                  Yeni tutar seçilen aydan itibaren geçerli olur; önceki aylar eski tutarla kalır.
+                  Kayıt bölünmez — planlı değişikliği üstteki ↗ satırındaki ✕ ile geri alabilirsin.
                 </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
                   <AmountField label="Yeni tutar (₺)" value={chVal.amount} onChange={(v) => setChVal({ ...chVal, amount: v })} />

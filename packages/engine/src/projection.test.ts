@@ -4,7 +4,7 @@ import type { AllData } from "./types.js";
 
 const baseData = (over: Partial<AllData> = {}): AllData => ({
   accounts: [], recurring: [], loans: [], oneoffs: [], trades: [], cards: [], card_txs: [], prices: [], price_history: [],
-  categories: [], transactions: [], deposits: [], recurring_realized: [], statement_payments: [], settings: {},
+  categories: [], transactions: [], deposits: [], recurring_realized: [], statement_payments: [], settings: {}, recurring_amounts: [],
   ...over,
 });
 
@@ -36,7 +36,8 @@ describe("project", () => {
   it("düzenli gelir belirtilen günde bakiyeye eklenir", () => {
     const data = baseData({
       accounts: [{ id: 1, name: "Vadesiz", balance: 0 }],
-      recurring: [{ id: 1, kind: "income", name: "Maaş", amount: 5000, day: 15, from_month: null, to_month: null }],
+      recurring: [{ id: 1, kind: "income", name: "Maaş", day: 15, from_month: null, to_month: null }],
+      recurring_amounts: [{ recurring_id: 1, from_month: "0000-01", amount: 5000 }],
     });
     const days = project(data, 1);
     const payDay = days.find((d) => d.date.getDate() === 15 && d.date.getMonth() === 0);
@@ -49,7 +50,8 @@ describe("project", () => {
   it("gerçekleşmiş (kalem, ay) çifti tahminde tekrar işlenmez, diğer aylar işlenir", () => {
     const data = baseData({
       accounts: [{ id: 1, name: "Vadesiz", balance: 0 }],
-      recurring: [{ id: 1, kind: "income", name: "Maaş", amount: 5000, day: 15, from_month: null, to_month: null }],
+      recurring: [{ id: 1, kind: "income", name: "Maaş", day: 15, from_month: null, to_month: null }],
+      recurring_amounts: [{ recurring_id: 1, from_month: "0000-01", amount: 5000 }],
       recurring_realized: [{ recurring_id: 1, ym: "2026-01" }], // Ocak gerçekleşti
     });
     const days = project(data, 2); // Ocak + Şubat
@@ -62,9 +64,36 @@ describe("project", () => {
   it("from_month/to_month aralığı dışındaki aylarda düzenli kalem işlemez", () => {
     const data = baseData({
       accounts: [{ id: 1, name: "Vadesiz", balance: 0 }],
-      recurring: [{ id: 1, kind: "expense", name: "Eski kira", amount: 1000, day: 5, from_month: null, to_month: "2025-12" }],
+      recurring: [{ id: 1, kind: "expense", name: "Eski kira", day: 5, from_month: null, to_month: "2025-12" }],
+      recurring_amounts: [{ recurring_id: 1, from_month: "0000-01", amount: 1000 }],
     });
     const days = project(data, 1); // Ocak 2026'dan itibaren — to_month'tan sonra, hiç işlemez
+    expect(days.every((d) => d.net === 0)).toBe(true);
+  });
+
+  it("tutar zaman çizelgesi: değişiklik ayından itibaren yeni tutar işlenir", () => {
+    const data = baseData({
+      accounts: [{ id: 1, name: "Vadesiz", balance: 0 }],
+      recurring: [{ id: 1, kind: "income", name: "Maaş", day: 15, from_month: null, to_month: null }],
+      recurring_amounts: [
+        { recurring_id: 1, from_month: "0000-01", amount: 5000 },
+        { recurring_id: 1, from_month: "2026-02", amount: 6000 }, // Şubat'tan itibaren zam
+      ],
+    });
+    const days = project(data, 2); // Ocak + Şubat
+    const jan = days.find((d) => d.date.getMonth() === 0 && d.date.getDate() === 15)!;
+    const feb = days.find((d) => d.date.getMonth() === 1 && d.date.getDate() === 15)!;
+    expect(jan.net).toBe(5000); // eski tutar
+    expect(feb.net).toBe(6000); // yeni tutar
+  });
+
+  it("tutar satırı olmayan düzenli kalem hiç event üretmez", () => {
+    const data = baseData({
+      accounts: [{ id: 1, name: "Vadesiz", balance: 0 }],
+      recurring: [{ id: 1, kind: "income", name: "Maaş", day: 15, from_month: null, to_month: null }],
+      // recurring_amounts bilinçli boş — tutarı tanımsız kalem savunmayla atlanır
+    });
+    const days = project(data, 1);
     expect(days.every((d) => d.net === 0)).toBe(true);
   });
 

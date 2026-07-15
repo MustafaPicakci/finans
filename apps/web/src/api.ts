@@ -1,6 +1,6 @@
 import type { AllData } from "@finans/engine";
 
-export type { Account, Recurring, Loan, OneOff, AssetType, Currency, Trade, Card, CardTx, Price, AllData } from "@finans/engine";
+export type { Account, Recurring, RecurringAmount, Loan, OneOff, AssetType, Currency, Trade, Card, CardTx, Price, AllData } from "@finans/engine";
 
 /** Sunucu hatası — `status` ile taşınır ki 401 (oturum yok/expired) yakalanıp giriş ekranına dönülebilsin. */
 export class ApiError extends Error {
@@ -21,6 +21,11 @@ export const api = {
   delPrice: (asset_type: string, symbol: string) =>
     fetch(`/api/prices/${asset_type}/${encodeURIComponent(symbol)}`, { method: "DELETE" }).then(j),
   refreshPrices: () => fetch("/api/prices/refresh", { method: "POST" }).then(j),
+  /* ---- düzenli kalem tutar zaman çizelgesi (Faz 9) ---- */
+  setRecurringAmount: (id: number, body: { amount: number; from_month: string | null }) =>
+    fetch(`/api/recurring/${id}/amount`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(j),
+  delRecurringAmount: (id: number, from_month: string) =>
+    fetch(`/api/recurring/${id}/amount/${from_month}`, { method: "DELETE" }).then(j),
   /* ---- düzenli kalem gerçekleştirme (Faz 8) ---- */
   realizeRecurring: (id: number, ym: string, body: { account_id?: number | null; category_id?: number | null } = {}) =>
     fetch(`/api/recurring/${id}/realize`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ym, ...body }) }).then(j),

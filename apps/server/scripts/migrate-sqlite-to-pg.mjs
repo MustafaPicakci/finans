@@ -1,5 +1,8 @@
 /**
  * Faz 5.0 — tek seferlik veri taşıma: SQLite (data/finans.db) → PostgreSQL (DATABASE_URL).
+ * NOT (Faz 9): yeni şemayla uyumsuz — recurring.amount kolonu artık yok (tutar recurring_amounts
+ * zaman çizelgesinde); eski SQLite verisiyle recurring kopyası başarısız olur. Script tarihsel
+ * amaçla duruyor; ihtiyaç olursa amount'lar elle recurring_amounts'a taşınmalı.
  * Id'ler korunur, identity sequence'ları max(id)+1'e çekilir, satır sayıları karşılaştırılır.
  * Yeniden çalıştırılabilir: hedef tablolar TRUNCATE ... RESTART IDENTITY CASCADE ile temizlenir.
  *
