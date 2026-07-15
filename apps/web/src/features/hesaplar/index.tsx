@@ -70,7 +70,7 @@ function VadesizHesaplar({ data, reload }: { data: AllData; reload: () => void }
       }}>
         <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
           <Field label="Hesap adı" flex={2}><input ref={nameRef} style={css.input} value={acc.name} placeholder="örn. Vakıfbank" onChange={(e) => setAcc({ ...acc, name: e.target.value })} /></Field>
-          <AmountField label="Bakiye (₺)" value={acc.balance} onChange={(v) => setAcc({ ...acc, balance: v })} />
+          <AmountField label="Bakiye (TL)" value={acc.balance} onChange={(v) => setAcc({ ...acc, balance: v })} />
           <button type="submit" style={{ ...css.btn, opacity: acc.name ? 1 : 0.4 }} disabled={!acc.name}>Hesap Ekle</button>
         </div>
       </form>

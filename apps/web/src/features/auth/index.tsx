@@ -71,7 +71,7 @@ export function Auth({ onAuthed, urlAuth }: {
       <style>{themeCSS}</style>
       <div style={{ ...css.card, width: "100%", maxWidth: 380 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 9, fontWeight: 680, fontSize: 18, letterSpacing: "-0.02em", marginBottom: 4 }}>
-          <span style={{ width: 30, height: 30, borderRadius: 9, background: T.acc, color: T.accInk, display: "grid", placeItems: "center", fontSize: 16, fontWeight: 800 }}>₺</span>
+          <span style={{ width: 30, height: 30, borderRadius: 9, background: T.acc, color: T.accInk, display: "grid", placeItems: "center", fontSize: 16, fontWeight: 800, fontFamily: T.mono }}>₺</span>
           finans
         </div>
         <div style={{ fontSize: 13, color: T.mut3, marginBottom: 18 }}>{SUBTITLE[mode]}</div>

@@ -64,7 +64,7 @@ export function KalemForm({ data, reload, onClose, prefill }: FormProps & { pref
     <form onSubmit={(e) => { e.preventDefault(); save(false); }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <Field label="Ad" flex={2}><input ref={nameRef} autoFocus style={css.input} value={tx.name} placeholder="örn. Migros" onChange={(e) => setTx({ ...tx, name: e.target.value })} /></Field>
-        <AmountField label="Tutar (₺)" value={tx.amount} onChange={(v) => setTx({ ...tx, amount: v })} />
+        <AmountField label="Tutar (TL)" value={tx.amount} onChange={(v) => setTx({ ...tx, amount: v })} />
         <Field label="Tarih"><input type="date" style={css.input} value={tx.date} onChange={(e) => setTx({ ...tx, date: e.target.value })} /></Field>
         <Field label="Tür">
           <select style={css.input} value={tx.type} onChange={(e) => setTx({ ...tx, type: e.target.value as "gider" | "gelir" })}>
@@ -124,7 +124,7 @@ export function CardTxForm({ data, reload, onClose }: FormProps) {
         </Field>
         <Field label="Tarih"><input type="date" style={css.input} value={tf.date} onChange={(e) => setTf({ ...tf, date: e.target.value })} /></Field>
         <Field label="Açıklama" flex={2}><input ref={nameRef} autoFocus style={css.input} value={tf.name} placeholder="örn. Telefon" onChange={(e) => setTf({ ...tf, name: e.target.value })} /></Field>
-        <AmountField label="Toplam tutar (₺)" value={tf.amount} onChange={(v) => setTf({ ...tf, amount: v })} />
+        <AmountField label="Toplam tutar (TL)" value={tf.amount} onChange={(v) => setTf({ ...tf, amount: v })} />
         <Field label="Taksit"><input style={css.input} inputMode="numeric" placeholder="1" value={tf.installments} onChange={(e) => setTf({ ...tf, installments: e.target.value })} /></Field>
       </div>
       {ok && +tf.installments > 1 && (
@@ -172,7 +172,7 @@ export function RecurringForm({ data, reload, onClose }: FormProps) {
           </select>
         </Field>
         <Field label="Ad" flex={2}><input ref={nameRef} autoFocus style={css.input} value={rec.name} placeholder="örn. Maaş" onChange={(e) => setRec({ ...rec, name: e.target.value })} /></Field>
-        <AmountField label="Tutar (₺)" value={rec.amount} onChange={(v) => setRec({ ...rec, amount: v })} />
+        <AmountField label="Tutar (TL)" value={rec.amount} onChange={(v) => setRec({ ...rec, amount: v })} />
         <Field label="Gün (1-31)"><input style={css.input} inputMode="numeric" placeholder="1" value={rec.day} onChange={(e) => setRec({ ...rec, day: e.target.value })} /></Field>
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
@@ -231,7 +231,7 @@ export function LoanForm({ reload, onClose }: FormProps) {
     <form onSubmit={(e) => { e.preventDefault(); save(false); }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <Field label="Ad" flex={2}><input ref={nameRef} autoFocus style={css.input} value={f.name} placeholder="örn. İhtiyaç kredisi" onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
-        <AmountField label="Aylık taksit (₺)" value={f.amount} onChange={(v) => setF({ ...f, amount: v })} />
+        <AmountField label="Aylık taksit (TL)" value={f.amount} onChange={(v) => setF({ ...f, amount: v })} />
         <Field label="İlk taksit tarihi"><input type="date" style={css.input} value={f.first_date} onChange={(e) => setF({ ...f, first_date: e.target.value })} /></Field>
         <Field label="Toplam taksit"><input style={css.input} inputMode="numeric" placeholder="12" value={f.total} onChange={(e) => setF({ ...f, total: e.target.value })} /></Field>
       </div>
@@ -269,7 +269,7 @@ export function DepositForm({ data, reload, onClose }: FormProps) {
     <form onSubmit={(e) => { e.preventDefault(); save(false); }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <Field label="Ad" flex={2}><input ref={nameRef} autoFocus style={css.input} value={f.name} placeholder="örn. Vakıfbank 32 gün" onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
-        <AmountField label="Anapara (₺)" value={f.principal} onChange={(v) => setF({ ...f, principal: v })} />
+        <AmountField label="Anapara (TL)" value={f.principal} onChange={(v) => setF({ ...f, principal: v })} />
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
         <Field label="Faiz oranı (yıllık %)"><input style={css.input} inputMode="decimal" placeholder="örn. 45" value={f.rate} onChange={(e) => setF({ ...f, rate: e.target.value })} /></Field>
@@ -347,8 +347,8 @@ export function TradeForm({ data, reload, onClose }: FormProps) {
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
         <Field label="Adet / Miktar"><input style={css.input} inputMode="decimal" placeholder="0" value={f.qty} onChange={(e) => setF({ ...f, qty: e.target.value })} /></Field>
-        <AmountField label={`Birim fiyat (${f.currency === "USD" ? "$" : "₺"})`} value={f.price} onChange={(v) => setF({ ...f, price: v })} ccy={f.currency} />
-        <AmountField label={`Komisyon (${f.currency === "USD" ? "$" : "₺"})`} value={f.fee} onChange={(v) => setF({ ...f, fee: v })} ccy={f.currency} />
+        <AmountField label={`Birim fiyat (${f.currency === "USD" ? "$" : "TL"})`} value={f.price} onChange={(v) => setF({ ...f, price: v })} ccy={f.currency} />
+        <AmountField label={`Komisyon (${f.currency === "USD" ? "$" : "TL"})`} value={f.fee} onChange={(v) => setF({ ...f, fee: v })} ccy={f.currency} />
       </div>
       {f.currency === "TRY" && (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>

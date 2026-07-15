@@ -70,7 +70,44 @@ export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => 
     );
   };
 
+  /* Tasarımdaki degrade kart görselleri — marka mor + tür renklerinden dönüşümlü palet */
+  const cardGrads = [
+    "linear-gradient(135deg,#5B5BD6,#7C6BE8)",
+    "linear-gradient(135deg,#2f74c9,#1a9d86)",
+    "linear-gradient(135deg,#c9971f,#dd6a2e)",
+    "linear-gradient(135deg,#5a4ec2,#c26191)",
+  ];
+
   return (<>
+    {infos.length > 0 && (
+      <div className="grid2">
+        {infos.map((ci, i) => {
+          const usage = ci.card.limit_amount > 0 ? Math.min(1, ci.debt / ci.card.limit_amount) : 0;
+          return (
+            <div key={ci.card.id} style={{ borderRadius: 20, padding: "22px 24px", boxShadow: "var(--shadow)", background: cardGrads[i % cardGrads.length], color: "#fff", position: "relative", overflow: "hidden" }}>
+              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
+                <div style={{ fontSize: 13, opacity: 0.85, fontWeight: 600 }}>{ci.card.name}</div>
+                <span style={{ fontSize: 11, opacity: 0.75, whiteSpace: "nowrap" }}>kesim {ci.card.statement_day} · ödeme {ci.card.due_day}</span>
+              </div>
+              <div style={{ marginTop: 22 }}>
+                <div style={{ fontSize: 11, opacity: 0.75, textTransform: "uppercase", letterSpacing: "0.05em" }}>güncel borç</div>
+                <div style={{ ...css.mono, fontSize: 28, fontWeight: 600, marginTop: 3 }}>{tl.format(Math.round(ci.debt))}</div>
+              </div>
+              {ci.card.limit_amount > 0 && (<>
+                <div style={{ height: 6, background: "rgba(255,255,255,.22)", borderRadius: 4, overflow: "hidden", marginTop: 16 }}>
+                  <div style={{ height: "100%", width: `${usage * 100}%`, background: "#fff", borderRadius: 4 }} />
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", ...css.mono, fontSize: 11, opacity: 0.85, marginTop: 7 }}>
+                  <span>kullanılabilir {tl.format(Math.round(ci.card.limit_amount - ci.debt))}</span>
+                  <span>limit {tl.format(ci.card.limit_amount)}</span>
+                </div>
+              </>)}
+            </div>
+          );
+        })}
+      </div>
+    )}
+
     <div style={css.card}>
       <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
         <div style={{ fontWeight: 700, fontSize: 15 }}>Kredi Kartları</div>
@@ -175,7 +212,7 @@ export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => 
       }}>
         <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
           <Field label="Kart adı" flex={2}><input ref={cardNameRef} style={css.input} value={cf.name} placeholder="örn. Yapı Kredi" onChange={(e) => setCf({ ...cf, name: e.target.value })} /></Field>
-          <AmountField label="Limit (₺)" value={cf.limit_amount} onChange={(v) => setCf({ ...cf, limit_amount: v })} />
+          <AmountField label="Limit (TL)" value={cf.limit_amount} onChange={(v) => setCf({ ...cf, limit_amount: v })} />
           <Field label="Kesim günü"><input style={css.input} inputMode="numeric" placeholder="1-31" value={cf.statement_day} onChange={(e) => setCf({ ...cf, statement_day: e.target.value })} /></Field>
           <Field label="Son ödeme günü"><input style={css.input} inputMode="numeric" placeholder="1-31" value={cf.due_day} onChange={(e) => setCf({ ...cf, due_day: e.target.value })} /></Field>
         </div>

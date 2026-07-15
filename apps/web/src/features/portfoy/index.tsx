@@ -107,7 +107,7 @@ export function Portfoy({ data, pos, rates, ccy, reload, onAdd }: {
               </div>
               <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
                 <input key={`${p.sym}-${p.cur}`} style={{ ...css.input, width: 120, padding: "6px 8px", fontSize: 13 }} inputMode="decimal"
-                  placeholder={`güncel fiyat ${p.currency === "USD" ? "$" : "₺"}`} defaultValue={p.cur ?? ""}
+                  placeholder={`güncel fiyat ${p.currency === "USD" ? "$" : "TL"}`} defaultValue={p.cur ?? ""}
                   onBlur={async (e) => {
                     const v = num(e.target.value);
                     if (v > 0 && v !== p.cur) { await api.put("prices", { symbol: p.sym, asset_type: p.type, price: v, currency: p.currency }); reload(); }

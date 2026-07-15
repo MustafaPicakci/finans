@@ -135,7 +135,7 @@ export function Plan({ data, reload, onRealize }: { data: AllData; reload: () =>
                   Kayıt bölünmez — planlı değişikliği üstteki ↗ satırındaki ✕ ile geri alabilirsin.
                 </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
-                  <AmountField label="Yeni tutar (₺)" value={chVal.amount} onChange={(v) => setChVal({ ...chVal, amount: v })} />
+                  <AmountField label="Yeni tutar (TL)" value={chVal.amount} onChange={(v) => setChVal({ ...chVal, amount: v })} />
                   <Field label="Geçerli ay"><input type="month" style={css.input} placeholder={curYm} value={chVal.from_month} onChange={(e) => setChVal({ ...chVal, from_month: e.target.value })} /></Field>
                   <button type="submit" style={{ ...css.btn, opacity: chOk ? 1 : 0.4 }} disabled={!chOk}>Uygula</button>
                 </div>

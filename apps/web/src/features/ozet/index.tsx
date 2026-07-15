@@ -5,17 +5,35 @@ import {
 } from "recharts";
 import {
   fmtD, parseD, convert, portfolioValueHistory, depositValueOn,
-  type AllData, type Day, type Position, type Rates,
+  type AllData, type Day, type Position, type Rates, type Currency,
 } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, tl, TYPE_COLORS } from "../../theme";
 import { Money, Empty } from "../../ui";
 
+export type OzetSummary = {
+  netWorthTry: number; cash: number; portValueTry: number; depositsValueTry: number;
+  cardDebt: number; loanDebt: number; accountCount: number; portTypes: string[];
+  cardsWaiting: number; loansActive: number;
+};
+
+/** Sabit WxH kutuda alan+çizgi path'i (net varlık hero sparkline'ı) */
+function sparkPath(vals: number[], W: number, H: number, pad = 6): { line: string; area: string } {
+  if (vals.length < 2) return { line: "", area: "" };
+  const n = vals.length, mn = Math.min(...vals), mx = Math.max(...vals), rng = (mx - mn) || 1;
+  const x = (i: number) => pad + (i * (W - 2 * pad)) / (n - 1);
+  const y = (v: number) => (H - pad) - ((v - mn) / rng) * (H - 2 * pad);
+  const line = "M" + vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" L");
+  const area = `${line} L${x(n - 1).toFixed(1)},${H} L${x(0).toFixed(1)},${H} Z`;
+  return { line, area };
+}
+
 /* Özet grafikleri TRY canonical'dır (nakit projeksiyonu + portföy değeri geçmişi hep TRY).
-   Görüntü para birimi çevrimi üstteki hero/KPI'da (App.tsx); pozisyon değerleri burada TRY'ye çevrilir.
-   Salt-okunur kontrol paneli — hesap/mevduat yönetimi Hesaplar sekmesindedir. */
-export function Ozet({ data, days, pos, cash, rates, reload }: {
+   Hero net varlık + KPI kartları buradadır (değerler App.tsx'te TRY hesaplanıp görüntü birimine çevrilerek gelir).
+   Hesap/mevduat yönetimi Hesaplar sekmesindedir; burada yalnız özet + "Yönet" kısayolu. */
+export function Ozet({ data, days, pos, cash, rates, reload, summary, m, ccy, onGoAccounts }: {
   data: AllData; days: Day[]; pos: Position[]; cash: number; rates: Rates; reload: () => void;
+  summary: OzetSummary; m: (v: number, dec?: boolean) => string; ccy: Currency; onGoAccounts: () => void;
 }) {
   /* Likit (etkin) nakit = harcanabilir nakit + "nakit say" işaretli para piyasası fonları.
      Takvimle aynı tanım; portföy/hisse/vadeli buna girmez (onlar toplam varlıkta). */
@@ -41,7 +59,46 @@ export function Ozet({ data, days, pos, cash, rates, reload }: {
   const valueHistory = portfolioValueHistory(data.trades, data.price_history, rates)
     .map((v) => ({ x: fmtD(parseD(v.date), { day: "numeric", month: "short" }), value: Math.round(v.value) }));
 
+  /* Hero sparkline: yakın vadeli likit nakit eğilimi (net varlık geçmişi tutulmadığından dekoratif ama anlamlı) */
+  const sparkVals = days.length >= 2
+    ? days.filter((_, i) => i % Math.max(1, Math.floor(days.length / 56)) === 0).map(eff)
+    : [];
+  const sp = sparkPath(sparkVals, 560, 90, 6);
+
+  const kpis: { name: string; color: string; val: string; sub: string; neg?: boolean }[] = [
+    { name: "Nakit", color: "var(--type-nakit)", val: m(summary.cash), sub: `${summary.accountCount} hesap` },
+    { name: "Portföy", color: T.acc, val: m(summary.portValueTry), sub: summary.portTypes.length ? summary.portTypes.join(" · ") : "henüz işlem yok" },
+    { name: "Kart Borcu", color: T.neg, neg: summary.cardDebt > 0, val: (summary.cardDebt > 0 ? "−" : "") + m(summary.cardDebt), sub: summary.cardsWaiting > 0 ? `${summary.cardsWaiting} ekstre bekliyor` : "borç yok" },
+    { name: "Kredi Borcu", color: T.neg, neg: summary.loanDebt > 0, val: (summary.loanDebt > 0 ? "−" : "") + m(summary.loanDebt), sub: summary.loansActive > 0 ? `${summary.loansActive} aktif kredi` : "borç yok" },
+  ];
+
   return (<>
+    <div className="hero-grid">
+      <div style={{ ...css.card, display: "flex", flexDirection: "column", padding: "24px 26px" }}>
+        <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase", color: T.mut3 }}>Net Varlık</div>
+        <div className="nw-value" style={{ ...css.mono, fontSize: 44, fontWeight: 600, letterSpacing: "-0.02em", marginTop: 8, lineHeight: 1 }}>{m(summary.netWorthTry)}</div>
+        <div style={{ fontSize: 12.5, color: T.mut3, marginTop: 8 }}>nakit + portföy{summary.depositsValueTry > 0 ? " + vadeli" : ""} − kart borcu − kredi borcu</div>
+        {sp.line && (
+          <svg viewBox="0 0 560 90" preserveAspectRatio="none" style={{ width: "100%", height: 66, marginTop: "auto", overflow: "visible" }}>
+            <defs><linearGradient id="nwg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={T.acc} stopOpacity={0.22} /><stop offset="100%" stopColor={T.acc} stopOpacity={0} /></linearGradient></defs>
+            <path d={sp.area} fill="url(#nwg)" />
+            <path d={sp.line} fill="none" stroke={T.acc} strokeWidth={2} vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        )}
+      </div>
+      <div className="grid2">
+        {kpis.map((k) => (
+          <div key={k.name} style={{ ...css.card, padding: "16px 18px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, fontWeight: 500, color: T.mut }}>
+              <span style={{ width: 8, height: 8, borderRadius: 3, background: k.color }} />{k.name}
+            </div>
+            <div style={{ ...css.mono, fontSize: 21, fontWeight: 600, letterSpacing: "-0.01em", whiteSpace: "nowrap", marginTop: 7, color: k.neg ? T.neg : T.text }}>{k.val}</div>
+            <div style={{ fontSize: 11.5, color: T.mut3, marginTop: 3 }}>{k.sub}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+
     <div style={{ ...css.card, paddingBottom: 6 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontWeight: 700, fontSize: 15 }}>Nakit Haritası</div>
@@ -163,6 +220,25 @@ export function Ozet({ data, days, pos, cash, rates, reload }: {
           </ResponsiveContainer>
         </div>
       )}
+    </div>
+
+    <div style={css.card}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>Hesaplar</div>
+          <div style={{ fontSize: 12, color: T.mut3, marginTop: 2 }}>bakiye güncelleme ve vadeli mevduat Hesaplar sekmesinde</div>
+        </div>
+        <button style={{ ...css.ghost, padding: "7px 13px" }} onClick={onGoAccounts}>Yönet →</button>
+      </div>
+      {data.accounts.length === 0
+        ? <Empty>Henüz hesap yok. Hesaplar sekmesinden ekleyebilirsin.</Empty>
+        : data.accounts.map((a, i) => (
+          <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 13, padding: "12px 0", borderBottom: i < data.accounts.length - 1 ? `1px solid ${T.line2}` : "none" }}>
+            <span style={{ width: 34, height: 34, borderRadius: 10, background: T.panel2, display: "grid", placeItems: "center", fontSize: 14, color: "var(--type-nakit)" }}>◈</span>
+            <div style={{ flex: 1, fontSize: 13.5, fontWeight: 500 }}>{a.name}</div>
+            <span style={{ ...css.mono, fontSize: 14, fontWeight: 500 }}>{m(a.balance)}</span>
+          </div>
+        ))}
     </div>
 
   </>);
