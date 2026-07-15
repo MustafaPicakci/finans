@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { project, positions, cardInfos, loanRemaining, portfolioValueTry, convert, type Currency } from "@finans/engine";
+import { project, positions, cardInfos, loanRemaining, portfolioValueTry, depositValueOn, convert, type Currency } from "@finans/engine";
 import { api, ApiError, type SessionUser } from "./api";
 import { T, css, fmtMoney, themeCSS, THEME_KEY, CCY_KEY, type ThemeMode } from "./theme";
 import { Center } from "./ui";
 import { Auth, type UrlAuth } from "./features/auth";
 import { Ozet } from "./features/ozet";
+import { Hesaplar } from "./features/hesaplar";
 import { Nakit } from "./features/nakit";
 import { Plan } from "./features/plan";
 import { Kartlar } from "./features/kart";
@@ -16,7 +17,7 @@ import { AddSheet, type AddState, type KalemPrefill } from "./AddSheet";
 export default function App() {
   const [data, setData] = useState<Awaited<ReturnType<typeof api.all>> | null>(null);
   const [err, setErr] = useState("");
-  const [tab, setTab] = useState<"ozet" | "nakit" | "plan" | "kart" | "portfoy" | "rapor">("ozet");
+  const [tab, setTab] = useState<"ozet" | "hesaplar" | "nakit" | "plan" | "kart" | "portfoy" | "rapor">("ozet");
   const [theme, setTheme] = useState<ThemeMode>(() => (localStorage.getItem(THEME_KEY) as ThemeMode) || "light");
   const [ccy, setCcy] = useState<Currency>(() => (localStorage.getItem(CCY_KEY) as Currency) || "TRY");
   const [add, setAdd] = useState<AddState | null>(null); // global "+ Ekle" akışı
@@ -46,6 +47,11 @@ export default function App() {
   const pos = useMemo(() => (data ? positions(data.trades, data.prices) : []), [data]);
   const cash = useMemo(() => (data ? data.accounts.reduce((s, a) => s + a.balance, 0) : 0), [data]);
   const portValueTry = useMemo(() => portfolioValueTry(pos, rates), [pos, rates]);
+  const depositsValueTry = useMemo(() => {
+    if (!data) return 0;
+    const t = new Date(); t.setHours(0, 0, 0, 0);
+    return data.deposits.reduce((s, d) => s + depositValueOn(d, t), 0);
+  }, [data]);
   const cardInfoList = useMemo(() => {
     if (!data) return [];
     const t = new Date(); t.setHours(0, 0, 0, 0);
@@ -66,7 +72,7 @@ export default function App() {
   if (!data) return <Center>Yükleniyor…</Center>;
 
   // TRY canonical; görüntü para birimi saf sunum katmanı — nihai TRY rakamını çevirir
-  const netWorthTry = cash + portValueTry - cardDebt - loanDebt;
+  const netWorthTry = cash + portValueTry + depositsValueTry - cardDebt - loanDebt;
   const m = (tryVal: number, dec = false) => fmtMoney(convert(tryVal, "TRY", ccy, rates), ccy, dec);
   const usdReady = rates.usdTry > 0; // FX kuru yoksa USD toggle pasif
   const portTypes = [...new Set(pos.filter((p) => (p.value ?? 0) > 0).map((p) => p.type))];
@@ -74,7 +80,7 @@ export default function App() {
   const loansActive = data.loans.filter((l) => loanRemaining(l, new Date()) > 0).length;
 
   const tabs: [typeof tab, string, string][] = [
-    ["ozet", "Özet", "Özet"], ["nakit", "Nakit Akışı", "Nakit"], ["plan", "Plan", "Plan"],
+    ["ozet", "Özet", "Özet"], ["hesaplar", "Hesaplar", "Hesap"], ["nakit", "Nakit Akışı", "Nakit"], ["plan", "Plan", "Plan"],
     ["kart", "Kartlar", "Kart"], ["portfoy", "Portföy", "Portföy"], ["rapor", "Rapor", "Rapor"],
   ];
   const openAdd = (kind: AddState["kind"], prefill?: KalemPrefill) => setAdd({ kind, prefill });
@@ -159,7 +165,7 @@ export default function App() {
         <div style={{ padding: "10px 4px 4px" }}>
           <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: T.mut }}>Net Varlık</div>
           <div style={{ ...css.mono, fontSize: 40, fontWeight: 700, letterSpacing: "-0.02em", marginTop: 4 }}>{m(netWorthTry)}</div>
-          <div style={{ fontSize: 13, color: T.mut3, marginTop: 6 }}>nakit + portföy − kart borcu − kredi borcu</div>
+          <div style={{ fontSize: 13, color: T.mut3, marginTop: 6 }}>nakit + portföy{depositsValueTry > 0 ? " + vadeli" : ""} − kart borcu − kredi borcu</div>
         </div>
 
         <div className="kpis">
@@ -197,7 +203,8 @@ export default function App() {
           </div>
         </div>
 
-        {tab === "ozet" && <Ozet data={data} days={days} pos={pos} cash={cash} rates={rates} reload={reload} user={user} onAccountDeleted={() => { setUser(null); setData(null); }} />}
+        {tab === "ozet" && <Ozet data={data} days={days} pos={pos} cash={cash} rates={rates} reload={reload} />}
+        {tab === "hesaplar" && <Hesaplar data={data} reload={reload} user={user} onAccountDeleted={() => { setUser(null); setData(null); }} />}
         {tab === "nakit" && <Nakit days={days} />}
         {tab === "plan" && <Plan data={data} reload={reload} onRealize={(p) => openAdd("kalem", p)} />}
         {tab === "kart" && <Kartlar data={data} reload={reload} onAdd={(k) => openAdd(k)} />}

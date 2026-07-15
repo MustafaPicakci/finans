@@ -88,7 +88,7 @@ export const T = {
 };
 export const TYPE_COLORS: Record<string, string> = {
   Nakit: "var(--type-nakit)", BIST: "var(--type-bist)", FON: "var(--type-fon)", ALTIN: "var(--type-altin)",
-  DOVIZ: "var(--type-doviz)", KRIPTO: "var(--type-kripto)", ETF: "var(--type-etf)",
+  DOVIZ: "var(--type-doviz)", KRIPTO: "var(--type-kripto)", ETF: "var(--type-etf)", Vadeli: "var(--cat-5)",
 };
 export const TYPE_HINT: Record<AssetType, string> = {
   BIST: "THYAO, ASELS…", FON: "TEFAS kodu: AFT…", ALTIN: "GRAM, CEYREK, ONS, GUMUS",

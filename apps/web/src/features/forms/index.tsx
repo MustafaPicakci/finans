@@ -1,5 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
-import { todayStr, num, type AllData, type AssetType, type Currency, type Recurring, type Trade } from "@finans/engine";
+import {
+  todayStr, num, fmtD,
+  depositMaturity, depositGrossInterest, depositNetInterest, depositMaturityValue,
+  type AllData, type AssetType, type Currency, type Deposit, type Recurring, type Trade,
+} from "@finans/engine";
 import { api } from "../../api";
 import { T, css, fmtMoney, TYPE_HINT } from "../../theme";
 import { Field, AmountField, Hint } from "../../ui";
@@ -11,7 +15,7 @@ const defaultCcy = (t: AssetType): Currency => (t === "KRIPTO" || t === "ETF" ? 
    Her form modal içinde yaşar: "Kaydet" kaydedip kapatır, "Kaydet, yeni ekle"
    kaydedip formu sıfırlar ve odağı ilk alana döndürür (art arda giriş). */
 
-export type AddKind = "kalem" | "cardtx" | "recurring" | "loan" | "trade";
+export type AddKind = "kalem" | "cardtx" | "recurring" | "loan" | "trade" | "deposit";
 type FormProps = { data: AllData; reload: () => void; onClose: () => void };
 /** Plan'daki ileri tarihli kalemi "Gerçekleşti" ile deftere geçirirken önden doldurma */
 export type KalemPrefill = { name: string; amount: number; type: "gider" | "gelir"; oneoffId: number };
@@ -189,6 +193,65 @@ export function LoanForm({ reload, onClose }: FormProps) {
         <Field label="İlk taksit tarihi"><input type="date" style={css.input} value={f.first_date} onChange={(e) => setF({ ...f, first_date: e.target.value })} /></Field>
         <Field label="Toplam taksit"><input style={css.input} inputMode="numeric" placeholder="12" value={f.total} onChange={(e) => setF({ ...f, total: e.target.value })} /></Field>
       </div>
+      <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} />
+    </form>
+  );
+}
+
+/** Vadeli mevduat → net varlığa "kilitli varlık" olarak accrue eder; opsiyonel hesaptan anapara düşer */
+export function DepositForm({ data, reload, onClose }: FormProps) {
+  const [f, setF] = useState({
+    name: "", principal: "", rate: "", term_days: "", withholding: "", open_date: todayStr(), account_id: "",
+  });
+  const nameRef = useRef<HTMLInputElement>(null);
+  const ok = !!f.name && num(f.principal) > 0 && num(f.rate) >= 0 && +f.term_days >= 1 && !!f.open_date;
+  const reason = !f.name ? "Ad gerekli" : !(num(f.principal) > 0) ? "Anapara 0'dan büyük olmalı"
+    : !(+f.term_days >= 1) ? "Gün sayısı en az 1 olmalı" : !(num(f.rate) >= 0) ? "Faiz oranı geçersiz" : null;
+  /* canlı önizleme için geçici mevduat nesnesi */
+  const preview: Deposit | null = ok ? {
+    id: 0, name: f.name, principal: num(f.principal), rate: num(f.rate),
+    open_date: f.open_date, term_days: +f.term_days, withholding: num(f.withholding),
+  } : null;
+  const save = async (andNew: boolean) => {
+    if (!ok) return;
+    await api.post("deposits", {
+      name: f.name, principal: num(f.principal), rate: num(f.rate), open_date: f.open_date,
+      term_days: +f.term_days, withholding: num(f.withholding),
+      account_id: f.account_id ? +f.account_id : null,
+    });
+    reload();
+    if (andNew) { setF({ ...f, name: "", principal: "", rate: "", term_days: "" }); nameRef.current?.focus(); } else onClose();
+  };
+  const acc = f.account_id ? data.accounts.find((a) => a.id === +f.account_id) : null;
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); save(false); }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <Field label="Ad" flex={2}><input ref={nameRef} autoFocus style={css.input} value={f.name} placeholder="örn. Vakıfbank 32 gün" onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
+        <AmountField label="Anapara (₺)" value={f.principal} onChange={(v) => setF({ ...f, principal: v })} />
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+        <Field label="Faiz oranı (yıllık %)"><input style={css.input} inputMode="decimal" placeholder="örn. 45" value={f.rate} onChange={(e) => setF({ ...f, rate: e.target.value })} /></Field>
+        <Field label="Vade (gün)"><input style={css.input} inputMode="numeric" placeholder="örn. 32" value={f.term_days} onChange={(e) => setF({ ...f, term_days: e.target.value })} /></Field>
+        <Field label="Stopaj (%, ops.)"><input style={css.input} inputMode="decimal" placeholder="0" value={f.withholding} onChange={(e) => setF({ ...f, withholding: e.target.value })} /></Field>
+        <Field label="Açılış tarihi"><input type="date" style={css.input} value={f.open_date} onChange={(e) => setF({ ...f, open_date: e.target.value })} /></Field>
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+        <Field label="Nakit hesap (opsiyonel)" flex={2}>
+          <select style={css.input} value={f.account_id} onChange={(e) => setF({ ...f, account_id: e.target.value })}>
+            <option value="">— (bakiyeye işleme)</option>
+            {data.accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+        </Field>
+      </div>
+      {preview && (
+        <div style={{ fontSize: 12, color: T.mut, marginTop: 10, background: T.panel2, borderRadius: 8, padding: "10px 12px", display: "grid", gap: 4 }}>
+          <div>Vade tarihi: <span style={{ ...css.mono, color: T.text }}>{fmtD(depositMaturity(preview), { day: "numeric", month: "long", year: "numeric" })}</span></div>
+          <div>Brüt faiz: <span style={{ ...css.mono, color: T.text }}>{fmtMoney(depositGrossInterest(preview), "TRY", true)}</span>
+            {num(f.withholding) > 0 && <> · net: <span style={{ ...css.mono, color: T.pos }}>{fmtMoney(depositNetInterest(preview), "TRY", true)}</span></>}</div>
+          <div>Vade sonunda: <span style={{ ...css.mono, color: T.pos, fontWeight: 700 }}>{fmtMoney(depositMaturityValue(preview), "TRY", true)}</span></div>
+          {acc && <div><b>{acc.name}</b> bakiyesinden <span style={{ color: T.neg }}>−{fmtMoney(num(f.principal), "TRY", true)}</span> düşülür (silinirse geri döner)</div>}
+        </div>
+      )}
       <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} />
     </form>
   );

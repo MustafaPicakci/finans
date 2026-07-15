@@ -2,7 +2,7 @@ import React from "react";
 import type { AllData } from "@finans/engine";
 import { T, css } from "./theme";
 import { Modal } from "./ui";
-import { KalemForm, CardTxForm, RecurringForm, LoanForm, TradeForm, type AddKind, type KalemPrefill } from "./features/forms";
+import { KalemForm, CardTxForm, RecurringForm, LoanForm, TradeForm, DepositForm, type AddKind, type KalemPrefill } from "./features/forms";
 
 export type { AddKind, KalemPrefill };
 export type AddState = { kind: AddKind | "pick"; prefill?: KalemPrefill };
@@ -17,6 +17,7 @@ const OPTIONS: { kind: AddKind; dot: string; title: string; desc: string }[] = [
   { kind: "recurring", dot: "var(--brand)", title: "Düzenli gelir / gider", desc: "Maaş, kira, fatura… her ay tekrarlar, nakit projeksiyonuna girer" },
   { kind: "loan", dot: "var(--cat-8)", title: "Kredi / taksit", desc: "Sabit taksit planı; kalan taksitler nakit projeksiyonuna ve kredi borcuna girer" },
   { kind: "trade", dot: "var(--pos)", title: "Portföy işlemi", desc: "Hisse/fon/altın/döviz alış-satışı; pozisyonlara ve net varlığa yansır" },
+  { kind: "deposit", dot: "var(--type-doviz)", title: "Vadeli mevduat", desc: "Anapara + faiz oranı + gün sayısı; net varlığa kilitli varlık olarak faiz işleyerek girer" },
 ];
 
 const TITLES: Record<AddKind, string> = {
@@ -25,6 +26,7 @@ const TITLES: Record<AddKind, string> = {
   recurring: "Düzenli Gelir / Gider",
   loan: "Kredi / Taksit",
   trade: "Portföy İşlemi",
+  deposit: "Vadeli Mevduat",
 };
 
 export function AddSheet({ data, state, setKind, onClose, reload }: {
@@ -65,6 +67,7 @@ export function AddSheet({ data, state, setKind, onClose, reload }: {
       {state.kind === "recurring" && <RecurringForm {...props} />}
       {state.kind === "loan" && <LoanForm {...props} />}
       {state.kind === "trade" && <TradeForm {...props} />}
+      {state.kind === "deposit" && <DepositForm {...props} />}
     </Modal>
   );
 }

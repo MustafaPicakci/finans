@@ -4,10 +4,13 @@ import { recActiveOn } from "./recurring.js";
 import { loanPayDay, loanRemaining, loanActiveOn } from "./loans.js";
 import { cardInfos } from "./cards.js";
 import { convert, type Rates } from "./portfolio.js";
+import { depositValueOn } from "./deposits.js";
 
 /** `cashFunds` = o gün elde tutulan para piyasası fonlarının TRY değeri (assets'in bir alt kümesi);
-    nakit gibi likit sayılır. Etkin nakit = `bal + cashFunds`. */
-export type Day = { date: Date; k: string; net: number; bal: number; assets: number; cashFunds: number; total: number; ev: { n: string; a: number }[] };
+    nakit gibi likit sayılır. Etkin nakit = `bal + cashFunds`.
+    `deposits` = o gün vadeli mevduatların TRY değeri (anapara + biriken net faiz); vade sonuna dek
+    kilitli sayıldığından `bal`'a (harcanabilir nakit) girmez, yalnız `total`'a (net varlık) eklenir. */
+export type Day = { date: Date; k: string; net: number; bal: number; assets: number; cashFunds: number; deposits: number; total: number; ev: { n: string; a: number }[] };
 
 /** Nakit projeksiyonu (hepsi TRY). `rates` USD-doğal varlıkları TRY'ye çevirmek için — verilmezse USD çevrilmez.
     Para piyasası (nakit sayılan) fon sembolleri `settings.cash_funds`'tan (virgülle ayrık) okunur. */
@@ -71,7 +74,9 @@ export function project(data: AllData, months: number, rates: Rates = { usdTry: 
     bal += net;
     const k = keyOf(d);
     const { assets, cashFunds } = assetsOn(k);
-    days.push({ date: new Date(d), k, net, bal, assets, cashFunds, total: bal + assets, ev });
+    /* vadeli mevduat: o günkü değeri (anapara + biriken net faiz); kilitli varlık → yalnız total'a */
+    const deposits = data.deposits.reduce((s, dep) => s + depositValueOn(dep, d), 0);
+    days.push({ date: new Date(d), k, net, bal, assets, cashFunds, deposits, total: bal + assets + deposits, ev });
   }
   return days;
 }

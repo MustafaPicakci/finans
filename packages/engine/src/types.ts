@@ -6,6 +6,10 @@ export type AssetType = "BIST" | "FON" | "ALTIN" | "DOVIZ" | "KRIPTO" | "ETF";
 /** Bir varlığın/işlemin doğal (native) para birimi. TRY taban birimidir; USD döviz varlıklar içindir. */
 export type Currency = "TRY" | "USD";
 export type Trade = { id: number; date: string; asset_type: AssetType; symbol: string; side: "ALIŞ" | "SATIŞ"; qty: number; price: number; fee: number; currency: Currency; account_id?: number | null };
+/** Vadeli mevduat (TRY): anapara `open_date`'te açılır, `term_days` gün sonra vade dolar.
+    Faiz basit (yıllık `rate` %, 365 gün-sayımı); `withholding` = stopaj % (net faize düşer).
+    `account_id` verilmişse açılışta anapara o hesaptan düşülür (silinince geri döner). */
+export type Deposit = { id: number; name: string; principal: number; rate: number; open_date: string; term_days: number; withholding: number; account_id?: number | null };
 export type Card = { id: number; name: string; limit_amount: number; statement_day: number; due_day: number };
 export type CardTx = { id: number; card_id: number; date: string; name: string; amount: number; installments: number };
 export type Price = { symbol: string; asset_type: string; price: number; source: string; updated_at: string; currency?: Currency };
@@ -17,5 +21,5 @@ export type PriceHistoryEntry = { symbol: string; asset_type: AssetType; date: s
 export type AllData = {
   accounts: Account[]; recurring: Recurring[]; loans: Loan[]; oneoffs: OneOff[];
   trades: Trade[]; cards: Card[]; card_txs: CardTx[]; prices: Price[]; price_history: PriceHistoryEntry[];
-  categories: Category[]; transactions: Transaction[]; settings: Record<string, string>;
+  categories: Category[]; transactions: Transaction[]; deposits: Deposit[]; settings: Record<string, string>;
 };

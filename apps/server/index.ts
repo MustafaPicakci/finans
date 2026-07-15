@@ -207,7 +207,7 @@ api.use("*", async (c, next) => {
 /* ---- tek seferde tüm veri (kullanıcıya scope'lu; prices/price_history GLOBAL) ---- */
 api.get("/all", async (c) => {
   const uid = c.get("user").id;
-  const [accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions, autoPrices, userPrices, price_history, globalSettings, userSettings] =
+  const [accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions, deposits, autoPrices, userPrices, price_history, globalSettings, userSettings] =
     await Promise.all([
       db.all("SELECT * FROM accounts WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM recurring WHERE user_id=? ORDER BY day, id", uid),
@@ -218,6 +218,7 @@ api.get("/all", async (c) => {
       db.all("SELECT * FROM card_txs WHERE user_id=? ORDER BY date, id", uid),
       db.all("SELECT * FROM categories WHERE user_id=? ORDER BY name", uid),
       db.all("SELECT * FROM transactions WHERE user_id=? ORDER BY date DESC, id DESC", uid),
+      db.all("SELECT * FROM deposits WHERE user_id=? ORDER BY open_date, id", uid),
       db.all<any>("SELECT symbol, asset_type, price, source, updated_at, currency FROM prices"),
       db.all<any>("SELECT symbol, asset_type, price, updated_at, currency FROM user_prices WHERE user_id=?", uid),
       db.all("SELECT * FROM price_history ORDER BY date"),
@@ -228,7 +229,7 @@ api.get("/all", async (c) => {
   const pm = new Map<string, any>(autoPrices.map((p) => [`${p.asset_type}:${p.symbol}`, { ...p, source: "auto" }]));
   for (const up of userPrices) pm.set(`${up.asset_type}:${up.symbol}`, { ...up, source: "manual" });
   return c.json({
-    accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions,
+    accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions, deposits,
     prices: [...pm.values()], price_history,
     // global (fx/tefas) + kullanıcı ayarları (horizon/cash_funds); kullanıcı çakışmada kazanır
     settings: Object.fromEntries([...globalSettings, ...userSettings].map((s) => [s.key, s.value])),
@@ -326,6 +327,43 @@ api.delete("/trades/:id", async (c) => {
   });
   return c.json({ ok: true });
 });
+/* deposits (vadeli mevduat): jenerik crud yerine elle — trades gibi opsiyonel hesap yan etkisi var.
+   account_id verilmişse açılış anaparayı hesaptan düşer; DELETE geri alır (anapara iadesi). İkisi atomik.
+   Faiz/vade net varlığa engine'de (depositValueOn) accrue eder; PUT yok (sil + yeniden ekle). */
+api.post("/deposits", async (c) => {
+  const b = await c.req.json().catch(() => null);
+  if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
+  for (const f of ["name", "principal", "rate", "open_date", "term_days"])
+    if (b[f] === undefined || b[f] === "") return c.json({ error: `${f} zorunlu` }, 400);
+  const uid = c.get("user").id;
+  const principal = Number(b.principal), rate = Number(b.rate), termDays = Math.trunc(Number(b.term_days));
+  const withholding = Number(b.withholding ?? 0);
+  if (!(principal > 0) || !(termDays >= 1) || rate < 0 || withholding < 0 || withholding > 100)
+    return c.json({ error: "geçersiz değer" }, 400);
+  const accountId = b.account_id != null && b.account_id !== "" ? Number(b.account_id) : null;
+  const id = await db.tx(async (t) => {
+    const info = await t.run(
+      "INSERT INTO deposits (name,principal,rate,open_date,term_days,withholding,account_id,user_id) VALUES (?,?,?,?,?,?,?,?) RETURNING id",
+      b.name, principal, rate, b.open_date, termDays, withholding, accountId, uid,
+    );
+    if (accountId != null) await t.run("UPDATE accounts SET balance = balance - ? WHERE id=? AND user_id=?", principal, accountId, uid);
+    return info.id;
+  });
+  return c.json({ id });
+});
+
+api.delete("/deposits/:id", async (c) => {
+  const uid = c.get("user").id;
+  await db.tx(async (t) => {
+    const row = await t.get<{ principal: number; account_id: number | null }>(
+      "SELECT principal, account_id FROM deposits WHERE id=? AND user_id=?", c.req.param("id"), uid,
+    );
+    await t.run("DELETE FROM deposits WHERE id=? AND user_id=?", c.req.param("id"), uid);
+    if (row && row.account_id != null) await t.run("UPDATE accounts SET balance = balance + ? WHERE id=? AND user_id=?", row.principal, row.account_id, uid);
+  });
+  return c.json({ ok: true });
+});
+
 crud("cards", "cards", [
   { name: "name", required: true }, { name: "limit_amount" },
   { name: "statement_day", required: true }, { name: "due_day", required: true },
@@ -425,7 +463,7 @@ api.put("/settings", async (c) => {
 /* ---- KVKK: kullanıcının tüm verisini JSON indir ---- */
 api.get("/export", async (c) => {
   const uid = c.get("user").id;
-  const [accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions, userSettings] =
+  const [accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions, deposits, userSettings] =
     await Promise.all([
       db.all("SELECT * FROM accounts WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM recurring WHERE user_id=? ORDER BY id", uid),
@@ -436,12 +474,13 @@ api.get("/export", async (c) => {
       db.all("SELECT * FROM card_txs WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM categories WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM transactions WHERE user_id=? ORDER BY id", uid),
+      db.all("SELECT * FROM deposits WHERE user_id=? ORDER BY id", uid),
       db.all<{ key: string; value: string }>("SELECT key, value FROM user_settings WHERE user_id=?", uid),
     ]);
   c.header("Content-Disposition", `attachment; filename="finans-export-${todayLocal()}.json"`);
   return c.json({
     exported_at: nowLocal(), user: c.get("user"),
-    accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions,
+    accounts, recurring, loans, oneoffs, trades, cards, card_txs, categories, transactions, deposits,
     settings: Object.fromEntries(userSettings.map((s) => [s.key, s.value])),
   });
 });
