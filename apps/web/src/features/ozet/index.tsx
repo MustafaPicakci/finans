@@ -17,14 +17,19 @@ import { Money, Empty } from "../../ui";
 export function Ozet({ data, days, pos, cash, rates, reload }: {
   data: AllData; days: Day[]; pos: Position[]; cash: number; rates: Rates; reload: () => void;
 }) {
-  const minDay = days.reduce((m, d) => (d.bal < m.bal ? d : m), days[0] ?? { bal: 0, date: new Date() } as Day);
-  const negDays = days.filter((d) => d.bal < 0).length;
+  /* Likit (etkin) nakit = harcanabilir nakit + "nakit say" işaretli para piyasası fonları.
+     Takvimle aynı tanım; portföy/hisse/vadeli buna girmez (onlar toplam varlıkta). */
+  const eff = (d: Day) => d.bal + d.cashFunds;
+  const minDay = days.reduce((m, d) => (eff(d) < eff(m) ? d : m), days[0] ?? { bal: 0, cashFunds: 0, date: new Date() } as Day);
   const chart = days
     .filter((_, i) => i % Math.max(1, Math.floor(days.length / 240)) === 0)
-    .map((d) => ({ x: fmtD(d.date, { day: "numeric", month: "short" }), bal: Math.round(d.bal) }));
+    .map((d) => ({ x: fmtD(d.date, { day: "numeric", month: "short" }), bal: Math.round(eff(d)) }));
   const upcoming = days.filter((d) => d.ev.length).slice(0, 20)
     .flatMap((d) => d.ev.map((e) => ({ ...e, date: d.date }))).slice(0, 6);
   const today = new Date(); today.setHours(0, 0, 0, 0);
+  /* runway: likit nakitin ilk kez sıfırın altına düştüğü gün — "param ne zaman biter" */
+  const runwayDay = days.find((d) => eff(d) < 0);
+  const runwayIn = runwayDay ? Math.round((runwayDay.date.getTime() - today.getTime()) / 86_400_000) : null;
   const depositsValue = data.deposits.reduce((s, d) => s + depositValueOn(d, today), 0);
   const alloc = [
     { name: "Nakit", value: Math.max(0, cash) },
@@ -43,11 +48,11 @@ export function Ozet({ data, days, pos, cash, rates, reload }: {
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {days.length > 0 && (
             <div style={{
-              background: minDay.bal < 0 ? T.negSoft : T.panel2, border: `1px solid ${minDay.bal < 0 ? T.neg : T.line}`,
+              background: eff(minDay) < 0 ? T.negSoft : T.panel2, border: `1px solid ${eff(minDay) < 0 ? T.neg : T.line}`,
               borderRadius: 20, padding: "4px 12px", fontSize: 12, ...css.mono,
             }}>
               en düşük: {fmtD(minDay.date, { day: "numeric", month: "short" })} ·{" "}
-              <span style={{ color: minDay.bal < 0 ? T.neg : T.pos }}>{tl.format(Math.round(minDay.bal))}</span>
+              <span style={{ color: eff(minDay) < 0 ? T.neg : T.pos }}>{tl.format(Math.round(eff(minDay)))}</span>
             </div>
           )}
           <select style={{ ...css.input, width: 90, padding: "5px 8px", fontSize: 12 }} value={data.settings.horizon || "6"}
@@ -56,9 +61,18 @@ export function Ozet({ data, days, pos, cash, rates, reload }: {
           </select>
         </div>
       </div>
-      {negDays > 0 && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, color: T.warn, background: T.warnSoft, borderRadius: 10, padding: "8px 12px", fontSize: 13, marginTop: 10, fontWeight: 500 }}>
-          ⚠ {negDays} gün eksi bakiyede görünüyorsunuz.
+      <div style={{ fontSize: 11, color: T.mut, marginTop: 4 }}>
+        Likit nakit = hesap bakiyeleri + “nakit say” işaretli para piyasası fonları. Portföy, hisse ve vadeli mevduat buna dahil değildir (onlar toplam varlıkta).
+      </div>
+      {runwayDay ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, color: runwayIn! <= 0 ? T.neg : T.warn, background: runwayIn! <= 0 ? T.negSoft : T.warnSoft, borderRadius: 10, padding: "8px 12px", fontSize: 13, marginTop: 8, fontWeight: 500 }}>
+          {runwayIn! <= 0
+            ? <>⚠ Likit nakitiniz şu an ekside ({tl.format(Math.round(eff(runwayDay)))}). Gelir kalemi girmemiş veya bir hesap bakiyesi eksi olabilir.</>
+            : <>⚠ Likit nakitiniz <b>{fmtD(runwayDay.date, { day: "numeric", month: "long" })}</b> dolayında tükeniyor (~{runwayIn} gün sonra).</>}
+        </div>
+      ) : (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, color: T.pos, background: T.posSoft, borderRadius: 10, padding: "8px 12px", fontSize: 13, marginTop: 8, fontWeight: 500 }}>
+          ✓ Seçili {data.settings.horizon || "6"} ay boyunca likit nakitiniz eksiye düşmüyor.
         </div>
       )}
       <div style={{ height: 220, marginTop: 8 }}>
@@ -75,7 +89,7 @@ export function Ozet({ data, days, pos, cash, rates, reload }: {
             <YAxis tick={{ fill: T.mut, fontSize: 10, fontFamily: T.mono }} tickLine={false} axisLine={false} width={52}
               tickFormatter={(v: number) => (Math.abs(v) >= 1000 ? `${Math.round(v / 1000)}k` : String(v))} />
             <Tooltip contentStyle={{ background: T.panel2, border: `1px solid ${T.line}`, borderRadius: 8, fontFamily: T.mono, fontSize: 12 }}
-              labelStyle={{ color: T.mut }} formatter={(v: number) => [tl.format(v), "Bakiye"]} />
+              labelStyle={{ color: T.mut }} formatter={(v: number) => [tl.format(v), "Likit nakit"]} />
             <ReferenceLine y={0} stroke={T.neg} strokeDasharray="4 4" />
             <Area type="monotone" dataKey="bal" stroke={T.acc} strokeWidth={2} fill="url(#g)" />
           </AreaChart>
