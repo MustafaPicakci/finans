@@ -1,4 +1,4 @@
-import { scrypt, randomBytes, timingSafeEqual } from "node:crypto";
+import { scrypt, randomBytes, timingSafeEqual, createHash } from "node:crypto";
 import { promisify } from "node:util";
 import { db } from "./db.js";
 
@@ -21,9 +21,14 @@ export async function verifyPassword(pw: string, stored: string): Promise<boolea
   return key.length === dk.length && timingSafeEqual(key, dk);
 }
 
-/* ---- oturumlar (server-side, revoke edilebilir) ---- */
-const SESSION_DAYS = 30;
+/* ---- oturumlar (server-side, revoke edilebilir) ----
+   Cookie'de HAM token taşınır; DB'de yalnız SHA-256 hash'i saklanır → DB sızsa bile
+   token'lar doğrudan kullanılamaz (tersine çevrilemez). Ham token 32 bayt rastgele
+   olduğundan hash öncesi ayrıca salt gerekmez (sözlük saldırısı imkânsız). */
+const SESSION_DAYS = 7;
 export const SESSION_COOKIE = "finans_session";
+
+const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
 
 export type SessionUser = { id: number; email: string };
 
@@ -33,9 +38,9 @@ export async function createSession(userId: number): Promise<{ token: string; ex
   const expires = new Date(now.getTime() + SESSION_DAYS * 86400_000);
   await db.run(
     "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?,?,?,?)",
-    token, userId, now.toISOString(), expires.toISOString(),
+    hashToken(token), userId, now.toISOString(), expires.toISOString(),
   );
-  return { token, expires };
+  return { token, expires }; // ham token → cookie
 }
 
 /** Geçerli (süresi dolmamış) oturumun kullanıcısını döner; yoksa null. Süresi dolmuşsa temizler. */
@@ -43,7 +48,7 @@ export async function getSessionUser(token: string | undefined): Promise<Session
   if (!token) return null;
   const row = await db.get<{ id: number; email: string; expires_at: string }>(
     "SELECT u.id, u.email, s.expires_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?",
-    token,
+    hashToken(token),
   );
   if (!row) return null;
   if (row.expires_at <= new Date().toISOString()) {
@@ -55,7 +60,7 @@ export async function getSessionUser(token: string | undefined): Promise<Session
 
 export async function deleteSession(token: string | undefined): Promise<void> {
   if (!token) return;
-  await db.run("DELETE FROM sessions WHERE token = ?", token);
+  await db.run("DELETE FROM sessions WHERE token = ?", hashToken(token));
 }
 
 /** Kullanıcının TÜM oturumlarını düşür (şifre sıfırlama sonrası güvenlik). */
