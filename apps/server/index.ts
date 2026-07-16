@@ -8,7 +8,7 @@ import { txShares, keyOf, REC_AMOUNT_BEGIN, type Card, type CardTx } from "@fina
 import { db, initDb, nowLocal, todayLocal, TENANT_TABLES, GLOBAL_SETTING_KEYS, type TxClient } from "./db.js";
 import { refreshAll } from "./prices.js";
 import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, SESSION_COOKIE, type SessionUser } from "./auth.js";
-import { sendMail, resetEmail, verifyEmail } from "./mail.js";
+import { sendMail, resetEmail, verifyEmail, mailConfigured } from "./mail.js";
 
 const app = new Hono();
 const api = new Hono<{ Variables: { user: SessionUser } }>();
@@ -91,38 +91,51 @@ api.post("/auth/register", async (c) => {
   const { email, password } = await c.req.json().catch(() => ({}));
   if (!email || typeof email !== "string" || !email.includes("@")) return c.json({ error: "Geçerli e-posta gir" }, 400);
   if (!password || typeof password !== "string" || password.length < 8) return c.json({ error: "Parola en az 8 karakter olmalı" }, 400);
-  const { count } = (await db.get<{ count: number }>("SELECT COUNT(*)::int AS count FROM users"))!;
-  if (count > 0) return c.json({ error: "Kayıt kapalı (çok kullanıcı Faz 5.2'de açılacak)" }, 403);
   const email2 = email.trim().toLowerCase();
-  // Kayıt owner-only (yalnız users boşken çalışır) → oluşan kullanıcı owner, doğrulanmış sayılır.
-  // Çok-kullanıcı açıldığında: email_verified=false + createEmailToken('verify') + sendMail(verifyEmail(...)).
+  if (await db.get<{ id: number }>("SELECT id FROM users WHERE email = ?", email2)) {
+    return c.json({ error: "Bu e-posta zaten kayıtlı" }, 409);
+  }
+  const { count } = (await db.get<{ count: number }>("SELECT COUNT(*)::int AS count FROM users"))!;
+  const isOwner = count === 0; // ilk kullanıcı = owner: doğrulanmış gelir, sahipsiz veriyi devralır, otomatik giriş yapar
   const info = await db.run(
     "INSERT INTO users (email, password_hash, email_verified, created_at) VALUES (?,?,?,?) RETURNING id",
-    email2, await hashPassword(password), true, new Date().toISOString(),
+    email2, await hashPassword(password), isOwner, new Date().toISOString(),
   );
-  /* owner bootstrap: Faz 5.2 öncesinden kalan sahipsiz (user_id NULL) veriyi bu ilk kullanıcıya devret;
-     per-user ayarları (horizon/cash_funds) global settings'ten user_settings'e taşı. Yeni kurulumda 0 satır (zararsız). */
-  const gk = [...GLOBAL_SETTING_KEYS];
-  const ph = gk.map(() => "?").join(",");
-  await db.tx(async (t) => {
-    for (const tbl of TENANT_TABLES) await t.run(`UPDATE ${tbl} SET user_id=? WHERE user_id IS NULL`, info.id);
-    await t.run(
-      `INSERT INTO user_settings (user_id, key, value) SELECT ?, key, value FROM settings WHERE key NOT IN (${ph}) ON CONFLICT (user_id, key) DO NOTHING`,
-      info.id, ...gk,
-    );
-    await t.run(`DELETE FROM settings WHERE key NOT IN (${ph})`, ...gk);
-    // elle girilmiş fiyatları (source='manual') owner'ın user_prices'ına taşı; global prices auto-only kalsın
-    await t.run(
-      `INSERT INTO user_prices (user_id, symbol, asset_type, price, updated_at, currency)
-       SELECT ?, symbol, asset_type, price, updated_at, currency FROM prices WHERE source='manual'
-       ON CONFLICT (user_id, symbol, asset_type) DO NOTHING`,
-      info.id,
-    );
-    await t.run(`DELETE FROM prices WHERE source='manual'`);
-  });
-  const { token, expires } = await createSession(info.id!);
-  setSessionCookie(c, token, expires);
-  return c.json({ user: { id: info.id, email: email2 } });
+
+  if (isOwner) {
+    /* owner bootstrap: Faz 5.2 öncesinden kalan sahipsiz (user_id NULL) veriyi bu ilk kullanıcıya devret;
+       per-user ayarları (horizon/cash_funds) global settings'ten user_settings'e taşı. Yeni kurulumda 0 satır (zararsız).
+       YALNIZ ilk kullanıcıda çalışmalı — sonraki kayıtlarda orphan devri olmamalı. */
+    const gk = [...GLOBAL_SETTING_KEYS];
+    const ph = gk.map(() => "?").join(",");
+    await db.tx(async (t) => {
+      for (const tbl of TENANT_TABLES) await t.run(`UPDATE ${tbl} SET user_id=? WHERE user_id IS NULL`, info.id);
+      await t.run(
+        `INSERT INTO user_settings (user_id, key, value) SELECT ?, key, value FROM settings WHERE key NOT IN (${ph}) ON CONFLICT (user_id, key) DO NOTHING`,
+        info.id, ...gk,
+      );
+      await t.run(`DELETE FROM settings WHERE key NOT IN (${ph})`, ...gk);
+      // elle girilmiş fiyatları (source='manual') owner'ın user_prices'ına taşı; global prices auto-only kalsın
+      await t.run(
+        `INSERT INTO user_prices (user_id, symbol, asset_type, price, updated_at, currency)
+         SELECT ?, symbol, asset_type, price, updated_at, currency FROM prices WHERE source='manual'
+         ON CONFLICT (user_id, symbol, asset_type) DO NOTHING`,
+        info.id,
+      );
+      await t.run(`DELETE FROM prices WHERE source='manual'`);
+    });
+    const { token, expires } = await createSession(info.id!);
+    setSessionCookie(c, token, expires);
+    return c.json({ user: { id: info.id, email: email2 } });
+  }
+
+  /* Sonraki kullanıcılar: doğrulanmamış oluşturulur, aktivasyon e-postası gider, oturum AÇILMAZ
+     (doğrulanmamış giriş login'de 403). Frontend "e-postanı doğrula" gösterir. */
+  const vtoken = await createEmailToken(info.id!, "verify", 24 * 60 * 60_000); // 24 saat
+  const link = `${appBaseUrl(c)}/?verify=${vtoken}`;
+  const { subject, html } = verifyEmail(link);
+  await sendMail(email2, subject, html).catch((e) => console.error("[mail] aktivasyon gönderilemedi:", e));
+  return c.json({ pending: true });
 });
 
 api.post("/auth/login", async (c) => {
@@ -156,7 +169,8 @@ api.get("/auth/me", async (c) => {
 });
 
 /* Uygulamanın herkese açık kök URL'i (e-posta bağlantıları için). Env > tarayıcı Origin > istek host'u. */
-const appBaseUrl = (c: any) => process.env.APP_URL || c.req.header("origin") || new URL(c.req.url).origin;
+// Sondaki eğik çizgi(ler) kırpılır → link'te çift slash olmasın (env "…/" yazılsa bile).
+const appBaseUrl = (c: any) => (process.env.APP_URL || c.req.header("origin") || new URL(c.req.url).origin).replace(/\/+$/, "");
 
 /* Şifre sıfırlama isteği — DAİMA 200 (e-posta enumerasyonu/varlık sızmasın). */
 api.post("/auth/forgot", async (c) => {
@@ -194,6 +208,24 @@ api.post("/auth/verify", async (c) => {
   const userId = await consumeEmailToken(String(token ?? ""), "verify");
   if (!userId) return c.json({ error: "Bağlantı geçersiz veya süresi dolmuş" }, 400);
   await db.run("UPDATE users SET email_verified = true WHERE id = ?", userId);
+  return c.json({ ok: true });
+});
+
+/* Aktivasyon e-postasını yeniden gönder — DAİMA 200 (enumerasyon sızmasın); yalnız doğrulanmamış
+   kullanıcıya yeni token üretip mail atar. Token 24s'te dolduğu/teslim başarısız olabildiği için. */
+api.post("/auth/resend-verify", async (c) => {
+  if (rateLimited(`resend:${clientIp(c)}`, 5, 15 * 60_000)) return c.json({ error: "Çok fazla deneme, biraz sonra tekrar dene" }, 429);
+  const { email } = await c.req.json().catch(() => ({}));
+  const email2 = String(email ?? "").trim().toLowerCase();
+  if (email2.includes("@")) {
+    const user = await db.get<{ id: number; email_verified: boolean }>("SELECT id, email_verified FROM users WHERE email = ?", email2);
+    if (user && !user.email_verified) {
+      const vtoken = await createEmailToken(user.id, "verify", 24 * 60 * 60_000);
+      const link = `${appBaseUrl(c)}/?verify=${vtoken}`;
+      const { subject, html } = verifyEmail(link);
+      await sendMail(email2, subject, html).catch((e) => console.error("[mail] aktivasyon (resend) gönderilemedi:", e));
+    }
+  }
   return c.json({ ok: true });
 });
 
@@ -804,6 +836,7 @@ cron.schedule("*/15 * * * *", runScheduledJobs);
 const port = Number(process.env.PORT || 8787);
 /* şema hazır olsun, sonra sun */
 await initDb();
+if (isProd && !mailConfigured) console.warn("[mail] UYARI: prod'da SMTP yapılandırılmadı — yeni kullanıcılar aktivasyon e-postası alamaz, kayıt olsalar da giriş yapamaz. SMTP_* env'lerini ayarla.");
 serve({ fetch: app.fetch, port }, () => console.log(`finans → http://localhost:${port}`));
 
 /* Başlangıç catch-up'ı: Render free tier trafik yokken süreci uyutur; uyanışta node-cron ilk 15-dk

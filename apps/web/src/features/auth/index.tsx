@@ -10,7 +10,7 @@ type Mode = "login" | "register" | "forgot" | "reset";
 
 const SUBTITLE: Record<Mode, string> = {
   login: "Devam etmek için giriş yap.",
-  register: "İlk hesabı oluştur (owner).",
+  register: "Yeni hesap oluştur.",
   forgot: "Şifreni sıfırlamak için e-postanı gir.",
   reset: "Yeni şifreni belirle.",
 };
@@ -27,6 +27,7 @@ export function Auth({ onAuthed, urlAuth }: {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [info, setInfo] = useState("");
+  const [notVerified, setNotVerified] = useState(false); // login 403 → aktive edilmemiş: yeniden gönder butonu göster
 
   /* Aktivasyon token'ı varsa mount'ta otomatik doğrula, sonra giriş moduna dön. */
   useEffect(() => {
@@ -41,12 +42,23 @@ export function Auth({ onAuthed, urlAuth }: {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setErr(""); setInfo(""); setBusy(true);
+    setErr(""); setInfo(""); setNotVerified(false); setBusy(true);
     try {
-      if (mode === "login" || mode === "register") {
-        const { user } = mode === "login" ? await api.login(email, password) : await api.register(email, password);
+      if (mode === "login") {
+        const { user } = await api.login(email, password);
         onAuthed(user);
         return; // onAuthed yönlendirir; busy'yi bırakmaya gerek yok
+      }
+      if (mode === "register") {
+        const res = await api.register(email, password);
+        if (res.pending) {
+          // Doğrulama zorunlu: oturum açılmadı, kullanıcı e-postasını doğrulamalı.
+          setInfo("Doğrulama e-postası gönderildi. Gelen kutunu (ve spam klasörünü) kontrol edip bağlantıya tıkla, sonra giriş yap.");
+          setPassword(""); setMode("login"); setBusy(false);
+        } else if (res.user) {
+          onAuthed(res.user); // owner (ilk kullanıcı): otomatik giriş
+        }
+        return;
       }
       if (mode === "forgot") {
         await api.forgot(email);
@@ -59,11 +71,25 @@ export function Auth({ onAuthed, urlAuth }: {
       setBusy(false);
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "Bir hata oldu, tekrar dene");
+      // login sırasında 403 = hesap aktive edilmemiş → doğrulama e-postasını yeniden gönder seçeneği sun
+      if (mode === "login" && e instanceof ApiError && e.status === 403) setNotVerified(true);
       setBusy(false);
     }
   };
 
-  const go = (m: Mode) => { setMode(m); setErr(""); setInfo(""); };
+  const resend = async () => {
+    setErr(""); setBusy(true);
+    try {
+      await api.resendVerify(email);
+      setNotVerified(false);
+      setInfo("Doğrulama e-postası yeniden gönderildi. Gelen kutunu (ve spam) kontrol et.");
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Gönderilemedi, tekrar dene");
+    }
+    setBusy(false);
+  };
+
+  const go = (m: Mode) => { setMode(m); setErr(""); setInfo(""); setNotVerified(false); };
   const cta = mode === "login" ? "Giriş yap" : mode === "register" ? "Kayıt ol" : mode === "forgot" ? "Sıfırlama bağlantısı gönder" : "Şifreyi güncelle";
 
   return (
@@ -94,6 +120,11 @@ export function Auth({ onAuthed, urlAuth }: {
             </div>
           )}
           {err && <div style={{ fontSize: 13, color: T.neg }}>{err}</div>}
+          {notVerified && (
+            <div style={{ fontSize: 13, color: T.mut }}>
+              <button type="button" onClick={resend} disabled={busy} style={linkBtn}>Doğrulama e-postasını tekrar gönder</button>
+            </div>
+          )}
           {info && <div style={{ fontSize: 13, color: T.pos }}>{info}</div>}
           <button type="submit" disabled={busy} style={{ ...css.btn, width: "100%", padding: "11px 14px", opacity: busy ? 0.6 : 1 }}>
             {busy ? "…" : cta}
@@ -105,7 +136,7 @@ export function Auth({ onAuthed, urlAuth }: {
             <>
               <button onClick={() => go("forgot")} style={linkBtn}>Şifremi unuttum</button>
               <br />
-              İlk kez mi kuruyorsun? <button onClick={() => go("register")} style={linkBtn}>Kayıt ol</button>
+              Hesabın yok mu? <button onClick={() => go("register")} style={linkBtn}>Kayıt ol</button>
             </>
           )}
           {mode === "register" && (<>Zaten hesabın var mı? <button onClick={() => go("login")} style={linkBtn}>Giriş yap</button></>)}

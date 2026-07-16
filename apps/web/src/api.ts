@@ -41,7 +41,7 @@ export const api = {
   login: (email: string, password: string) =>
     fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) }).then((r) => j<{ user: SessionUser }>(r)),
   register: (email: string, password: string) =>
-    fetch("/api/auth/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) }).then((r) => j<{ user: SessionUser }>(r)),
+    fetch("/api/auth/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) }).then((r) => j<{ user?: SessionUser; pending?: boolean }>(r)),
   logout: () => fetch("/api/auth/logout", { method: "POST" }).then(j),
   /* ---- şifre sıfırlama + aktivasyon (Faz 6) ---- */
   forgot: (email: string) =>
@@ -50,6 +50,8 @@ export const api = {
     fetch("/api/auth/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, password }) }).then(j),
   verify: (token: string) =>
     fetch("/api/auth/verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) }).then(j),
+  resendVerify: (email: string) =>
+    fetch("/api/auth/resend-verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) }).then(j),
   /* ---- KVKK (Faz 5.4) ---- */
   exportData: () => fetch("/api/export").then((r) => { if (!r.ok) throw new ApiError(r.status, "İndirilemedi"); return r.blob(); }),
   deleteAccount: (password: string) =>

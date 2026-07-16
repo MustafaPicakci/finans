@@ -28,7 +28,17 @@ pnpm start      # http://localhost:8787
 docker compose up -d --build
 ```
 
-Compose iki servis çalıştırır: `db` (PostgreSQL, veri `./data/pg` volume'ünde — imajı silsen de veri durur) + `finans` (uygulama, `db`'ye bağlanır). Traefik ile dışarı açacaksan `docker-compose.yml` içindeki label örneğini kullan — **uygulamanın kendi kimlik doğrulaması henüz yok** (Faz 5.1'de gelecek), ya sadece Tailscale ağından eriş ya da Traefik basic-auth koy.
+Compose iki servis çalıştırır: `db` (PostgreSQL, veri `./data/pg` volume'ünde — imajı silsen de veri durur) + `finans` (uygulama, `db`'ye bağlanır). Uygulamanın **kendi kimlik doğrulaması var** (scrypt + server-side session; tüm `/api` giriş ister).
+
+### Kayıt / giriş (çok-kullanıcı)
+
+Kayıt herkese açıktır ve **e-posta doğrulaması zorunludur**:
+
+- **İlk kullanıcı = owner**: otomatik doğrulanır, mevcut (sahipsiz) veriyi devralır ve doğrudan giriş yapar.
+- **Sonraki kullanıcılar**: kayıt sonrası e-postalarına gönderilen aktivasyon bağlantısına tıklamalıdır; doğrulanana kadar giriş engellenir. Bağlantı gelmediyse giriş ekranından **"Doğrulama e-postasını tekrar gönder"** ile yenisi istenebilir (24 saat geçerli).
+- Her kullanıcının verisi `user_id` ile izole; piyasa fiyatları (`prices`) global paylaşılır.
+
+> **Önemli:** Çok-kullanıcı için **çalışan SMTP** şarttır (`apps/server/.env.example`'daki `SMTP_HOST/PORT/USER/PASS` + `APP_URL`). SMTP yapılandırılmazsa aktivasyon e-postası gönderilemez ve owner dışındaki kullanıcılar giriş yapamaz (uygulama açılışta uyarı loglar). Geliştirmede SMTP boşsa aktivasyon bağlantısı sunucu konsoluna yazılır.
 
 ## Canlı fiyat kaynakları ve dürüst kısıtlar
 
