@@ -168,9 +168,11 @@ api.get("/auth/me", async (c) => {
   return user ? c.json({ user }) : c.json({ user: null });
 });
 
-/* Uygulamanın herkese açık kök URL'i (e-posta bağlantıları için). Env > tarayıcı Origin > istek host'u. */
-// Sondaki eğik çizgi(ler) kırpılır → link'te çift slash olmasın (env "…/" yazılsa bile).
-const appBaseUrl = (c: any) => (process.env.APP_URL || c.req.header("origin") || new URL(c.req.url).origin).replace(/\/+$/, "");
+/* Uygulamanın herkese açık kök URL'i (e-posta bağlantıları için). Kaynak: APP_URL (env, güvenilir) →
+   yoksa istek host'u. Tarayıcı Origin header'ı BİLİNÇLİ olarak KULLANILMAZ: saldırgan kontrolünde bir
+   header olduğundan, reset/verify linkinin host'unu evil.com'a çevirip geçerli token'ı sızdırabilirdi
+   (hesap ele geçirme). Prod'da APP_URL şart (aşağıda açılışta uyarılır). Sondaki eğik çizgi(ler) kırpılır. */
+const appBaseUrl = (c: any) => (process.env.APP_URL || new URL(c.req.url).origin).replace(/\/+$/, "");
 
 /* Şifre sıfırlama isteği — DAİMA 200 (e-posta enumerasyonu/varlık sızmasın). */
 api.post("/auth/forgot", async (c) => {
@@ -710,19 +712,21 @@ api.delete("/prices/:asset_type/:symbol", async (c) => {
   return c.json({ ok: true });
 });
 
-/* ---- ayarlar: global anahtarlar (fx/tefas) settings'te, gerisi kullanıcıya özel user_settings'te ---- */
+/* ---- ayarlar: yalnız KULLANICIYA ÖZEL ayarlar (horizon/cash_funds → user_settings) yazılabilir ----
+   GLOBAL anahtarlar (fx_usd_try/tefas_* → paylaşımlı settings) SİSTEME AİTTİR: yalnız refreshAll()
+   doğrudan db.run ile yazar. İstemciden global anahtar yazımı REDDEDİLİR — aksi halde herhangi bir
+   kullanıcı fx kurunu bozar (herkesin değerlemesi) veya tefas_last_fetch'i ileri atıp global fiyat
+   tazelemeyi durdurabilirdi. Frontend bu anahtarları zaten hiç yazmaz → UX etkisi yok. Kısmi yazımı
+   önlemek için önce hepsini doğrula, sonra yaz. (Faz 5.2.1'in per-user fiyat izolasyonuyla aynı ilke.) */
 api.put("/settings", async (c) => {
   const uid = c.get("user").id;
   const b = (await c.req.json().catch(() => ({}))) as Record<string, string>;
+  if (Object.keys(b).some((k) => GLOBAL_SETTING_KEYS.has(k))) return c.json({ error: "bu ayar değiştirilemez" }, 403);
   for (const [k, v] of Object.entries(b)) {
-    if (GLOBAL_SETTING_KEYS.has(k)) {
-      await db.run("INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT (key) DO UPDATE SET value=excluded.value", k, String(v));
-    } else {
-      await db.run(
-        "INSERT INTO user_settings (user_id,key,value) VALUES (?,?,?) ON CONFLICT (user_id,key) DO UPDATE SET value=excluded.value",
-        uid, k, String(v),
-      );
-    }
+    await db.run(
+      "INSERT INTO user_settings (user_id,key,value) VALUES (?,?,?) ON CONFLICT (user_id,key) DO UPDATE SET value=excluded.value",
+      uid, k, String(v),
+    );
   }
   return c.json({ ok: true });
 });
@@ -837,6 +841,7 @@ const port = Number(process.env.PORT || 8787);
 /* şema hazır olsun, sonra sun */
 await initDb();
 if (isProd && !mailConfigured) console.warn("[mail] UYARI: prod'da SMTP yapılandırılmadı — yeni kullanıcılar aktivasyon e-postası alamaz, kayıt olsalar da giriş yapamaz. SMTP_* env'lerini ayarla.");
+if (isProd && !process.env.APP_URL) console.warn("[auth] UYARI: prod'da APP_URL ayarlanmadı — aktivasyon/şifre-sıfırlama linkleri istek host'undan türetilir; güvenilir sabit URL için APP_URL env'ini ayarla.");
 serve({ fetch: app.fetch, port }, () => console.log(`finans → http://localhost:${port}`));
 
 /* Başlangıç catch-up'ı: Render free tier trafik yokken süreci uyutur; uyanışta node-cron ilk 15-dk
