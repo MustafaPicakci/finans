@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
+import { logger } from "hono/logger";
 import cron from "node-cron";
 import { txShares, keyOf, REC_AMOUNT_BEGIN, type Card, type CardTx } from "@finans/engine";
 import { db, initDb, nowLocal, todayLocal, TENANT_TABLES, GLOBAL_SETTING_KEYS, type TxClient } from "./db.js";
@@ -11,6 +12,7 @@ import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSess
 import { sendMail, resetEmail, verifyEmail, mailConfigured } from "./mail.js";
 
 const app = new Hono();
+app.use("*", logger());
 const api = new Hono<{ Variables: { user: SessionUser } }>();
 
 const isProd = process.env.NODE_ENV === "production";
@@ -126,6 +128,7 @@ api.post("/auth/register", async (c) => {
     });
     const { token, expires } = await createSession(info.id!);
     setSessionCookie(c, token, expires);
+    console.log(`[audit] Yeni kayıt (owner): ${email2} (id:${info.id})`);
     return c.json({ user: { id: info.id, email: email2 } });
   }
 
@@ -134,7 +137,8 @@ api.post("/auth/register", async (c) => {
   const vtoken = await createEmailToken(info.id!, "verify", 24 * 60 * 60_000); // 24 saat
   const link = `${appBaseUrl(c)}/?verify=${vtoken}`;
   const { subject, html } = verifyEmail(link);
-  await sendMail(email2, subject, html).catch((e) => console.error("[mail] aktivasyon gönderilemedi:", e));
+  console.log(`[audit] Yeni kayıt (beklemede): ${email2} (id:${info.id})`);
+  sendMail(email2, subject, html).catch((e) => console.error("[mail] aktivasyon gönderilemedi:", e));
   return c.json({ pending: true });
 });
 
@@ -154,12 +158,14 @@ api.post("/auth/login", async (c) => {
   if (!user.email_verified) return c.json({ error: "Hesabın henüz aktive edilmemiş. E-postana gönderilen bağlantıya tıkla." }, 403);
   const { token, expires } = await createSession(user.id);
   setSessionCookie(c, token, expires);
+  console.log(`[audit] Kullanıcı giriş yaptı: ${user.email} (id:${user.id})`);
   return c.json({ user: { id: user.id, email: user.email } });
 });
 
 api.post("/auth/logout", async (c) => {
   await deleteSession(getCookie(c, SESSION_COOKIE));
   deleteCookie(c, SESSION_COOKIE, { path: "/" });
+  console.log(`[audit] Oturum kapatıldı (logout)`);
   return c.json({ ok: true });
 });
 
@@ -185,7 +191,7 @@ api.post("/auth/forgot", async (c) => {
       const token = await createEmailToken(user.id, "reset", 60 * 60_000); // 1 saat
       const link = `${appBaseUrl(c)}/?reset=${token}`;
       const { subject, html } = resetEmail(link);
-      await sendMail(email2, subject, html).catch((e) => console.error("[mail] reset gönderilemedi:", e));
+      sendMail(email2, subject, html).catch((e) => console.error("[mail] reset gönderilemedi:", e));
     }
   }
   return c.json({ ok: true });
@@ -200,6 +206,7 @@ api.post("/auth/reset", async (c) => {
   if (!userId) return c.json({ error: "Bağlantı geçersiz veya süresi dolmuş" }, 400);
   await db.run("UPDATE users SET password_hash = ? WHERE id = ?", await hashPassword(password), userId);
   await revokeUserSessions(userId); // güvenlik: sıfırlama sonrası eski oturumlar düşer
+  console.log(`[audit] Şifre sıfırlandı: (id:${userId})`);
   return c.json({ ok: true });
 });
 
@@ -225,7 +232,7 @@ api.post("/auth/resend-verify", async (c) => {
       const vtoken = await createEmailToken(user.id, "verify", 24 * 60 * 60_000);
       const link = `${appBaseUrl(c)}/?verify=${vtoken}`;
       const { subject, html } = verifyEmail(link);
-      await sendMail(email2, subject, html).catch((e) => console.error("[mail] aktivasyon (resend) gönderilemedi:", e));
+      sendMail(email2, subject, html).catch((e) => console.error("[mail] aktivasyon (resend) gönderilemedi:", e));
     }
   }
   return c.json({ ok: true });
@@ -456,6 +463,7 @@ api.post("/recurring/:id/realize", async (c) => {
   const acc = (b as any).account_id != null && (b as any).account_id !== "" ? Number((b as any).account_id) : undefined;
   const cat = (b as any).category_id != null && (b as any).category_id !== "" ? Number((b as any).category_id) : undefined;
   const created = await db.tx((t) => realizeOccurrence(t, uid, r, ym, { account_id: acc, category_id: cat }));
+  if (created) console.log(`[audit] Düzenli işlem/ödeme gerçekleşti: ${r.name} (ay: ${ym}, id:${uid})`);
   return c.json({ ok: true, already: !created });
 });
 
@@ -513,6 +521,7 @@ api.post("/trades", async (c) => {
     if (affects) await t.run("UPDATE accounts SET balance = balance + ? WHERE id=? AND user_id=?", tradeBalanceDelta(b.side, qty, price, fee), accountId, uid);
     return info.id;
   });
+  console.log(`[audit] Borsa işlemi eklendi: ${b.symbol} ${b.side} (adet: ${qty}, fiyat: ${price}, id:${uid})`);
   return c.json({ id });
 });
 
@@ -551,6 +560,7 @@ api.post("/deposits", async (c) => {
     if (accountId != null) await t.run("UPDATE accounts SET balance = balance - ? WHERE id=? AND user_id=?", principal, accountId, uid);
     return info.id;
   });
+  console.log(`[audit] Vadeli hesap (mevduat) açıldı: ${b.name} (anapara: ${principal}, id:${uid})`);
   return c.json({ id });
 });
 
@@ -619,6 +629,7 @@ api.post("/cards/:id/pay-statement", async (c) => {
   const accountId = (b as any).account_id != null && (b as any).account_id !== "" ? Number((b as any).account_id) : null;
   const categoryId = (b as any).category_id != null && (b as any).category_id !== "" ? Number((b as any).category_id) : null;
   const created = await db.tx((t) => payStatementTx(t, uid, card, due, amount, accountId, categoryId));
+  if (created) console.log(`[audit] Kredi kartı ekstresi ödendi: ${card.name} (vade: ${due}, tutar: ${amount}, id:${uid})`);
   return c.json({ ok: true, already: !created, amount });
 });
 
@@ -666,6 +677,7 @@ api.post("/transactions", async (c) => {
     }
     return info.id;
   });
+  console.log(`[audit] İşlem/Transfer eklendi: ${b.name} (tutar: ${b.amount}, id:${uid})`);
   return c.json({ id });
 });
 api.delete("/transactions/:id", async (c) => {
@@ -752,6 +764,7 @@ api.get("/export", async (c) => {
       db.all<{ key: string; value: string }>("SELECT key, value FROM user_settings WHERE user_id=?", uid),
     ]);
   c.header("Content-Disposition", `attachment; filename="finans-export-${todayLocal()}.json"`);
+  console.log(`[audit] Veri dışa aktarma (KVKK Export): (id:${uid})`);
   return c.json({
     exported_at: nowLocal(), user: c.get("user"),
     accounts, recurring, recurring_amounts, loans, oneoffs, trades, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments,
@@ -767,6 +780,7 @@ api.post("/account/delete", async (c) => {
   if (!u || !(await verifyPassword(password ?? "", u.password_hash))) return c.json({ error: "Parola hatalı" }, 401);
   await db.run("DELETE FROM users WHERE id=?", uid); // cascade: tüm veri + sessions + user_settings
   deleteCookie(c, SESSION_COOKIE, { path: "/" });
+  console.log(`[audit] Hesap kalıcı olarak silindi (KVKK Delete): (id:${uid})`);
   return c.json({ ok: true });
 });
 
