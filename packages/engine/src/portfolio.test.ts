@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { positions, portfolioValueHistory, portfolioValueTry, convert } from "./portfolio.js";
+import { positions, portfolioValueHistory, portfolioValueTry, convert, groupTradesByPortfolio, portfolioGroupValueTry, tradeLedger, summarizeTrades, sliceValueHistory, bucketValueHistory, historyChange } from "./portfolio.js";
 import type { Trade, Price, PriceHistoryEntry } from "./types.js";
 
 const trade = (over: Partial<Trade>): Trade => ({
@@ -161,5 +161,170 @@ describe("portfolioValueHistory", () => {
     const prices = [hist({ date: "2026-01-20", price: 130 })];
     const result = portfolioValueHistory(trades, prices, R);
     expect(result).toEqual([{ date: "2026-01-20", value: 4 * 130 }]);
+  });
+});
+
+describe("groupTradesByPortfolio (Faz 11)", () => {
+  it("işlemleri gruba ayırır, grupsuzlar null anahtarda toplanır", () => {
+    const by = groupTradesByPortfolio([
+      trade({ id: 1, portfolio_id: 7, qty: 10, price: 100 }),
+      trade({ id: 2, portfolio_id: 7, qty: 5, price: 120 }),
+      trade({ id: 3, qty: 1, price: 50 }),
+    ]);
+    expect(new Set(by.keys())).toEqual(new Set([7, null]));
+    expect(by.get(7)!.map((t) => t.id)).toEqual([1, 2]);
+    expect(by.get(null)!.map((t) => t.id)).toEqual([3]);
+  });
+
+  it("aynı sembol iki portföyde AYRI pozisyondur (ayrı ortalama maliyet)", () => {
+    const trades = [
+      trade({ id: 1, portfolio_id: 1, symbol: "THYAO", qty: 10, price: 100 }),
+      trade({ id: 2, portfolio_id: 2, symbol: "THYAO", qty: 10, price: 300 }),
+    ];
+    const by = groupTradesByPortfolio(trades);
+    const [a] = positions(by.get(1)!, []);
+    const [b] = positions(by.get(2)!, []);
+    expect(a.avg).toBe(100);
+    expect(b.avg).toBe(300);
+    // tek listede değerlenince (net varlık yolu) tek pozisyonda birleşir — toplam korunur
+    const [all] = positions(trades, []);
+    expect(all.qty).toBe(20);
+    expect(all.avg).toBe(200);
+  });
+
+  it("grup değeri o grubun işlemlerinden hesaplanır (TRY'ye çevrili)", () => {
+    const prices: Price[] = [
+      { symbol: "THYAO", asset_type: "BIST", price: 150, source: "auto", updated_at: "", currency: "TRY" },
+      { symbol: "VOO", asset_type: "ETF", price: 200, source: "auto", updated_at: "", currency: "USD" },
+    ];
+    const trades = [
+      trade({ id: 1, portfolio_id: 1, symbol: "THYAO", qty: 10, price: 100 }),
+      trade({ id: 2, portfolio_id: 2, asset_type: "ETF", symbol: "VOO", qty: 2, price: 150, currency: "USD" }),
+    ];
+    const by = groupTradesByPortfolio(trades);
+    expect(portfolioGroupValueTry(by.get(1)!, prices, R)).toBe(1500);      // 10 × 150 TRY
+    expect(portfolioGroupValueTry(by.get(2)!, prices, R)).toBe(2 * 200 * 40); // 2 × 200 USD × 40
+  });
+});
+
+describe("tradeLedger (Faz 12 — hareket geçmişi)", () => {
+  it("her işlemin öncesi/sonrası adet ve ortalama maliyetini verir", () => {
+    const l = tradeLedger([
+      trade({ id: 1, date: "2026-01-01", qty: 10, price: 100 }),
+      trade({ id: 2, date: "2026-02-01", qty: 10, price: 200 }),
+    ]);
+    expect(l[0]).toMatchObject({ qtyBefore: 0, avgBefore: 0, qtyAfter: 10, avgAfter: 100, cash: 1000, realized: 0 });
+    expect(l[1]).toMatchObject({ qtyBefore: 10, avgBefore: 100, qtyAfter: 20, avgAfter: 150, cash: 2000 });
+  });
+
+  it("kronolojik sıralar — girdi sırası karışık olsa da", () => {
+    const l = tradeLedger([
+      trade({ id: 2, date: "2026-02-01", qty: 10, price: 200 }),
+      trade({ id: 1, date: "2026-01-01", qty: 10, price: 100 }),
+    ]);
+    expect(l.map((e) => e.trade.id)).toEqual([1, 2]);
+  });
+
+  it("satışta gerçekleşen K/Z ve ele geçen tutar komisyonu içerir", () => {
+    const l = tradeLedger([
+      trade({ id: 1, date: "2026-01-01", qty: 10, price: 100 }),
+      trade({ id: 2, date: "2026-02-01", side: "SATIŞ", qty: 4, price: 150, fee: 5 }),
+    ]);
+    expect(l[1].realized).toBe(4 * 50 - 5);   // 195
+    expect(l[1].cash).toBe(4 * 150 - 5);      // 595 (ele geçen)
+    expect(l[1].avgAfter).toBe(100);          // satış ortalamayı değiştirmez
+    expect(l[1].qtyAfter).toBe(6);
+    expect(l[1].closed).toBe(false);
+  });
+
+  it("pozisyonu tamamen kapatan satışı işaretler, yeniden alışta maliyet sıfırdan başlar", () => {
+    const l = tradeLedger([
+      trade({ id: 1, date: "2026-01-01", qty: 10, price: 100 }),
+      trade({ id: 2, date: "2026-02-01", side: "SATIŞ", qty: 10, price: 120 }),
+      trade({ id: 3, date: "2026-03-01", qty: 5, price: 300 }),
+    ]);
+    expect(l[1].closed).toBe(true);
+    expect(l[1].qtyAfter).toBe(0);
+    expect(l[2]).toMatchObject({ qtyBefore: 0, avgBefore: 0, avgAfter: 300 });
+  });
+
+  it("defterin son hali positions() ile birebir aynıdır", () => {
+    const trades = [
+      trade({ id: 1, date: "2026-01-01", qty: 10, price: 100, fee: 3 }),
+      trade({ id: 2, date: "2026-02-01", qty: 5, price: 140 }),
+      trade({ id: 3, date: "2026-03-01", side: "SATIŞ", qty: 6, price: 200, fee: 4 }),
+    ];
+    const last = tradeLedger(trades).at(-1)!;
+    const [p] = positions(trades, []);
+    expect(last.qtyAfter).toBeCloseTo(p.qty);
+    expect(last.avgAfter).toBeCloseTo(p.avg);
+    expect(tradeLedger(trades).reduce((s, e) => s + e.realized, 0)).toBeCloseTo(p.realized);
+  });
+
+  it("farklı semboller birbirinin ortalamasını etkilemez", () => {
+    const l = tradeLedger([
+      trade({ id: 1, date: "2026-01-01", symbol: "THYAO", qty: 10, price: 100 }),
+      trade({ id: 2, date: "2026-01-02", symbol: "ASELS", qty: 10, price: 50 }),
+      trade({ id: 3, date: "2026-01-03", symbol: "THYAO", qty: 10, price: 300 }),
+    ]);
+    expect(l[1].avgAfter).toBe(50);
+    expect(l[2].avgAfter).toBe(200);
+  });
+
+  it("summarizeTrades alış/satış/komisyon/gerçekleşen toplar", () => {
+    const s = summarizeTrades(tradeLedger([
+      trade({ id: 1, date: "2026-01-01", qty: 10, price: 100, fee: 2 }),
+      trade({ id: 2, date: "2026-02-01", side: "SATIŞ", qty: 4, price: 150, fee: 5 }),
+    ]));
+    // alış komisyonu maliyete girer → ort. 100.2; gerçekleşen = 4×(150−100.2) − 5 = 194.2
+    expect(s.realized).toBeCloseTo(194.2);
+    expect(s).toMatchObject({ buy: 1002, sell: 595, fee: 7, count: 2 });
+  });
+});
+
+describe("değer grafiği aralıkları (Faz 13)", () => {
+  /** n günlük seri: bugünden geriye, değer = gün indeksi */
+  const series = (n: number, today = new Date("2026-06-30T12:00:00Z")) =>
+    Array.from({ length: n }, (_, i) => {
+      const d = new Date(today);
+      d.setDate(d.getDate() - (n - 1 - i));
+      return { date: d.toISOString().slice(0, 10), value: i };
+    });
+  const TODAY = new Date("2026-06-30T12:00:00Z");
+
+  it("1H son 7 günü, 1A son 30 günü verir", () => {
+    const pts = series(120);
+    expect(sliceValueHistory(pts, "1H", TODAY)).toHaveLength(8);  // bugün dahil sınır günü
+    expect(sliceValueHistory(pts, "1A", TODAY)).toHaveLength(31);
+    expect(sliceValueHistory(pts, "TÜM", TODAY)).toHaveLength(120);
+  });
+
+  it("aralık veriden uzunsa eldeki tüm noktalar döner (uydurma veri yok)", () => {
+    const pts = series(10);
+    expect(sliceValueHistory(pts, "1Y", TODAY)).toHaveLength(10);
+  });
+
+  it("seyreltme nokta sayısını sınırlar, ilk ve son noktayı korur", () => {
+    const pts = series(365);
+    const b = bucketValueHistory(pts, 60);
+    expect(b.length).toBeLessThanOrEqual(61);
+    expect(b[0]).toEqual(pts[0]);
+    expect(b.at(-1)).toEqual(pts.at(-1));
+  });
+
+  it("nokta sayısı sınırın altındaysa seri aynen döner", () => {
+    const pts = series(20);
+    expect(bucketValueHistory(pts, 60)).toEqual(pts);
+  });
+
+  it("dönem değişimi ilk → son üzerinden hesaplanır", () => {
+    const c = historyChange([{ date: "2026-01-01", value: 1000 }, { date: "2026-02-01", value: 1250 }]);
+    expect(c.abs).toBe(250);
+    expect(c.pct).toBeCloseTo(25);
+  });
+
+  it("tek nokta veya sıfır başlangıçta yüzde null döner", () => {
+    expect(historyChange([{ date: "2026-01-01", value: 100 }])).toEqual({ abs: 0, pct: null });
+    expect(historyChange([{ date: "2026-01-01", value: 0 }, { date: "2026-02-01", value: 50 }]).pct).toBeNull();
   });
 });

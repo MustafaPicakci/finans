@@ -7,3 +7,4 @@ export * from "./cards.js";
 export * from "./portfolio.js";
 export * from "./projection.js";
 export * from "./ledger.js";
+export * from "./statement.js";

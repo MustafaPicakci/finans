@@ -1,8 +1,13 @@
-import React, { useState } from "react";
-import { parseD, fmtD, num, convert, type AllData, type Position, type Rates, type Currency, type AssetType } from "@finans/engine";
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  parseD, fmtD, num, convert, positions, groupTradesByPortfolio, portfolioValueTry,
+  type AllData, type Position, type Rates, type Currency, type AssetType, type PortfolioKey,
+} from "@finans/engine";
 import { api } from "../../api";
 import { T, css, fmtMoney, TYPE_COLORS } from "../../theme";
-import { Empty, Row } from "../../ui";
+import { Empty, Row, Field } from "../../ui";
+import { Hareketler } from "./Hareketler";
+import { DegerGrafigi } from "./DegerGrafigi";
 import type { AddKind } from "../forms";
 
 /** İşaretli tutar, verilen para biriminde (Money bileşeni TRY'ye sabit olduğundan native gösterim için) */
@@ -24,11 +29,49 @@ const POS_GROUPS: { key: string; title: string; types: AssetType[] }[] = [
   { key: "kripto", title: "Kripto", types: ["KRIPTO"] },
   { key: "doviz", title: "Döviz", types: ["DOVIZ"] },
 ];
-export function Portfoy({ data, pos, rates, ccy, reload, onAdd }: {
+/** Seçili portföy şeridi: "Tümü" | bir grup id'si | `null` (Gruplanmamış) */
+type Sel = "all" | PortfolioKey;
+
+export function Portfoy({ data, pos: allPos, rates, ccy, reload, onAdd }: {
   data: AllData; pos: Position[]; rates: Rates; ccy: Currency; reload: () => void; onAdd: (k: AddKind) => void;
 }) {
   const [busy, setBusy] = useState(false);
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [sel, setSel] = useState<Sel>("all");
+  /* Varlık sınıfı kartları: "Tümü"nde hepsi KAPALI başlar (birleşik liste uzun; önce özet, isteyen açar),
+     tek bir portföy seçiliyken açık başlar (zaten dar bir liste). Kullanıcının açıp kapaması korunur;
+     yalnız seçim değişince varsayılana döner. */
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(POS_GROUPS.map((g) => g.key)));
+  useEffect(() => {
+    setCollapsed(sel === "all" ? new Set(POS_GROUPS.map((g) => g.key)) : new Set());
+  }, [sel]);
+  /* Seçili grup ortadan kalkarsa (silindi, ya da son gruplanmamış işlem bir gruba atandı)
+     seçim "Tümü"ye döner — aksi halde erişilemeyen boş bir görünümde kalınırdı. */
+  useEffect(() => {
+    if (sel !== "all" && sel !== null && !data.portfolios.some((p) => p.id === sel)) setSel("all");
+  }, [data.portfolios, sel]);
+  // hareket listesinin sembol filtresi — pozisyon satırına tıklayınca da dolar
+  const [symFilter, setSymFilter] = useState<string | null>(null);
+
+  /* Portföy grupları (Faz 11): gruplama işlem düzeyinde, pozisyonlar grup başına AYRI hesaplanır —
+     aynı sembol iki portföyde ayrı ortalama maliyetle durur. "Tümü" seçiliyken App'in hesapladığı
+     birleşik pozisyon listesi kullanılır (net varlıkla birebir aynı rakam). */
+  const byPortfolio = useMemo(() => groupTradesByPortfolio(data.trades), [data.trades]);
+  const groupValue = (k: PortfolioKey) => {
+    const tr = byPortfolio.get(k);
+    return tr ? portfolioValueTry(positions(tr, data.prices), rates) : 0;
+  };
+  const selTrades = sel === "all" ? data.trades : byPortfolio.get(sel) ?? [];
+  const pos = useMemo(
+    () => (sel === "all" ? allPos : positions(selTrades, data.prices)),
+    [sel, allPos, selTrades, data.prices],
+  );
+  /* "Gruplanmamış" çipi yalnız HEM gruplanmış HEM gruplanmamış işlem varken anlamlı:
+     hiçbiri gruplanmamışsa birebir "Tümü" ile aynı listedir (gereksiz çip), hepsi gruplanmışsa
+     zaten boştur. Böylece çip "atamayı unuttuklarım" görünümü olarak iş görür. */
+  const ungroupedCount = byPortfolio.get(null)?.length ?? 0;
+  const hasUngrouped = ungroupedCount > 0 && ungroupedCount < data.trades.length;
+  const showStrip = data.portfolios.length > 0;
+
   const totUnreal = pos.reduce((s, p) => s + convert(p.unreal ?? 0, p.currency, ccy, rates), 0);
   const totReal = pos.reduce((s, p) => s + convert(p.realized, p.currency, ccy, rates), 0);
   const lastUpdate = data.prices.reduce((m, p) => (p.updated_at > m ? p.updated_at : m), "");
@@ -58,13 +101,27 @@ export function Portfoy({ data, pos, rates, ccy, reload, onAdd }: {
           <button style={{ ...css.ghost, color: T.acc, borderColor: T.acc }} onClick={() => onAdd("trade")}>+ İşlem</button>
         </div>
       </div>
+      {showStrip && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+          <PortfolioChip label="Tümü" value={portfolioValueTry(allPos, rates)} ccy={ccy} rates={rates} active={sel === "all"} onClick={() => setSel("all")} />
+          {data.portfolios.map((p) => (
+            <PortfolioChip key={p.id} label={p.name} title={p.note ?? undefined} value={groupValue(p.id)} ccy={ccy} rates={rates}
+              active={sel === p.id} onClick={() => setSel(p.id)} />
+          ))}
+          {(hasUngrouped || sel === null) && (
+            <PortfolioChip label="Gruplanmamış" value={groupValue(null)} ccy={ccy} rates={rates} active={sel === null} onClick={() => setSel(null)} />
+          )}
+        </div>
+      )}
       {lastUpdate && <div style={{ fontSize: 11, color: T.mut, marginBottom: 6 }}>son güncelleme: {lastUpdate}</div>}
       <div style={{ fontSize: 11, color: T.mut, marginBottom: 8, lineHeight: 1.5 }}>
         Her satırdaki kutu o varlığın <b>güncel birim fiyatıdır</b> — pozisyon değeri, açık K/Z ve net varlık bununla hesaplanır.
         Fonlar (TEFAS) otomatik çekilemiyor; onları elle yaz. Elle girdiğin fiyat <b>oto</b> tazelemede değişmez;
         otomatik fiyata dönmek için <b>sıfırla</b>’ya bas.
       </div>
-      {pos.length === 0 && <Empty>Henüz işlem yok. İlk alışınızı yukarıdan kaydedin.</Empty>}
+      {pos.length === 0 && (
+        <Empty>{sel === "all" ? "Henüz işlem yok. İlk alışınızı yukarıdan kaydedin." : "Bu portföyde açık pozisyon yok."}</Empty>
+      )}
       {POS_GROUPS.map((g) => {
         const items = pos
           .filter((p) => g.types.includes(p.type))
@@ -99,7 +156,10 @@ export function Portfoy({ data, pos, rates, ccy, reload, onAdd }: {
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
                   <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 10, marginRight: 8, background: T.panel2, color: TYPE_COLORS[p.type] || T.mut }}>{p.type}</span>
-                  <span style={{ ...css.mono, fontWeight: 600, fontSize: 15, color: T.acc }}>{p.sym}</span>
+                  <button type="button" onClick={() => setSymFilter(p.sym)} title="Bu varlığın hareketlerini gör"
+                    style={{ background: "none", border: "none", padding: 0, cursor: "pointer", ...css.mono, fontWeight: 600, fontSize: 15, color: T.acc }}>
+                    {p.sym}
+                  </button>
                   {p.currency === "USD" && <span style={{ fontSize: 10, fontWeight: 700, color: T.mut3, marginLeft: 6 }}>USD</span>}
                   <span style={{ fontSize: 12, color: T.mut, marginLeft: 8 }}>{p.qty} adet · ort. <span style={css.mono}>{fmtMoney(p.avg, p.currency, true)}</span></span>
                 </div>
@@ -146,24 +206,87 @@ export function Portfoy({ data, pos, rates, ccy, reload, onAdd }: {
       })}
     </div>
 
+    {/* Seçili portföyün değer seyri — aralık seçici ile (grafik grubun işlemlerinden hesaplanır) */}
+    <DegerGrafigi
+      trades={selTrades} priceHistory={data.price_history} rates={rates} ccy={ccy} height={200}
+      scopeLabel={sel === "all" ? null : sel === null ? "Gruplanmamış" : data.portfolios.find((p) => p.id === sel)?.name ?? null}
+    />
+
+    <Hareketler
+      data={data} trades={selTrades} reload={reload}
+      scopeLabel={sel === "all" ? null : sel === null ? "Gruplanmamış" : data.portfolios.find((p) => p.id === sel)?.name ?? null}
+      symbol={symFilter} onSymbol={setSymFilter}
+    />
+
+    <PortfolioManager data={data} rates={rates} ccy={ccy} reload={reload} groupValue={groupValue} />
+  </>);
+}
+
+/** Portföy şeridi düğmesi — grup adı + o grubun güncel değeri */
+function PortfolioChip({ label, value, ccy, rates, active, onClick, title }: {
+  label: string; value: number; ccy: Currency; rates: Rates; active: boolean; onClick: () => void; title?: string;
+}) {
+  return (
+    <button type="button" title={title} onClick={onClick} style={{
+      ...css.chip, display: "flex", alignItems: "baseline", gap: 6,
+      borderColor: active ? T.acc : T.line, color: active ? T.acc : T.text,
+      background: active ? T.panel : T.panel2, fontWeight: active ? 700 : 560,
+    }}>
+      {label}
+      <span style={{ ...css.mono, fontSize: 11, color: T.mut }}>{fmtMoney(Math.round(convert(value, "TRY", ccy, rates)), ccy)}</span>
+    </button>
+  );
+}
+
+/** Portföy grubu tanımları: ekle / sil. Silinen grubun işlemleri kaybolmaz, "Gruplanmamış"a döner. */
+function PortfolioManager({ data, rates, ccy, reload, groupValue }: {
+  data: AllData; rates: Rates; ccy: Currency; reload: () => void; groupValue: (k: PortfolioKey) => number;
+}) {
+  const [f, setF] = useState({ name: "", note: "" });
+  const add = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!f.name.trim()) return;
+    await api.post("portfolios", { name: f.name.trim(), note: f.note.trim() || null });
+    setF({ name: "", note: "" });
+    reload();
+  };
+  const count = (id: number) => data.trades.filter((t) => t.portfolio_id === id).length;
+  return (
     <div style={css.card}>
-      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>İşlem Geçmişi</div>
-      {data.trades.length === 0 && <Empty>Kayıtlı işlem yok.</Empty>}
-      {[...data.trades].sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id).map((t, i, arr) => (
-        <Row key={t.id} last={i === arr.length - 1}>
-          <span style={{ ...css.mono, fontSize: 12, color: T.mut, width: 74 }}>{fmtD(parseD(t.date), { day: "2-digit", month: "short", year: "2-digit" })}</span>
-          <span style={{
-            fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 10,
-            background: t.side === "ALIŞ" ? T.posSoft : T.negSoft, color: t.side === "ALIŞ" ? T.pos : T.neg,
-          }}>{t.side}</span>
+      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Portföyler</div>
+      <div style={{ fontSize: 12, color: T.mut, marginBottom: 10, lineHeight: 1.5 }}>
+        Varlıklarını mantıksal olarak ayır (ör. <b>Alfa Portföy</b>, <b>Emeklilik</b>, <b>Büyüme</b>).
+        Gruplama <b>işlem düzeyindedir</b>: aynı sembolü iki portföyde ayrı ortalama maliyetle tutabilirsin.
+        Net varlık ve alokasyon değişmez — bu yalnız takip/raporlama içindir.
+      </div>
+      <form onSubmit={add} style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+        <Field label="Ad" flex={2}>
+          <input style={css.input} value={f.name} placeholder="örn. Alfa Portföy" onChange={(e) => setF({ ...f, name: e.target.value })} />
+        </Field>
+        <Field label="Not (ops.)" flex={2}>
+          <input style={css.input} value={f.note} placeholder="örn. büyüme hisseleri" onChange={(e) => setF({ ...f, note: e.target.value })} />
+        </Field>
+        <div style={{ display: "flex", alignItems: "flex-end" }}>
+          <button type="submit" style={{ ...css.btn, opacity: f.name.trim() ? 1 : 0.4 }} disabled={!f.name.trim()}>Ekle</button>
+        </div>
+      </form>
+      {data.portfolios.length === 0 && <Empty>Henüz portföy yok. Ekleyince işlem formunda seçilebilir olur.</Empty>}
+      {data.portfolios.map((p, i, arr) => (
+        <Row key={p.id} last={i === arr.length - 1}>
           <span style={{ flex: 1, fontSize: 13 }}>
-            <b style={css.mono}>{t.symbol}</b> <span style={{ color: T.mut, fontSize: 11 }}>{t.asset_type}</span>{" "}
-            <span style={{ color: T.mut }}>{t.qty} × {fmtMoney(t.price, t.currency ?? "TRY", true)}</span>
+            <b>{p.name}</b>
+            {p.note && <span style={{ color: T.mut, fontSize: 12, marginLeft: 8 }}>{p.note}</span>}
+            <span style={{ color: T.mut3, fontSize: 11, marginLeft: 8 }}>{count(p.id)} işlem</span>
           </span>
-          <span style={{ ...css.mono, fontSize: 13 }}>{fmtMoney(Math.round(t.qty * t.price), t.currency ?? "TRY")}</span>
-          <button style={css.del} onClick={async () => { await api.del("trades", t.id); reload(); }}>✕</button>
+          <span style={{ ...css.mono, fontSize: 13 }}>{fmtMoney(Math.round(convert(groupValue(p.id), "TRY", ccy, rates)), ccy)}</span>
+          <button style={css.del} title="Portföyü sil (işlemler Gruplanmamış'a döner)"
+            onClick={async () => {
+              if (!confirm(`"${p.name}" silinsin mi? İçindeki ${count(p.id)} işlem silinmez, "Gruplanmamış"a döner.`)) return;
+              await api.del("portfolios", p.id);
+              reload();
+            }}>✕</button>
         </Row>
       ))}
     </div>
-  </>);
+  );
 }

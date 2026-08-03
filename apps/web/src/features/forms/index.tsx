@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   todayStr, num, fmtD,
   depositMaturity, depositGrossInterest, depositNetInterest, depositMaturityValue,
@@ -6,7 +6,11 @@ import {
 } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, fmtMoney, TYPE_HINT } from "../../theme";
-import { Field, AmountField, Hint } from "../../ui";
+import { Field, AmountField, Hint, SuggestInput } from "../../ui";
+import {
+  kalemSuggestions, cardTxSuggestions, symbolSuggestions, priceOf, priceCcyOf, heldQty, lastUsedPortfolio,
+  type KalemSuggestion, type CardTxSuggestion, type SymbolSuggestion,
+} from "./recall";
 
 /** Varlık türünün doğal para birimi: yurt dışı borsa (KRIPTO/ETF) USD, diğerleri TRY */
 const defaultCcy = (t: AssetType): Currency => (t === "KRIPTO" || t === "ETF" ? "USD" : "TRY");
@@ -15,10 +19,17 @@ const defaultCcy = (t: AssetType): Currency => (t === "KRIPTO" || t === "ETF" ? 
    Her form modal içinde yaşar: "Kaydet" kaydedip kapatır, "Kaydet, yeni ekle"
    kaydedip formu sıfırlar ve odağı ilk alana döndürür (art arda giriş). */
 
-export type AddKind = "kalem" | "cardtx" | "recurring" | "loan" | "trade" | "deposit";
+export type AddKind = "kalem" | "cardtx" | "recurring" | "loan" | "trade" | "deposit" | "import";
+export { ImportForm } from "./ImportForm";
 type FormProps = { data: AllData; reload: () => void; onClose: () => void };
-/** Plan'daki ileri tarihli kalemi "Gerçekleşti" ile deftere geçirirken önden doldurma */
-export type KalemPrefill = { name: string; amount: number; type: "gider" | "gelir"; oneoffId: number };
+/** Formu önden doldurma: Plan'daki ileri tarihli kalemi "Gerçekleşti" ile deftere geçirirken
+    (`oneoffId` ile — kaydedilince plan kalemi silinir) veya "+ Ekle"deki şablon çipinden. */
+export type KalemPrefill = {
+  name: string; amount: number; type: "gider" | "gelir"; oneoffId?: number;
+  category_id?: number | null; account_id?: number | null;
+};
+/** Kart harcaması şablon çipinden önden doldurma */
+export type CardTxPrefill = { name: string; amount: number; card_id: number; installments: number };
 
 /** Kaydet (kapat) + Kaydet-yeni-ekle buton çifti */
 function SaveButtons({ ok, reason, onSaveNew }: { ok: boolean; reason: string | null; onSaveNew: () => void }) {
@@ -37,9 +48,20 @@ function SaveButtons({ ok, reason, onSaveNew }: { ok: boolean; reason: string | 
 export function KalemForm({ data, reload, onClose, prefill }: FormProps & { prefill?: KalemPrefill }) {
   const [tx, setTx] = useState({
     date: todayStr(), name: prefill?.name ?? "", amount: prefill ? String(prefill.amount) : "",
-    type: prefill?.type ?? "gider", category_id: "", account_id: data.accounts[0] ? String(data.accounts[0].id) : "",
+    type: prefill?.type ?? "gider",
+    category_id: prefill?.category_id != null ? String(prefill.category_id) : "",
+    account_id: prefill?.account_id != null ? String(prefill.account_id) : data.accounts[0] ? String(data.accounts[0].id) : "",
   });
   const nameRef = useRef<HTMLInputElement>(null);
+  const sugs = useMemo(() => kalemSuggestions(data), [data]);
+  /** geçmişten seçildi: tutar/tür/kategori/hesap o kaydın son halinden dolar (hepsi elle değiştirilebilir) */
+  const pick = (s: KalemSuggestion) => {
+    setTx((t) => ({
+      ...t, name: s.name, amount: String(s.amount), type: s.type,
+      category_id: s.category_id != null ? String(s.category_id) : "",
+      account_id: s.account_id != null ? String(s.account_id) : t.account_id,
+    }));
+  };
   const future = tx.date > todayStr(); // ISO tarihte string karşılaştırması güvenli
   const ok = !!tx.name && num(tx.amount) > 0 && !!tx.date;
   const reason = !tx.name ? "Ad gerekli" : !(num(tx.amount) > 0) ? "Tutar 0'dan büyük olmalı" : !tx.date ? "Tarih gerekli" : null;
@@ -63,7 +85,11 @@ export function KalemForm({ data, reload, onClose, prefill }: FormProps & { pref
   return (
     <form onSubmit={(e) => { e.preventDefault(); save(false); }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <Field label="Ad" flex={2}><input ref={nameRef} autoFocus style={css.input} value={tx.name} placeholder="örn. Migros" onChange={(e) => setTx({ ...tx, name: e.target.value })} /></Field>
+        <Field label="Ad" flex={2}>
+          <SuggestInput autoFocus inputRef={nameRef} value={tx.name} onChange={(v) => setTx({ ...tx, name: v })}
+            onPick={pick} options={sugs} labelOf={(s) => s.name}
+            subOf={(s) => `${fmtMoney(s.amount, "TRY", true)} · ${s.count}×`} placeholder="örn. Migros" />
+        </Field>
         <AmountField label="Tutar (TL)" value={tx.amount} onChange={(v) => setTx({ ...tx, amount: v })} />
         <Field label="Tarih"><input type="date" style={css.input} value={tx.date} onChange={(e) => setTx({ ...tx, date: e.target.value })} /></Field>
         <Field label="Tür">
@@ -101,9 +127,16 @@ export function KalemForm({ data, reload, onClose, prefill }: FormProps & { pref
 }
 
 /** Kart harcaması → ekstreye işlenir, son ödeme günü nakit akışına düşer */
-export function CardTxForm({ data, reload, onClose }: FormProps) {
-  const [tf, setTf] = useState({ card_id: 0, date: todayStr(), name: "", amount: "", installments: "1" });
+export function CardTxForm({ data, reload, onClose, prefill }: FormProps & { prefill?: CardTxPrefill }) {
+  const [tf, setTf] = useState({
+    card_id: prefill?.card_id ?? 0, date: todayStr(), name: prefill?.name ?? "",
+    amount: prefill ? String(prefill.amount) : "", installments: String(prefill?.installments ?? 1),
+  });
   const nameRef = useRef<HTMLInputElement>(null);
+  const sugs = useMemo(() => cardTxSuggestions(data), [data]);
+  /** geçmişten seçildi: tutar/kart/taksit son kaydından dolar */
+  const pick = (s: CardTxSuggestion) =>
+    setTf((t) => ({ ...t, name: s.name, amount: String(s.amount), card_id: s.card_id, installments: String(s.installments) }));
   useEffect(() => { if (data.cards.length === 1 && tf.card_id === 0) setTf((s) => ({ ...s, card_id: data.cards[0].id })); }, [data.cards]);
   const ok = tf.card_id > 0 && !!tf.name && num(tf.amount) > 0 && !!tf.date && +tf.installments >= 1;
   const reason = tf.card_id === 0 ? "Kart seçilmeli" : !tf.name ? "Açıklama gerekli" : !(num(tf.amount) > 0) ? "Tutar 0'dan büyük olmalı" : null;
@@ -123,7 +156,11 @@ export function CardTxForm({ data, reload, onClose }: FormProps) {
           </select>
         </Field>
         <Field label="Tarih"><input type="date" style={css.input} value={tf.date} onChange={(e) => setTf({ ...tf, date: e.target.value })} /></Field>
-        <Field label="Açıklama" flex={2}><input ref={nameRef} autoFocus style={css.input} value={tf.name} placeholder="örn. Telefon" onChange={(e) => setTf({ ...tf, name: e.target.value })} /></Field>
+        <Field label="Açıklama" flex={2}>
+          <SuggestInput autoFocus inputRef={nameRef} value={tf.name} onChange={(v) => setTf({ ...tf, name: v })}
+            onPick={pick} options={sugs} labelOf={(s) => s.name}
+            subOf={(s) => `${fmtMoney(s.amount, "TRY", true)} · ${s.count}×`} placeholder="örn. Telefon" />
+        </Field>
         <AmountField label="Toplam tutar (TL)" value={tf.amount} onChange={(v) => setTf({ ...tf, amount: v })} />
         <Field label="Taksit"><input style={css.input} inputMode="numeric" placeholder="1" value={tf.installments} onChange={(e) => setTf({ ...tf, installments: e.target.value })} /></Field>
       </div>
@@ -304,13 +341,32 @@ export function TradeForm({ data, reload, onClose }: FormProps) {
   const [f, setF] = useState({
     date: todayStr(), asset_type: "BIST" as AssetType, symbol: "", side: "ALIŞ" as Trade["side"],
     qty: "", price: "", fee: "", currency: "TRY" as Currency, account_id: "",
+    // portföy grubu: son kullanılan grup varsayılan gelir (art arda giriş)
+    portfolio_id: (() => { const p = lastUsedPortfolio(data); return p != null ? String(p) : ""; })(),
   });
   const symbolRef = useRef<HTMLInputElement>(null);
+  const sugs = useMemo(() => symbolSuggestions(data), [data]);
+  /** Sembolün güncel fiyatı — para birimi eşleşiyorsa doldurulabilir (USD fiyatı TL alanına yazılmasın) */
+  const livePrice = f.symbol && priceCcyOf(data, f.symbol, f.asset_type) === f.currency
+    ? priceOf(data, f.symbol, f.asset_type) : null;
+  /** Elde tutulan miktar — SATIŞ'ta "tümünü sat" için */
+  const held = f.symbol ? heldQty(data.trades, f.symbol, f.asset_type) : 0;
+  /** geçmişten seçildi: varlık türü/para birimi/hesap hatırlanır, birim fiyat güncel fiyattan dolar */
+  const pickSymbol = (s: SymbolSuggestion) => setF((x) => ({
+    ...x, symbol: s.symbol, asset_type: s.asset_type, currency: s.currency,
+    account_id: s.account_id != null ? String(s.account_id) : x.account_id,
+    portfolio_id: s.portfolio_id != null ? String(s.portfolio_id) : x.portfolio_id,
+    price: s.price != null && priceCcyOf(data, s.symbol, s.asset_type) === s.currency ? String(s.price) : x.price,
+  }));
   const ok = !!f.symbol && num(f.qty) > 0 && num(f.price) > 0 && !!f.date;
   const reason = !f.symbol ? "Sembol gerekli" : !(num(f.qty) > 0) ? "Adet/miktar 0'dan büyük olmalı" : !(num(f.price) > 0) ? "Birim fiyat 0'dan büyük olmalı" : null;
   const save = async (andNew: boolean) => {
     if (!ok) return;
-    await api.post("trades", { ...f, symbol: f.symbol.trim(), qty: num(f.qty), price: num(f.price), fee: num(f.fee), currency: f.currency, account_id: f.currency === "TRY" && f.account_id ? +f.account_id : null });
+    await api.post("trades", {
+      ...f, symbol: f.symbol.trim(), qty: num(f.qty), price: num(f.price), fee: num(f.fee), currency: f.currency,
+      account_id: f.currency === "TRY" && f.account_id ? +f.account_id : null,
+      portfolio_id: f.portfolio_id ? +f.portfolio_id : null,
+    });
     reload();
     if (andNew) { setF({ ...f, symbol: "", qty: "", price: "", fee: "" }); symbolRef.current?.focus(); } else onClose();
   };
@@ -330,8 +386,10 @@ export function TradeForm({ data, reload, onClose }: FormProps) {
           </select>
         </Field>
         <Field label="Sembol">
-          <input ref={symbolRef} autoFocus style={{ ...css.input, textTransform: "uppercase" }} placeholder={TYPE_HINT[f.asset_type]}
-            value={f.symbol} onChange={(e) => setF({ ...f, symbol: e.target.value.toUpperCase() })} />
+          <SuggestInput autoFocus inputRef={symbolRef} style={{ textTransform: "uppercase" }} placeholder={TYPE_HINT[f.asset_type]}
+            value={f.symbol} onChange={(v) => setF({ ...f, symbol: v.toUpperCase() })}
+            onPick={pickSymbol} options={sugs} labelOf={(s) => s.symbol}
+            subOf={(s) => s.price != null ? `${s.asset_type} · ${fmtMoney(s.price, s.currency, true)}` : s.asset_type} />
         </Field>
         <Field label="İşlem">
           <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: `1px solid ${T.line}` }}>
@@ -350,16 +408,38 @@ export function TradeForm({ data, reload, onClose }: FormProps) {
         <AmountField label={`Birim fiyat (${f.currency === "USD" ? "$" : "TL"})`} value={f.price} onChange={(v) => setF({ ...f, price: v })} ccy={f.currency} />
         <AmountField label={`Komisyon (${f.currency === "USD" ? "$" : "TL"})`} value={f.fee} onChange={(v) => setF({ ...f, fee: v })} ccy={f.currency} />
       </div>
-      {f.currency === "TRY" && (
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+      {/* tek tık doldurmalar: güncel piyasa fiyatı ve (satışta) elde tutulan miktar */}
+      {(livePrice != null || (f.side === "SATIŞ" && held > 0)) && (
+        <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+          {livePrice != null && String(livePrice) !== f.price && (
+            <button type="button" style={css.chip} onClick={() => setF({ ...f, price: String(livePrice) })}>
+              Güncel fiyat: {fmtMoney(livePrice, f.currency, true)}
+            </button>
+          )}
+          {f.side === "SATIŞ" && held > 0 && (
+            <button type="button" style={css.chip} onClick={() => setF({ ...f, qty: String(held) })}>
+              Tümünü sat: {held}
+            </button>
+          )}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+        {f.currency === "TRY" && (
           <Field label="Nakit hesap (opsiyonel)" flex={2}>
             <select style={css.input} value={f.account_id} onChange={(e) => setF({ ...f, account_id: e.target.value })}>
               <option value="">— (bakiyeye işleme)</option>
               {data.accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
           </Field>
-        </div>
-      )}
+        )}
+        {/* Portföy grubu: yalnız raporlama/gruplama — pozisyon matematiğini veya net varlığı değiştirmez */}
+        <Field label="Portföy (opsiyonel)" flex={2}>
+          <select style={css.input} value={f.portfolio_id} onChange={(e) => setF({ ...f, portfolio_id: e.target.value })}>
+            <option value="">Gruplanmamış</option>
+            {data.portfolios.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </Field>
+      </div>
       {ok && (
         <div style={{ fontSize: 12, color: T.mut, marginTop: 8 }}>
           İşlem tutarı: <span style={{ ...css.mono, color: T.text }}>{fmtMoney(num(f.qty) * num(f.price), f.currency, true)}</span>

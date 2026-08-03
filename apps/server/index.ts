@@ -249,7 +249,7 @@ api.use("*", async (c, next) => {
 /* ---- tek seferde tüm veri (kullanıcıya scope'lu; prices/price_history GLOBAL) ---- */
 api.get("/all", async (c) => {
   const uid = c.get("user").id;
-  const [accounts, recurring, recurring_amounts, loans, oneoffs, trades, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, autoPrices, userPrices, price_history, globalSettings, userSettings] =
+  const [accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, autoPrices, userPrices, price_history, globalSettings, userSettings] =
     await Promise.all([
       db.all("SELECT * FROM accounts WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM recurring WHERE user_id=? ORDER BY day, id", uid),
@@ -257,6 +257,7 @@ api.get("/all", async (c) => {
       db.all("SELECT * FROM loans WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM oneoffs WHERE user_id=? ORDER BY date", uid),
       db.all("SELECT * FROM trades WHERE user_id=? ORDER BY date, id", uid),
+      db.all("SELECT * FROM portfolios WHERE user_id=? ORDER BY name", uid),
       db.all("SELECT * FROM cards WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM card_txs WHERE user_id=? ORDER BY date, id", uid),
       db.all("SELECT * FROM categories WHERE user_id=? ORDER BY name", uid),
@@ -274,7 +275,7 @@ api.get("/all", async (c) => {
   const pm = new Map<string, any>(autoPrices.map((p) => [`${p.asset_type}:${p.symbol}`, { ...p, source: "auto" }]));
   for (const up of userPrices) pm.set(`${up.asset_type}:${up.symbol}`, { ...up, source: "manual" });
   return c.json({
-    accounts, recurring, recurring_amounts, loans, oneoffs, trades, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments,
+    accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments,
     prices: [...pm.values()], price_history,
     // global (fx/tefas) + kullanıcı ayarları (horizon/cash_funds); kullanıcı çakışmada kazanır
     settings: Object.fromEntries([...globalSettings, ...userSettings].map((s) => [s.key, s.value])),
@@ -512,11 +513,15 @@ api.post("/trades", async (c) => {
   const currency = b.currency ?? "TRY";
   const qty = Number(b.qty), price = Number(b.price), fee = Number(b.fee ?? 0);
   const accountId = b.account_id != null && b.account_id !== "" ? Number(b.account_id) : null;
+  const portfolioId = b.portfolio_id != null && b.portfolio_id !== "" ? Number(b.portfolio_id) : null; // null = "Gruplanmamış"
   const affects = currency === "TRY" && accountId != null; // bakiye etkisi yalnız TRY işlemde
+  if (portfolioId != null && !(await db.get("SELECT id FROM portfolios WHERE id=? AND user_id=?", portfolioId, uid))) {
+    return c.json({ error: "geçersiz portföy" }, 400);
+  }
   const id = await db.tx(async (t) => {
     const info = await t.run(
-      "INSERT INTO trades (date,asset_type,symbol,side,qty,price,fee,currency,account_id,user_id) VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id",
-      b.date, b.asset_type, b.symbol, b.side, qty, price, fee, currency, accountId, uid,
+      "INSERT INTO trades (date,asset_type,symbol,side,qty,price,fee,currency,account_id,portfolio_id,user_id) VALUES (?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
+      b.date, b.asset_type, b.symbol, b.side, qty, price, fee, currency, accountId, portfolioId, uid,
     );
     if (affects) await t.run("UPDATE accounts SET balance = balance + ? WHERE id=? AND user_id=?", tradeBalanceDelta(b.side, qty, price, fee), accountId, uid);
     return info.id;
@@ -525,6 +530,20 @@ api.post("/trades", async (c) => {
   return c.json({ id });
 });
 
+/* İşlemi bir portföy grubuna taşı (yalnız portfolio_id değişir — tutar/bakiye etkisi YOK).
+   Mevcut işlemleri gruplara dağıtmanın yolu bu; "sil + yeniden ekle" modeli burada bakiyeyi
+   iki kez oynatacağı için özel, dar bir uç. */
+api.put("/trades/:id/portfolio", async (c) => {
+  const uid = c.get("user").id;
+  const b = await c.req.json().catch(() => null);
+  if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
+  const pid = b.portfolio_id != null && b.portfolio_id !== "" ? Number(b.portfolio_id) : null;
+  if (pid != null && !(await db.get("SELECT id FROM portfolios WHERE id=? AND user_id=?", pid, uid))) {
+    return c.json({ error: "geçersiz portföy" }, 400);
+  }
+  await db.run("UPDATE trades SET portfolio_id=? WHERE id=? AND user_id=?", pid, c.req.param("id"), uid);
+  return c.json({ ok: true });
+});
 api.delete("/trades/:id", async (c) => {
   const uid = c.get("user").id;
   await db.tx(async (t) => {
@@ -552,6 +571,7 @@ api.post("/deposits", async (c) => {
   if (!(principal > 0) || !(termDays >= 1) || rate < 0 || withholding < 0 || withholding > 100)
     return c.json({ error: "geçersiz değer" }, 400);
   const accountId = b.account_id != null && b.account_id !== "" ? Number(b.account_id) : null;
+  const portfolioId = b.portfolio_id != null && b.portfolio_id !== "" ? Number(b.portfolio_id) : null; // null = "Gruplanmamış"
   const id = await db.tx(async (t) => {
     const info = await t.run(
       "INSERT INTO deposits (name,principal,rate,open_date,term_days,withholding,account_id,user_id) VALUES (?,?,?,?,?,?,?,?) RETURNING id",
@@ -652,6 +672,10 @@ api.delete("/cards/:id/pay-statement/:due", async (c) => {
   });
   return c.json({ ok: true });
 });
+/* Faz 11 — portföy grupları (tanım tablosu; jenerik crud yeterli, yan etkisi yok).
+   Silinince trades.portfolio_id ON DELETE SET NULL ile "Gruplanmamış"a düşer, işlem kaybolmaz. */
+crud("portfolios", "portfolios", [{ name: "name", required: true }, { name: "note" }]);
+
 crud("categories", "categories", [
   { name: "name", required: true }, { name: "kind", required: true }, { name: "color" },
 ]);
@@ -679,6 +703,48 @@ api.post("/transactions", async (c) => {
   });
   console.log(`[audit] İşlem/Transfer eklendi: ${b.name} (tutar: ${b.amount}, id:${uid})`);
   return c.json({ id });
+});
+/* Toplu içe aktarma (ekstre yapıştırma): tek istekte N gerçekleşen kayıt, tek transaction içinde.
+   Ya hepsi yazılır ya hiçbiri — yarım kalmış import bakiyeyi tutarsız bırakmasın. Hesap/kategori
+   id'leri kullanıcıya ait mi diye önden doğrulanır (crud'un tenant-scope garantisinin eşdeğeri). */
+const IMPORT_MAX = 500;
+api.post("/transactions/bulk", async (c) => {
+  const b = await c.req.json().catch(() => null);
+  const rows = b && Array.isArray(b.rows) ? b.rows : null;
+  if (!rows) return c.json({ error: "geçersiz gövde" }, 400);
+  if (rows.length === 0) return c.json({ error: "kayıt yok" }, 400);
+  if (rows.length > IMPORT_MAX) return c.json({ error: `Tek seferde en fazla ${IMPORT_MAX} kayıt` }, 400);
+  const uid = c.get("user").id;
+  for (const r of rows) {
+    if (!r || typeof r !== "object") return c.json({ error: "geçersiz satır" }, 400);
+    if (!r.date || !r.name || typeof r.amount !== "number" || !Number.isFinite(r.amount)) {
+      return c.json({ error: "her satırda tarih, ad ve sayısal tutar zorunlu" }, 400);
+    }
+  }
+  const own = async (table: string, ids: number[]) => {
+    if (ids.length === 0) return true;
+    const rows2 = await db.all<{ id: number }>(`SELECT id FROM ${table} WHERE user_id=?`, uid);
+    const set = new Set(rows2.map((x) => x.id));
+    return ids.every((i) => set.has(i));
+  };
+  const accIds = [...new Set(rows.map((r: any) => r.account_id).filter((x: any) => x != null))] as number[];
+  const catIds = [...new Set(rows.map((r: any) => r.category_id).filter((x: any) => x != null))] as number[];
+  if (!(await own("accounts", accIds)) || !(await own("categories", catIds))) {
+    return c.json({ error: "geçersiz hesap veya kategori" }, 400);
+  }
+  await db.tx(async (t) => {
+    for (const r of rows) {
+      await t.run(
+        "INSERT INTO transactions (date,name,amount,category_id,account_id,user_id) VALUES (?,?,?,?,?,?)",
+        r.date, r.name, r.amount, r.category_id ?? null, r.account_id ?? null, uid,
+      );
+      if (r.account_id != null) {
+        await t.run("UPDATE accounts SET balance = balance + ? WHERE id=? AND user_id=?", r.amount, r.account_id, uid);
+      }
+    }
+  });
+  console.log(`[audit] Toplu içe aktarma: ${rows.length} kayıt (id:${uid})`);
+  return c.json({ inserted: rows.length });
 });
 api.delete("/transactions/:id", async (c) => {
   const uid = c.get("user").id;
@@ -746,7 +812,7 @@ api.put("/settings", async (c) => {
 /* ---- KVKK: kullanıcının tüm verisini JSON indir ---- */
 api.get("/export", async (c) => {
   const uid = c.get("user").id;
-  const [accounts, recurring, recurring_amounts, loans, oneoffs, trades, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, userSettings] =
+  const [accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, userSettings] =
     await Promise.all([
       db.all("SELECT * FROM accounts WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM recurring WHERE user_id=? ORDER BY id", uid),
@@ -754,6 +820,7 @@ api.get("/export", async (c) => {
       db.all("SELECT * FROM loans WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM oneoffs WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM trades WHERE user_id=? ORDER BY id", uid),
+      db.all("SELECT * FROM portfolios WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM cards WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM card_txs WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM categories WHERE user_id=? ORDER BY id", uid),
@@ -767,7 +834,7 @@ api.get("/export", async (c) => {
   console.log(`[audit] Veri dışa aktarma (KVKK Export): (id:${uid})`);
   return c.json({
     exported_at: nowLocal(), user: c.get("user"),
-    accounts, recurring, recurring_amounts, loans, oneoffs, trades, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments,
+    accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments,
     settings: Object.fromEntries(userSettings.map((s) => [s.key, s.value])),
   });
 });

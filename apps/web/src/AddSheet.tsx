@@ -1,11 +1,13 @@
-import React from "react";
+import React, { useMemo } from "react";
 import type { AllData } from "@finans/engine";
-import { T, css } from "./theme";
+import { T, css, fmtMoney } from "./theme";
 import { Modal } from "./ui";
-import { KalemForm, CardTxForm, RecurringForm, LoanForm, TradeForm, DepositForm, type AddKind, type KalemPrefill } from "./features/forms";
+import { KalemForm, CardTxForm, RecurringForm, LoanForm, TradeForm, DepositForm, ImportForm, type AddKind, type KalemPrefill, type CardTxPrefill } from "./features/forms";
+import { shortcuts } from "./features/forms/recall";
 
 export type { AddKind, KalemPrefill };
-export type AddState = { kind: AddKind | "pick"; prefill?: KalemPrefill };
+/** Açık form + (varsa) önden doldurma. `prefill` formun türüne göre yorumlanır. */
+export type AddState = { kind: AddKind | "pick"; prefill?: KalemPrefill; cardPrefill?: CardTxPrefill };
 
 /* ————— GLOBAL "+ EKLE" AKIŞI —————
    Tüm işlem girişlerinin tek kapısı. Seçim listesindeki açıklamalar, her kaydın
@@ -18,6 +20,7 @@ const OPTIONS: { kind: AddKind; dot: string; title: string; desc: string }[] = [
   { kind: "loan", dot: "var(--cat-8)", title: "Kredi / taksit", desc: "Sabit taksit planı; kalan taksitler nakit projeksiyonuna ve kredi borcuna girer" },
   { kind: "trade", dot: "var(--pos)", title: "Portföy işlemi", desc: "Hisse/fon/altın/döviz alış-satışı; pozisyonlara ve net varlığa yansır" },
   { kind: "deposit", dot: "var(--type-doviz)", title: "Vadeli mevduat", desc: "Anapara + faiz oranı + gün sayısı; net varlığa kilitli varlık olarak faiz işleyerek girer" },
+  { kind: "import", dot: "var(--cat-4)", title: "Toplu içe aktar", desc: "Banka ekstresini veya tabloyu yapıştır; satırlar çözülür, kontrol edip tek seferde deftere aktarırsın" },
 ];
 
 const TITLES: Record<AddKind, string> = {
@@ -27,19 +30,36 @@ const TITLES: Record<AddKind, string> = {
   loan: "Kredi / Taksit",
   trade: "Portföy İşlemi",
   deposit: "Vadeli Mevduat",
+  import: "Toplu İçe Aktar",
 };
 
-export function AddSheet({ data, state, setKind, onClose, reload }: {
-  data: AllData; state: AddState; setKind: (k: AddKind) => void; onClose: () => void; reload: () => void;
+export function AddSheet({ data, state, setState, onClose, reload }: {
+  data: AllData; state: AddState; setState: (s: AddState) => void; onClose: () => void; reload: () => void;
 }) {
+  // en sık girilen kalemler — tek tıkla ilgili form önden doldurulmuş açılır
+  const chips = useMemo(() => (state.kind === "pick" ? shortcuts(data) : []), [data, state.kind]);
   if (state.kind === "pick") {
     return (
       <Modal title="Ne eklemek istiyorsun?" onClose={onClose}>
+        {chips.length > 0 && (
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ ...css.label, marginBottom: 8 }}>Sık girdiklerin</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {chips.map((c, i) => (
+                <button key={i} style={css.chip} onClick={() => c.kind === "kalem"
+                  ? setState({ kind: "kalem", prefill: { name: c.sug.name, amount: c.sug.amount, type: c.sug.type, category_id: c.sug.category_id, account_id: c.sug.account_id } })
+                  : setState({ kind: "cardtx", cardPrefill: { name: c.sug.name, amount: c.sug.amount, card_id: c.sug.card_id, installments: c.sug.installments } })}>
+                  {c.label} <span style={{ color: T.mut3, fontWeight: 400 }}>{fmtMoney(c.sug.amount, "TRY")}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <div style={{ display: "grid", gap: 8 }}>
           {OPTIONS.map((o) => {
             const noCard = o.kind === "cardtx" && data.cards.length === 0;
             return (
-              <button key={o.kind} disabled={noCard} onClick={() => setKind(o.kind)} style={{
+              <button key={o.kind} disabled={noCard} onClick={() => setState({ kind: o.kind })} style={{
                 display: "flex", alignItems: "flex-start", gap: 12, textAlign: "left", cursor: noCard ? "not-allowed" : "pointer",
                 background: T.panel2, border: `1px solid ${T.line}`, borderRadius: 12, padding: "12px 14px",
                 fontFamily: T.disp, color: T.text, opacity: noCard ? 0.5 : 1,
@@ -61,13 +81,14 @@ export function AddSheet({ data, state, setKind, onClose, reload }: {
 
   const props = { data, reload, onClose };
   return (
-    <Modal title={state.prefill ? "Kalemi Gerçekleştir" : TITLES[state.kind]} onClose={onClose}>
+    <Modal title={state.prefill?.oneoffId ? "Kalemi Gerçekleştir" : TITLES[state.kind]} onClose={onClose}>
       {state.kind === "kalem" && <KalemForm {...props} prefill={state.prefill} />}
-      {state.kind === "cardtx" && <CardTxForm {...props} />}
+      {state.kind === "cardtx" && <CardTxForm {...props} prefill={state.cardPrefill} />}
       {state.kind === "recurring" && <RecurringForm {...props} />}
       {state.kind === "loan" && <LoanForm {...props} />}
       {state.kind === "trade" && <TradeForm {...props} />}
       {state.kind === "deposit" && <DepositForm {...props} />}
+      {state.kind === "import" && <ImportForm {...props} />}
     </Modal>
   );
 }

@@ -1,6 +1,6 @@
 import type { AllData } from "@finans/engine";
 
-export type { Account, Recurring, RecurringAmount, Loan, OneOff, AssetType, Currency, Trade, Card, CardTx, Price, AllData } from "@finans/engine";
+export type { Account, Recurring, RecurringAmount, Loan, OneOff, AssetType, Currency, Trade, Portfolio, Card, CardTx, Price, AllData } from "@finans/engine";
 
 /** Sunucu hatası — `status` ile taşınır ki 401 (oturum yok/expired) yakalanıp giriş ekranına dönülebilsin. */
 export class ApiError extends Error {
@@ -21,6 +21,12 @@ export const api = {
   delPrice: (asset_type: string, symbol: string) =>
     fetch(`/api/prices/${asset_type}/${encodeURIComponent(symbol)}`, { method: "DELETE" }).then(j),
   refreshPrices: () => fetch("/api/prices/refresh", { method: "POST" }).then(j),
+  /* ---- portföy grupları (Faz 11): işlemi gruba taşı (tutar/bakiye etkisi yok) ---- */
+  setTradePortfolio: (tradeId: number, portfolio_id: number | null) =>
+    fetch(`/api/trades/${tradeId}/portfolio`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ portfolio_id }) }).then(j),
+  /* ---- toplu içe aktarma (ekstre yapıştırma) ---- */
+  bulkTransactions: (rows: { date: string; name: string; amount: number; category_id: number | null; account_id: number | null }[]) =>
+    fetch("/api/transactions/bulk", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rows }) }).then((r) => j<{ inserted: number }>(r)),
   /* ---- düzenli kalem tutar zaman çizelgesi (Faz 9) ---- */
   setRecurringAmount: (id: number, body: { amount: number; from_month: string | null }) =>
     fetch(`/api/recurring/${id}/amount`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(j),

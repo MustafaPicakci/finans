@@ -4,12 +4,13 @@ import {
   PieChart, Pie, Cell,
 } from "recharts";
 import {
-  fmtD, parseD, convert, portfolioValueHistory, depositValueOn,
+  fmtD, parseD, convert, depositValueOn,
   type AllData, type Day, type Position, type Rates, type Currency,
 } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, tl, TYPE_COLORS } from "../../theme";
 import { Money, Empty } from "../../ui";
+import { DegerGrafigi } from "../portfoy/DegerGrafigi";
 
 export type OzetSummary = {
   netWorthTry: number; cash: number; portValueTry: number; depositsValueTry: number;
@@ -56,9 +57,6 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, ccy, on
     }, {} as Record<string, number>)).map(([name, value]) => ({ name, value })),
     { name: "Vadeli", value: depositsValue },
   ].filter((a) => a.value > 0);
-  const valueHistory = portfolioValueHistory(data.trades, data.price_history, rates)
-    .map((v) => ({ x: fmtD(parseD(v.date), { day: "numeric", month: "short" }), value: Math.round(v.value) }));
-
   /* Hero sparkline: yakın vadeli likit nakit eğilimi (net varlık geçmişi tutulmadığından dekoratif ama anlamlı) */
   const sparkVals = days.length >= 2
     ? days.filter((_, i) => i % Math.max(1, Math.floor(days.length / 56)) === 0).map(eff)
@@ -192,34 +190,12 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, ccy, on
       </div>
     </div>
 
-    <div style={css.card}>
-      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Portföy Değeri Geçmişi</div>
-      <div style={{ fontSize: 12, color: T.mut, marginBottom: 8 }}>
+    <div>
+      <DegerGrafigi trades={data.trades} priceHistory={data.price_history} rates={rates} ccy={ccy}
+        title="Portföy Değeri Geçmişi" />
+      <div style={{ fontSize: 12, color: T.mut, margin: "-8px 2px 16px" }}>
         Fiyat yenilendikçe (otomatik veya elle) o günün kaydı tutulur. Nakit geçmişi tutulmadığından bu net varlık değil, yalnızca portföy değeridir.
       </div>
-      {valueHistory.length < 2 ? (
-        <Empty>Yeterli fiyat geçmişi birikince burada bir grafik görünecek — fiyatları birkaç gün yeniledikçe dolar.</Empty>
-      ) : (
-        <div style={{ height: 200 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={valueHistory} margin={{ top: 8, right: 4, left: 4, bottom: 0 }}>
-              <defs>
-                <linearGradient id="gv" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={T.pos} stopOpacity={0.4} />
-                  <stop offset="100%" stopColor={T.pos} stopOpacity={0.02} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid stroke={T.line} strokeDasharray="2 6" vertical={false} />
-              <XAxis dataKey="x" tick={{ fill: T.mut, fontSize: 10, fontFamily: T.mono }} tickLine={false} axisLine={{ stroke: T.line }} minTickGap={40} />
-              <YAxis tick={{ fill: T.mut, fontSize: 10, fontFamily: T.mono }} tickLine={false} axisLine={false} width={52}
-                tickFormatter={(v: number) => (Math.abs(v) >= 1000 ? `${Math.round(v / 1000)}k` : String(v))} />
-              <Tooltip contentStyle={{ background: T.panel2, border: `1px solid ${T.line}`, borderRadius: 8, fontFamily: T.mono, fontSize: 12 }}
-                labelStyle={{ color: T.mut }} formatter={(v: number) => [tl.format(v), "Portföy Değeri"]} />
-              <Area type="monotone" dataKey="value" stroke={T.pos} strokeWidth={2} fill="url(#gv)" />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-      )}
     </div>
 
     <div style={css.card}>

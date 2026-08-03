@@ -12,7 +12,10 @@ export type OneOff = { id: number; date: string; name: string; amount: number };
 export type AssetType = "BIST" | "FON" | "ALTIN" | "DOVIZ" | "KRIPTO" | "ETF";
 /** Bir varlığın/işlemin doğal (native) para birimi. TRY taban birimidir; USD döviz varlıklar içindir. */
 export type Currency = "TRY" | "USD";
-export type Trade = { id: number; date: string; asset_type: AssetType; symbol: string; side: "ALIŞ" | "SATIŞ"; qty: number; price: number; fee: number; currency: Currency; account_id?: number | null };
+export type Trade = { id: number; date: string; asset_type: AssetType; symbol: string; side: "ALIŞ" | "SATIŞ"; qty: number; price: number; fee: number; currency: Currency; account_id?: number | null; portfolio_id?: number | null };
+/** Portföy grubu (Faz 11): varlıkları mantıksal olarak ayıran kap ("Alfa Portföy", "Emeklilik").
+    Gruplama işlem düzeyindedir — aynı sembol iki portföyde ayrı pozisyon olarak durur. */
+export type Portfolio = { id: number; name: string; note: string | null };
 /** Vadeli mevduat (TRY): anapara `open_date`'te açılır, `term_days` gün sonra vade dolar.
     Faiz basit (yıllık `rate` %, 365 gün-sayımı); `withholding` = stopaj % (net faize düşer).
     `account_id` verilmişse açılışta anapara o hesaptan düşülür (silinince geri döner). */
@@ -30,7 +33,7 @@ export type Transaction = { id: number; date: string; name: string; amount: numb
 export type PriceHistoryEntry = { symbol: string; asset_type: AssetType; date: string; price: number; currency?: Currency };
 export type AllData = {
   accounts: Account[]; recurring: Recurring[]; loans: Loan[]; oneoffs: OneOff[];
-  trades: Trade[]; cards: Card[]; card_txs: CardTx[]; prices: Price[]; price_history: PriceHistoryEntry[];
+  trades: Trade[]; portfolios: Portfolio[]; cards: Card[]; card_txs: CardTx[]; prices: Price[]; price_history: PriceHistoryEntry[];
   categories: Category[]; transactions: Transaction[]; deposits: Deposit[]; recurring_realized: RecurringRealized[]; statement_payments: StatementPayment[]; settings: Record<string, string>;
   recurring_amounts: RecurringAmount[];
 };

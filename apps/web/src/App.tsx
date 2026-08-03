@@ -260,7 +260,7 @@ export default function App() {
         boxShadow: `0 8px 22px -6px ${T.acc}`,
       }}>＋</button>
 
-      {add !== null && <AddSheet data={data} state={add} setKind={(k) => setAdd({ kind: k })} onClose={() => setAdd(null)} reload={reload} />}
+      {add !== null && <AddSheet data={data} state={add} setState={setAdd} onClose={() => setAdd(null)} reload={reload} />}
 
       <nav className="bottom-nav" style={{
         position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 30,

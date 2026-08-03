@@ -139,5 +139,10 @@ export const css: Record<string, CSSProperties> = {
     fontWeight: 500, fontSize: 13, cursor: "pointer", fontFamily: T.disp,
   },
   del: { background: "none", border: "none", color: T.mut3, cursor: "pointer", fontSize: 16, padding: 4, borderRadius: 8 },
+  /** Küçük tek-tık kısayol düğmesi (şablon çipleri, "güncel fiyat", "tümünü sat") */
+  chip: {
+    background: T.panel2, color: T.text, border: `1px solid ${T.line}`, borderRadius: 999, padding: "6px 12px",
+    fontWeight: 560, fontSize: 12, cursor: "pointer", fontFamily: T.disp, whiteSpace: "nowrap",
+  },
   mono: { fontFamily: T.mono, fontVariantNumeric: "tabular-nums" },
 };

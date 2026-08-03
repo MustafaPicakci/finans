@@ -51,12 +51,154 @@ export function positions(trades: Trade[], prices: AllData["prices"]): Position[
   }).sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
 }
 
+/** Bir işlemin, gerçekleştiği andaki pozisyona etkisi — işlem geçmişi ekranının satır modeli.
+    Tutarlar işlemin kendi para birimindedir (`trade.currency`). */
+export type TradeEntry = {
+  trade: Trade;
+  /** işlemden ÖNCEKİ adet ve ağırlıklı ortalama maliyet (aynı sembol+tür, aynı portföy kapsamında) */
+  qtyBefore: number; avgBefore: number;
+  /** işlemden SONRAKİ adet ve ortalama maliyet — "ort. 250 → 265" gösterimi buradan gelir */
+  qtyAfter: number; avgAfter: number;
+  /** ALIŞ'ta ödenen toplam (adet×fiyat + komisyon), SATIŞ'ta ele geçen (adet×fiyat − komisyon) */
+  cash: number;
+  /** yalnız SATIŞ'ta: adet × (satış − o anki ort. maliyet) − komisyon; ALIŞ'ta 0 */
+  realized: number;
+  /** SATIŞ pozisyonu tamamen kapattıysa (sonrasında adet 0) — "pozisyon kapandı" rozeti için */
+  closed: boolean;
+};
+
+/**
+ * İşlemleri kronolojik işleyip her birinin pozisyona etkisini çıkarır (Faz 12 — hareket geçmişi).
+ * `positions()` ile **aynı** maliyet matematiğini kullanır (ağırlıklı ortalama, kapanınca sıfırlanma),
+ * farkı: sonucu değil ara adımları verir — "hangi hisse ne zaman eklendi/çıkarıldı, ortalama nasıl değişti".
+ *
+ * Kapsam çağıranındır: tüm işlemleri verirsen birleşik defter, tek portföyün işlemlerini verirsen
+ * o portföyün defteri çıkar (grup başına ayrı ortalama maliyet — bkz. `groupTradesByPortfolio`).
+ * Dönüş sırası **kronolojiktir** (eski → yeni); ekranda ters çevrilir.
+ */
+export function tradeLedger(trades: Trade[]): TradeEntry[] {
+  const st = new Map<string, { qty: number; cost: number }>();
+  return [...trades]
+    .sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id)
+    .map((t) => {
+      const k = `${t.asset_type}:${t.symbol}`;
+      if (!st.has(k)) st.set(k, { qty: 0, cost: 0 });
+      const p = st.get(k)!;
+      const qtyBefore = p.qty;
+      const avgBefore = p.qty > 0 ? p.cost / p.qty : 0;
+      const fee = t.fee || 0;
+      let realized = 0;
+      let cash: number;
+      if (t.side === "ALIŞ") {
+        cash = t.qty * t.price + fee;
+        p.qty += t.qty;
+        p.cost += cash;
+      } else {
+        cash = t.qty * t.price - fee;
+        realized = t.qty * (t.price - avgBefore) - fee;
+        p.cost -= Math.min(t.qty, p.qty) * avgBefore;
+        p.qty -= t.qty;
+      }
+      return {
+        trade: t, qtyBefore, avgBefore, qtyAfter: p.qty,
+        avgAfter: p.qty > 0 ? p.cost / p.qty : 0,
+        cash, realized, closed: t.side === "SATIŞ" && p.qty <= 0,
+      };
+    });
+}
+
+/** Bir işlem kümesinin dönem özeti — geçmiş ekranının başlık rakamları (tek para biriminde toplanır) */
+export type TradeSummary = { buy: number; sell: number; fee: number; realized: number; count: number };
+
+/** `entries` tek para birimi içindir (ekran birime göre süzer); TRY/USD karışımı çağıran tarafta ayrılır. */
+export function summarizeTrades(entries: TradeEntry[]): TradeSummary {
+  return entries.reduce<TradeSummary>((s, e) => ({
+    buy: s.buy + (e.trade.side === "ALIŞ" ? e.cash : 0),
+    sell: s.sell + (e.trade.side === "SATIŞ" ? e.cash : 0),
+    fee: s.fee + (e.trade.fee || 0),
+    realized: s.realized + e.realized,
+    count: s.count + 1,
+  }), { buy: 0, sell: 0, fee: 0, realized: 0, count: 0 });
+}
+
+/** Portföy grubu anahtarı: grup id'si, gruplanmamış işlemler için `null` */
+export type PortfolioKey = number | null;
+
+/**
+ * İşlemleri portföy grubuna göre ayırır (Faz 11). Pozisyonlar grup başına **ayrı** hesaplanır:
+ * aynı sembol iki portföyde tutuluyorsa iki bağımsız pozisyondur (ayrı ortalama maliyet, ayrı K/Z) —
+ * kullanıcı onları farklı kurumda/stratejide tuttuğu için ayırmıştır, tek pozisyona katlamak yanıltır.
+ * Toplam (net varlık) tarafında bir şey değişmez: tüm işlemler tek listede değerlenmeye devam eder.
+ */
+export function groupTradesByPortfolio(trades: Trade[]): Map<PortfolioKey, Trade[]> {
+  const by = new Map<PortfolioKey, Trade[]>();
+  for (const t of trades) {
+    const k: PortfolioKey = t.portfolio_id ?? null;
+    const list = by.get(k);
+    if (list) list.push(t); else by.set(k, [t]);
+  }
+  return by;
+}
+
+/** Bir portföy grubunun güncel TRY değeri — grup başlıklarındaki toplam için. */
+export function portfolioGroupValueTry(trades: Trade[], prices: AllData["prices"], rates: Rates): number {
+  return portfolioValueTry(positions(trades, prices), rates);
+}
+
 /** Pozisyon değerlerini (her biri kendi biriminde) TRY'ye çevirip toplar — net varlık ve alokasyon için. */
 export function portfolioValueTry(pos: Position[], rates: Rates): number {
   return pos.reduce((s, p) => s + (p.value != null ? convert(p.value, p.currency, "TRY", rates) : 0), 0);
 }
 
 export type ValuePoint = { date: string; value: number };
+
+/* ————— DEĞER GRAFİĞİ ARALIKLARI (Faz 13) —————
+   Fiyat geçmişi günde bir anlık görüntü tutar (`price_history`), dolayısıyla en küçük çözünürlük
+   GÜNDÜR — "1H/1A/1Y" pencereyi daraltır, veriyi sıklaştırmaz. Uzun pencerelerde nokta sayısı
+   `bucketValueHistory` ile seyreltilir (her kovanın SON değeri = o haftanın/ayın kapanışı). */
+
+/** Grafik zaman aralığı; `"TÜM"` = eldeki tüm geçmiş */
+export type HistoryRange = "1H" | "1A" | "3A" | "6A" | "1Y" | "TÜM";
+
+/** Aralığın gün karşılığı (takvim ayı değil sabit gün — grafik penceresi için yeterli) */
+const RANGE_DAYS: Record<Exclude<HistoryRange, "TÜM">, number> = {
+  "1H": 7, "1A": 30, "3A": 90, "6A": 180, "1Y": 365,
+};
+
+/** `points`'i son N güne kısar (kronolojik sırayı korur). `today` verilmezse bugün. */
+export function sliceValueHistory(points: ValuePoint[], range: HistoryRange, today = new Date()): ValuePoint[] {
+  if (range === "TÜM") return points;
+  const from = new Date(today);
+  from.setDate(from.getDate() - RANGE_DAYS[range]);
+  const iso = from.toISOString().slice(0, 10);
+  return points.filter((p) => p.date >= iso);
+}
+
+/**
+ * Nokta sayısını en çok `maxPoints`'e indirir: seri eşit kovalara bölünür, her kovadan o kovanın
+ * **son** noktası alınır (kapanış mantığı). İlk ve son nokta her zaman korunur — aralık başı/sonu
+ * kayarsa "dönem değişimi" yanlış çıkardı.
+ */
+export function bucketValueHistory(points: ValuePoint[], maxPoints: number): ValuePoint[] {
+  if (maxPoints < 2 || points.length <= maxPoints) return points;
+  const size = points.length / maxPoints;
+  const out: ValuePoint[] = [];
+  for (let i = 0; i < maxPoints; i++) {
+    const end = Math.min(points.length - 1, Math.floor((i + 1) * size) - 1);
+    const p = points[Math.max(end, 0)];
+    if (p && out.at(-1)?.date !== p.date) out.push(p);
+  }
+  if (out.at(-1)?.date !== points.at(-1)!.date) out.push(points.at(-1)!);
+  if (out[0]?.date !== points[0].date) out.unshift(points[0]);
+  return out;
+}
+
+/** Aralığın ilk → son değişimi (mutlak + yüzde). Nokta yoksa/başlangıç 0 ise `pct` null. */
+export function historyChange(points: ValuePoint[]): { abs: number; pct: number | null } {
+  if (points.length < 2) return { abs: 0, pct: null };
+  const first = points[0].value, last = points.at(-1)!.value;
+  return { abs: last - first, pct: first !== 0 ? ((last - first) / Math.abs(first)) * 100 : null };
+}
 
 /**
  * Fiyat geçmişine göre portföy değerinin gün gün seyri (TRY) — sadece en az bir sembolün

@@ -26,6 +26,66 @@ export const AmountField = ({ label, value, onChange, placeholder, flex, inputRe
   );
 };
 
+/** Geçmişten öğrenen metin girişi: yazarken eşleşen kayıtlar listelenir, seçilince `onPick`
+    formun geri kalanını (tutar/kategori/hesap…) doldurur. Klavye: ↑/↓ gezinme, Enter seç, Esc kapat.
+    Liste açıkken Enter formu göndermez (öneri seçer) — art arda giriş akışı bozulmasın. */
+export function SuggestInput<S>({ value, onChange, onPick, options, labelOf, subOf, inputRef, placeholder, style, max = 6, autoFocus }: {
+  value: string; onChange: (v: string) => void; onPick: (s: S) => void;
+  options: S[]; labelOf: (s: S) => string; subOf?: (s: S) => string;
+  inputRef?: React.RefObject<HTMLInputElement>; placeholder?: string; style?: React.CSSProperties;
+  max?: number; autoFocus?: boolean;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const [i, setI] = React.useState(0);
+  const q = value.trim().toLocaleLowerCase("tr");
+  // boşken en sık kullanılanlar, yazarken içinde geçenler (baştan eşleşenler önce)
+  const hits = React.useMemo(() => {
+    const list = q === "" ? options : options.filter((o) => labelOf(o).toLocaleLowerCase("tr").includes(q));
+    if (q !== "") {
+      list.sort((a, b) => Number(labelOf(b).toLocaleLowerCase("tr").startsWith(q)) - Number(labelOf(a).toLocaleLowerCase("tr").startsWith(q)));
+    }
+    // birebir aynı tek eşleşme varsa liste anlamsız
+    return list.length === 1 && labelOf(list[0]).toLocaleLowerCase("tr") === q ? [] : list.slice(0, max);
+  }, [options, q, max]);
+  const show = open && hits.length > 0;
+  const pick = (s: S) => { onPick(s); setOpen(false); };
+  return (
+    <div style={{ position: "relative" }}>
+      <input
+        ref={inputRef} style={{ ...css.input, ...style }} value={value} placeholder={placeholder} autoComplete="off" autoFocus={autoFocus}
+        onChange={(e) => { onChange(e.target.value); setOpen(true); setI(0); }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 120)} // tıklama blur'dan sonra gelir
+        onKeyDown={(e) => {
+          if (!show) return;
+          if (e.key === "ArrowDown") { e.preventDefault(); setI((x) => (x + 1) % hits.length); }
+          else if (e.key === "ArrowUp") { e.preventDefault(); setI((x) => (x - 1 + hits.length) % hits.length); }
+          else if (e.key === "Enter") { e.preventDefault(); pick(hits[i]); }
+          else if (e.key === "Escape") { e.preventDefault(); setOpen(false); }
+        }}
+      />
+      {show && (
+        <div style={{
+          position: "absolute", zIndex: 5, left: 0, right: 0, top: "calc(100% + 4px)", background: T.panel,
+          border: `1px solid ${T.line}`, borderRadius: 10, boxShadow: "var(--shadow)", overflow: "hidden",
+        }}>
+          {hits.map((o, k) => (
+            <div key={k} onMouseDown={(e) => { e.preventDefault(); pick(o); }} onMouseEnter={() => setI(k)}
+              style={{
+                display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", cursor: "pointer",
+                padding: "8px 11px", fontSize: 13, background: k === i ? T.panel2 : "transparent",
+                borderTop: k === 0 ? "none" : `1px solid ${T.line}`,
+              }}>
+              <span style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{labelOf(o)}</span>
+              {subOf && <span style={{ color: T.mut3, fontSize: 11, flexShrink: 0 }}>{subOf(o)}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Devre dışı bir "Ekle" butonunun yanında, formu neden gönderemediğini açıklayan küçük ipucu */
 export const Hint = ({ children }: { children: React.ReactNode }) => (
   <div style={{ fontSize: 12, color: T.mut3, marginTop: 8 }}>{children}</div>
