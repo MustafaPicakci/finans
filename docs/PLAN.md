@@ -13,7 +13,10 @@
 - ✅ **Faz 4.7 tamamlandı** — gerçekleşen işlem artık hesap bakiyesini etkiliyor: Harcamalar sekmesi de kaldırıldı (Rapor'a birleşti), tek gelir/gider formu tarihe göre defter/plan'a yönleniyor, hesaba bağlı işlem bakiyeyi atomik oynatıyor, Plan kalemleri "Gerçekleşti" ile deftere geçiyor. Faz 1'in "bakiye defterden bağımsız" kararının yerini aldı. Bkz. aşağıdaki Faz 4.7 bölümü.
 - ✅ **Faz 4.8 tamamlandı** — çok para birimi (TRY + USD): portföy işlemleri döviz cinsinden girilebilir (kripto/ABD hisse/ETF USD), pozisyonlar native hesaplanır, üstte ₺/$ görüntü seçici net varlık özetini/KPI'ları çevirir. Bkz. aşağıdaki Faz 4.8 bölümü.
 - ✅ **Faz 4.9 tamamlandı** — para piyasası fonları nakit gibi değerlenir: Nakit Akışı takvimi gün rengini artık **etkin nakit (nakit + para piyasası fonu)** ile belirler, güne tıklayınca nakit/PPF/diğer portföy kırılımı + gün içi hareketler açılır; fonlar Portföy sekmesinde "nakit say" ile opt-in işaretlenir. Bkz. aşağıdaki Faz 4.9 bölümü.
-- 🔄 **Faz 5 başladı (SaaS dönüşümü, Temmuz 2026)** — kendi auth'umuz + düz Postgres (taşınabilirlik öncelikli, Supabase Auth bilinçli elendi), `user_id` ile çok-kiracılık, global fiyat tazeleme, KVKK, yayınlama. Billing yok. **Faz 5.0–5.4 ✅** (Postgres geçişi, auth, çok-kiracılık, global fiyat, sertleştirme+KVKK). Sıradaki: **5.5 (yayınlama)** — son adım. Bkz. aşağıdaki Faz 5 bölümü.
+- ✅ **Faz 5 tamamlandı (SaaS dönüşümü, Temmuz 2026)** — kendi auth'umuz + düz Postgres (taşınabilirlik öncelikli, Supabase Auth bilinçli elendi), `user_id` ile çok-kiracılık, global fiyat tazeleme, KVKK, yayınlama (5.0–5.5 ✅). Billing yok. Bkz. aşağıdaki Faz 5 bölümü.
+- ✅ **Faz 6–9 tamamlandı (Temmuz 2026)** — yayın sonrası ürün derinleşmesi: portföy işlemini nakit hesaba bağlama + şifre sıfırlama/aktivasyon e-postaları (6), vadeli mevduat + Hesaplar sekmesi (7), düzenli kalem & kart ekstresi gerçekleştirme (8), düzenli kalem tutar zaman çizelgesi (9). Araya iki UI işi girdi: Nakit Haritası (likit nakit + runway) ve kenar çubuğu kabuğu + gizlilik modu.
+- ✅ **Faz 10–13 tamamlandı (Temmuz–Ağustos 2026)** — çok-kullanıcı onboarding (10) + giriş sürtünmesini azaltma (10.1) + toplu içe aktarma (10.2), portföy grupları (11), hareket geçmişi (12), değer grafiği aralıkları (13). Bkz. aşağıdaki bölümler.
+- ⏳ **Açık iş (prod engelleyici): e-posta teslim edilebilirliği** — çok-kullanıcı kayıt açık ama prod'da SMTP = Gmail, aktivasyon postaları kurumsal alan adlarına ulaşmıyor (phishing sayılıp düşüyor). Gerçek kullanıcı almadan önce transactional sağlayıcı + kendi domain (SPF/DKIM/DMARC) şart; kod değişmiyor, yalnız env. Bkz. Faz 10 bölümü.
 
 ## Context (Neden)
 
@@ -358,12 +361,74 @@ Doğrulama (finans_test, prod+dev mod): tüm başlıklar (CSP+HSTS) API+statik y
 
 Kalan artık riskler (kabul edildi, deploy-blocker değil): gövde sınırı Content-Length tabanlı (chunked'ı önündeki reverse proxy sınırlar); IP rate-limit güvenilir proxy XFF'ine dayanır (e-posta limiti telafi eder); owner-bootstrap kayıt teorik yarış (tek-owner'da düşük risk).
 
-### Faz 5.5 — Yayınlama
-- Hosting kararı burada kesinleşir: **Neon + Fly.io/VPS** veya **tek VPS'te app+Postgres** (Hetzner ~€4/ay). Önde Caddy (otomatik HTTPS — PWA service worker şartı) veya Cloudflare.
-- CI/CD: GitHub Actions → Docker build → deploy. Docker imajı pnpm monorepo'ya göre güncellenir.
-- README + CLAUDE.md güncellenir (yeni komutlar, env değişkenleri, çok-kullanıcılı model, deploy).
+### Faz 5.5 — Yayınlama ✅
+Karar (planlanan "Fly.io/VPS" yerine): **Render (app, ücretsiz Docker web service) + Neon (Postgres, PG17, eu-central-1)** — `render.yaml` blueprint repoda ama servis elle kurulduğu için **autoDeploy kapalı**, deploy Render konsolundan **Manual Deploy** ile tetiklenir. `db.ts` uzak (localhost olmayan) bağlantıda SSL'i otomatik açar. Ücretsiz katman 15 dk atıllıkta uyur (soğuk başlangıç ~30 sn + cron durur) — tek kullanıcı için kabul edildi.
 
-Kapsam dışı (bilinçli, ileride ayrı faz olabilir): Stripe/billing ve plan kapıları, AdSense, Google ile giriş (OAuth), e-posta doğrulama zorunluluğu (kayıtta doğrulamasız giriş + sonradan doğrulama hatırlatması yeterli).
+Deploy sırasında öğrenilenler:
+- **Docker build**: temiz frozen install'da her paket `@types/node`'u açıkça bildirmeli (engine `types:[]`, `apps/web`'e açık bağımlılık) — yerel pnpm hoisting Docker'da yok.
+- **PWA**: `/api/all` network-first cache timeout 5→30 sn (soğuk başlangıçta eski veri gösteriyordu).
+- **Ağ tuzağı**: kullanıcının ISP'si giden 5432'yi engelliyor — yerelden Neon'a `psql`/`pg_dump` çalışmıyor, migration için mobil hotspot gerekti. Render'ın kendi sunucuları etkilenmez.
+
+CI/CD (GitHub Actions) yapılmadı — manuel deploy tek kullanıcı için yeterli görüldü; ihtiyaç olursa ayrı iş.
+
+Kapsam dışı (bilinçli, ileride ayrı faz olabilir): Stripe/billing ve plan kapıları, AdSense, Google ile giriş (OAuth).
+
+---
+
+## Faz 6 — Portföy↔nakit bağlantısı + e-posta akışları ✅
+
+- **Portföy işlemi opsiyonel nakit hesaba bağlanır**: `trades.account_id` doluysa ALIŞ hesaptan düşer, SATIŞ ekler, kayıt silinince geri alınır (sunucu tarafında atomik, `tradeBalanceDelta`). Boş bırakılırsa eski davranış (portföy ve nakit ayrık) korunur — Faz 3'te "atlandı" denen madde böylece opt-in olarak geldi.
+- **Şifre sıfırlama + hesap aktivasyonu**: generic SMTP ([mail.ts](apps/server/mail.ts)) — env değişince sağlayıcı değişir, kod değişmez. `email_tokens` tablosu (`verify`/`reset`, 24s/1s geçerlilik).
+
+## Faz 7 — Vadeli mevduat + Hesaplar sekmesi ✅
+
+`deposits` tablosu (anapara, faiz, vade, stopaj); açılışta anapara opsiyonel olarak bir hesaptan düşer, vade sonunda net getiriyle birlikte projeksiyona girer. Hesap yönetimi Özet'ten ayrılıp kendi sekmesine taşındı. **7.1**: TEFAS başarısız denemede 1 saat geri-çekilme (kota israfını önler).
+
+## Faz 8 — Gerçekleştirme (elle + otonom) ✅
+
+Düzenli gelir/gider ve kredi kartı ekstresi **plan**dan **deftere** geçirilebilir: elle "Gerçekleşti" düğmesiyle veya `auto` işaretliyse cron ile. **8.2**: kart ekstresi tutarı artık sunucuda `txShares` ile hesaplanır — istemciden gelen tutara güvenilmez (`apps/server` da `@finans/engine` tüketir).
+
+## Faz 9 — Düzenli kalem tutar zaman çizelgesi ✅
+
+Tutar kimlikten ayrıldı: `recurring` = kalıcı kimlik, tutar `recurring_amounts (recurring_id, from_month, amount)` çizelgesinde yaşar (`'0000-01'` = "baştan"). "Değiştir" artık kaydı bölmez — tek atomik upsert; geçmiş projeksiyon eski tutarla korunur, planlı değişiklik "↗ … itibarıyla …" ipucuyla görünür ve geri alınabilir. Bu, önceki istemci-taraflı PUT+POST akışının bayrak kopyalama/çift satır/atomik olmama sorunlarını çözdü.
+
+### Araya giren UI işleri ✅
+- **Nakit Haritası**: Özet'teki grafik/rozet/uyarı çıplak nakit yerine **likit nakit** (bakiye + "nakit say" fonları) kullanır; kör "N gün eksi" uyarısı yerine **runway** (nakitin tükeneceği tarih).
+- **Tasarım skin'i**: sol kenar çubuğu + üst çubuk kabuğu, sıcak nötr palet, net varlık hero + KPI kartları. (İki gerçek regresyon da burada yakalandı: grid çocuklarının `min-width:auto`'su mobil düzeni taşırıyordu; Schibsted Grotesk ₺ glifini £ basıyordu → para simgeleri mono fontta.)
+- **Gizlilik modu**: tek global anahtar tüm tutarları maskeler; para biçimleyicilerinin içinde çözüldüğü için 38+ çağrı yeri prop geçmeden gizlenir.
+- **Portföy pozisyonları varlık sınıfına göre gruplanır** (Kıymetli Maden / BIST / ABD & ETF / Kripto / Döviz).
+
+---
+
+## Faz 10 — Çok-kullanıcı onboarding ✅ (+ açık iş)
+
+Owner-only kayıt kapısı kaldırıldı: **herkese açık kayıt + zorunlu e-posta doğrulama**. İlk kullanıcı owner (oto-doğrulanır, sahipsiz veriyi devralır, oto-giriş); sonrakiler `email_verified=false` + aktivasyon e-postası + `pending` (oturum açılmaz, doğrulanana dek login 403). `POST /auth/resend-verify` (rate-limited, daima 200). E-posta gönderimi `await` edilmez — SMTP yavaşsa bile `/auth/register` anında döner.
+
+Aynı turda kapatılan güvenlik açıkları:
+- `sessions.token` artık **SHA-256 hash** olarak saklanır (cookie'de ham, DB'de hash); süre 30g→7g.
+- `PUT /api/settings` global anahtar yazımını (`fx_usd_try`, `tefas_*`) 403 ile reddeder — önceden herhangi bir kullanıcı herkesin değerlemesini bozabilir veya global fiyat tazelemeyi durdurabilirdi.
+- E-posta linkleri artık tarayıcı `Origin` header'ına güvenmiyor (`APP_URL` || istek host'u) — saldırgan kontrolündeki Origin ile geçerli token sızdırılıp hesap ele geçirilebilirdi. Prod'da `APP_URL` yoksa açılışta uyarı.
+- `hono/logger` + kritik olaylara `[audit]` satırları (kayıt, giriş/çıkış, şifre sıfırlama, gerçekleştirme, borsa işlemi, mevduat, ekstre ödeme, KVKK export/silme).
+
+**⏳ Açık iş — e-posta teslim edilebilirliği (gerçek kullanıcı almadan önce şart):** prod SMTP'si Gmail. Gmail `250 OK` dönüyor ve Gmail adreslerine ulaşıyor, ama "hesabını aktive et + buton + başka siteye link" kalıbı kurumsal alan adlarında phishing sayılıp sessizce düşüyor (`@phexum.com`'a ulaşmadı; düz test maili ulaşmıştı). Çözüm: transactional sağlayıcı (**Resend/Brevo/Postmark**) + kendi domain'inde **SPF/DKIM(+DMARC)** + `MAIL_FROM=no-reply@<domain>`. [mail.ts](apps/server/mail.ts) generic SMTP olduğundan **yalnız env değişir**; Render env'ine `SMTP_*` + `APP_URL` de eklenmeli.
+
+### Faz 10.1 — Giriş sürtünmesini azaltma ✅
+[recall.ts](apps/web/src/features/forms/recall.ts): geçmişten öneri (sıklık × tazelik), tamamı istemcide `AllData`'dan türetilir (yeni uç yok). Ada göre autocomplete — seçilince tutar/kategori/hesap (kartta kart/taksit) son kayıttan dolar; TradeForm'da sembolden tür/para birimi/portföy hatırlanır + "güncel fiyat" ve "tümünü sat" kısayolları. "+ Ekle" üstünde sık girilenler çipleri (düzenli kalemler ve kart ekstresi ödemeleri elenir — onlar otomatik üretilir).
+
+### Faz 10.2 — Toplu içe aktarma ✅
+Faz 4'te "gerekli görülmedi" denen dosya importu, **dosyasız** biçimde geri geldi: metin yapıştır → [statement.ts](packages/engine/src/statement.ts) ayrıştırıcısı (sekme/CSV/boşluk, TR+US tutar biçimi, bakiye sütunundan işaret çıkarımı; ayırıcı ve sütunlar satırların çoğunluğuna bakılarak seçilir) → düzeltilebilir önizleme (kategori tahmini geçmişten, olası kopya işareti) → tek atomik `POST /api/transactions/bulk` (≤500 satır, hesap/kategori sahipliği önden doğrulanır).
+
+## Faz 11 — Portföy grupları ✅
+
+`portfolios` tanım tablosu + `trades.portfolio_id` (`ON DELETE SET NULL` → grup silinince işlem "Gruplanmamış"a düşer). Gruplama **işlem düzeyinde** bilinçli tercih: aynı sembol iki portföyde ayrı ortalama maliyet olabilsin (farklı kurum/strateji). Mevcut işlemi taşımak için dar uç: `PUT /api/trades/:id/portfolio` (sil+ekle bakiyeyi iki kez oynatırdı). **Net varlık/alokasyon/projeksiyon etkilenmez** — saf raporlama katmanı.
+
+## Faz 12 — Hareket geçmişi ✅
+
+`tradeLedger(trades)`: her işlemin öncesi/sonrası adet + ortalama maliyet, satışta gerçekleşen K/Z, "pozisyon kapandı" işareti — `positions()` ile aynı matematik, ara adımları verir. [Hareketler.tsx](apps/web/src/features/portfoy/Hareketler.tsx): sembol/tür/yön/dönem filtreleri, aya göre gruplama, **para birimi başına** dönem özeti (TRY+USD toplanmaz — işlem anındaki kur bilinmiyor). Filtreler yalnız görünen satırları kısar; ortalama maliyet hep tüm geçmişten hesaplanır.
+
+## Faz 13 — Değer grafiği aralıkları ✅
+
+engine: `sliceValueHistory` (1H/1A/3A/6A/1Y/TÜM) + `bucketValueHistory` (uzun pencerede kova başına SON nokta = kapanış; ilk/son korunur) + `historyChange` (dönem değişimi mutlak + %). [DegerGrafigi.tsx](apps/web/src/features/portfoy/DegerGrafigi.tsx) Özet'te tüm portföye, Portföy sekmesinde seçili gruba kapsamlı. **Dürüst kısıt**: `price_history` günde bir anlık görüntü tuttuğundan çözünürlük **gündür** — aralık düğmeleri pencereyi daraltır, veriyi sıklaştırmaz.
 
 ---
 
@@ -380,4 +445,9 @@ Kapsam dışı (bilinçli, ileride ayrı faz olabilir): Stripe/billing ve plan k
 
 ## Sıralama
 
-Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Sıradaki: Faz 5 — SaaS dönüşümü, alt fazlar 5.0 (Postgres) → 5.1 (auth) → 5.2 (çok-kiracılık) → 5.3 (global fiyat) → 5.4 (sertleştirme+KVKK) → 5.5 (yayınlama) sırasıyla.
+Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Faz 0–13 tamamlandı (Faz 5 yayına, 10–13 ürün derinleşmesine kadar).
+
+**Sıradaki iş — numaralı faz değil, açık kalan kalemler (öncelik sırasıyla):**
+1. **E-posta teslim edilebilirliği** (prod engelleyici, bkz. Faz 10) — Resend/Brevo + kendi domain + SPF/DKIM/DMARC; sadece env değişikliği. Bu bitmeden çok-kullanıcı kâğıt üzerinde kalır.
+2. **Deploy disiplini** — Render'da autoDeploy kapalı; her commit sonrası Manual Deploy unutulmamalı (ya da Blueprint'e geçilip otomatikleştirilmeli).
+3. Sonraki ürün fikirleri (henüz seçilmedi): temettü/sermaye olayları, kayıt düzenleme, gün içi fiyat geçmişi, GitHub Actions CI/CD.
