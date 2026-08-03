@@ -6,6 +6,7 @@ import {
 import { api } from "../../api";
 import { T, css, fmtMoney, TYPE_COLORS } from "../../theme";
 import { Empty } from "../../ui";
+import { EditSheet, type EditTarget } from "../../EditSheet";
 
 /* ————— HAREKETLER (İŞLEM GEÇMİŞİ) —————
    "Hangi varlık ne zaman girdi/çıktı, ortalama maliyetim nasıl değişti, ne kazandım."
@@ -44,6 +45,7 @@ export function Hareketler({ data, trades, scopeLabel, reload, symbol, onSymbol 
   const [side, setSide] = useState<Side>("hepsi");
   const [type, setType] = useState<AssetType | "hepsi">("hepsi");
   const [range, setRange] = useState<Range>(0);
+  const [editing, setEditing] = useState<EditTarget | null>(null);
 
   const ledger = useMemo(() => tradeLedger(trades), [trades]);
   const since = sinceOf(range);
@@ -139,17 +141,19 @@ export function Hareketler({ data, trades, scopeLabel, reload, symbol, onSymbol 
                 padding: "10px 0 6px", borderBottom: `1px solid ${T.line}`, marginBottom: 2,
               }}>{fmtD(parseD(e.trade.date), MONTH_FMT)}</div>
             )}
-            <HareketRow e={e} data={data} reload={reload} onSymbol={onSymbol} />
+            <HareketRow e={e} data={data} reload={reload} onSymbol={onSymbol} onEdit={setEditing} />
           </React.Fragment>
         );
       })}
+      {editing && <EditSheet data={data} target={editing} reload={reload} onClose={() => setEditing(null)} />}
     </div>
   );
 }
 
 /** Tek hareket: üst satır ne olduğu, alt satır pozisyona etkisi (adet ve ortalama maliyet değişimi) */
-function HareketRow({ e, data, reload, onSymbol }: {
+function HareketRow({ e, data, reload, onSymbol, onEdit }: {
   e: TradeEntry; data: AllData; reload: () => void; onSymbol: (s: string | null) => void;
+  onEdit: (t: EditTarget) => void;
 }) {
   const t = e.trade;
   const ccy = (t.currency ?? "TRY") as Currency;
@@ -190,6 +194,7 @@ function HareketRow({ e, data, reload, onSymbol }: {
             {data.portfolios.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
         )}
+        <button style={css.edit} title="İşlemi düzenle" onClick={() => onEdit({ kind: "trade", row: t })}>✎</button>
         <button style={css.del} title="İşlemi sil" onClick={async () => { await api.del("trades", t.id); reload(); }}>✕</button>
       </div>
 

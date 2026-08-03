@@ -7,6 +7,7 @@ import { monthsBack, monthlyTotals, categoryTotals, transactionsInMonth, parseD,
 import { api } from "../../api";
 import { T, css, tl, CATEGORY_PALETTE } from "../../theme";
 import { Field, Empty, Money, Row } from "../../ui";
+import { EditSheet, type EditTarget } from "../../EditSheet";
 
 const fmtYm = (ym: string) => {
   const [y, m] = ym.split("-").map(Number);
@@ -21,6 +22,7 @@ export function Rapor({ data, reload }: { data: AllData; reload: () => void }) {
   const [range, setRange] = useState(6);
   const curYm = ymOf(new Date());
   const [ym, setYm] = useState(curYm);
+  const [editing, setEditing] = useState<EditTarget | null>(null);
 
   const trend = useMemo(() => {
     const months = monthsBack(range);
@@ -144,6 +146,7 @@ export function Rapor({ data, reload }: { data: AllData; reload: () => void }) {
                   </div>
                 </div>
                 <Money v={t.amount} sign />
+                <button style={css.edit} title="Düzenle" onClick={() => setEditing({ kind: "transaction", row: t })}>✎</button>
                 <button style={css.del} onClick={async () => { await api.del("transactions", t.id); reload(); }}>✕</button>
               </Row>
             ))}
@@ -180,5 +183,7 @@ export function Rapor({ data, reload }: { data: AllData; reload: () => void }) {
         </div>
       </form>
     </div>
+
+    {editing && <EditSheet data={data} target={editing} reload={reload} onClose={() => setEditing(null)} />}
   </>);
 }

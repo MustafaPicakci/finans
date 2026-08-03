@@ -4,6 +4,7 @@ import { api } from "../../api";
 import { T, css, tl } from "../../theme";
 import { Field, AmountField, Money, Empty, Row } from "../../ui";
 import type { KalemPrefill } from "../forms";
+import { EditSheet, type EditTarget } from "../../EditSheet";
 
 /* ————— PLAN (nakit projeksiyonunu besleyen her şey tek yerde) —————
    Düzenli gelir/giderler + ileri tarihli tek seferlik kalemler + krediler.
@@ -15,6 +16,7 @@ export function Plan({ data, reload, onRealize }: { data: AllData; reload: () =>
   const [changing, setChanging] = useState<Recurring | null>(null);
   const [chVal, setChVal] = useState({ amount: "", from_month: "" });
   const [realizing, setRealizing] = useState<number | null>(null); // hedefsiz kalem için hesap/kategori seçimi
+  const [editing, setEditing] = useState<EditTarget | null>(null);
   const [rp, setRp] = useState({ account_id: "", category_id: "" });
   const curYm = ymOf(new Date());
   const now = new Date();
@@ -163,6 +165,7 @@ export function Plan({ data, reload, onRealize }: { data: AllData; reload: () =>
             <Money v={o.amount} sign />
             <button style={{ ...css.ghost, padding: "5px 10px", fontSize: 12, ...(due ? { color: T.acc, borderColor: T.acc } : {}) }}
               onClick={() => realize(o)}>Gerçekleşti</button>
+            <button style={css.edit} title="Düzenle" onClick={() => setEditing({ kind: "oneoff", row: o })}>✎</button>
             <button style={css.del} onClick={async () => { await api.del("oneoffs", o.id); reload(); }}>✕</button>
           </Row>
         );
@@ -193,5 +196,7 @@ export function Plan({ data, reload, onRealize }: { data: AllData; reload: () =>
         );
       })}
     </div>
+
+    {editing && <EditSheet data={data} target={editing} reload={reload} onClose={() => setEditing(null)} />}
   </>);
 }

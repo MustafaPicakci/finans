@@ -4,6 +4,7 @@ import { api } from "../../api";
 import { T, css, tl } from "../../theme";
 import { Field, AmountField, Hint, Empty, Row } from "../../ui";
 import type { AddKind } from "../forms";
+import { EditSheet, type EditTarget } from "../../EditSheet";
 
 /* ————— KARTLAR ————— */
 /* Kart TANIMI burada yapılır; kart HARCAMASI girişi global "+" akışındadır.
@@ -39,6 +40,7 @@ export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => 
   /* ödeme mini-formu: hangi (kart, vade) için açık + hesap/kategori seçimi */
   const [paying, setPaying] = useState<{ cardId: number; dueK: string; amount: number } | null>(null);
   const [pp, setPp] = useState({ account_id: "", category_id: "" });
+  const [editing, setEditing] = useState<EditTarget | null>(null);
   const expCats = data.categories.filter((c) => c.kind === "expense");
   const doPay = async () => {
     if (!paying) return;
@@ -240,11 +242,14 @@ export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => 
                 )}
               </span>
               <span style={{ ...css.mono, fontSize: 13 }}>{tl.format(Math.round(t.amount))}</span>
+              <button style={css.edit} title="Düzenle" onClick={() => setEditing({ kind: "cardtx", row: t })}>✎</button>
               <button style={css.del} onClick={async () => { await api.del("cardtxs", t.id); reload(); }}>✕</button>
             </Row>
           );
         })}
       </div>
     )}
+
+    {editing && <EditSheet data={data} target={editing} reload={reload} onClose={() => setEditing(null)} />}
   </>);
 }

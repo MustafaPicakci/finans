@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   todayStr, num, fmtD,
   depositMaturity, depositGrossInterest, depositNetInterest, depositMaturityValue,
-  type AllData, type AssetType, type Currency, type Deposit, type Recurring, type Trade,
+  type AllData, type AssetType, type CardTx, type Currency, type Deposit, type OneOff, type Recurring,
+  type Trade, type Transaction,
 } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, fmtMoney, TYPE_HINT } from "../../theme";
@@ -31,12 +32,22 @@ export type KalemPrefill = {
 /** Kart harcaması şablon çipinden önden doldurma */
 export type CardTxPrefill = { name: string; amount: number; card_id: number; installments: number };
 
-/** Kaydet (kapat) + Kaydet-yeni-ekle buton çifti */
-function SaveButtons({ ok, reason, onSaveNew }: { ok: boolean; reason: string | null; onSaveNew: () => void }) {
+/** Düzenleme (Faz 14): aynı formlar "düzenle" modunda da kullanılır — ayrı düzenleme formu yazmak
+    aynı doğrulama/ipucu mantığını iki yerde bakmak demek olurdu. Fark yalnız kayıt yolunda:
+    POST yerine ilgili PUT ucu, ve "Kaydet, yeni ekle" düğmesi olmaz. Kayıt türü değişmez —
+    gerçekleşen kayıt düzenlenince gerçekleşen kalır (plan'a çevirmek için sil + yeniden ekle). */
+export type EditTarget =
+  | { kind: "transaction"; row: Transaction }
+  | { kind: "oneoff"; row: OneOff }
+  | { kind: "cardtx"; row: CardTx }
+  | { kind: "trade"; row: Trade };
+
+/** Kaydet (kapat) + Kaydet-yeni-ekle buton çifti; düzenlemede tek "Kaydet" kalır */
+function SaveButtons({ ok, reason, onSaveNew, editing }: { ok: boolean; reason: string | null; onSaveNew: () => void; editing?: boolean }) {
   return (<>
     <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
       <button type="submit" style={{ ...css.btn, opacity: ok ? 1 : 0.4 }} disabled={!ok}>Kaydet</button>
-      <button type="button" style={{ ...css.ghost, opacity: ok ? 1 : 0.4 }} disabled={!ok} onClick={onSaveNew}>Kaydet, yeni ekle</button>
+      {!editing && <button type="button" style={{ ...css.ghost, opacity: ok ? 1 : 0.4 }} disabled={!ok} onClick={onSaveNew}>Kaydet, yeni ekle</button>}
     </div>
     {reason && <Hint>{reason}</Hint>}
   </>);
@@ -45,12 +56,26 @@ function SaveButtons({ ok, reason, onSaveNew }: { ok: boolean; reason: string | 
 /** Gelir/gider kalemi — tarihe göre otomatik yönlendirilir:
     bugün/geçmiş → gerçekleşen kayıt (transactions; hesaba bağlıysa bakiyeye işler, Rapor'a girer),
     ileri tarih → plan kalemi (oneoffs; nakit projeksiyonuna girer). */
-export function KalemForm({ data, reload, onClose, prefill }: FormProps & { prefill?: KalemPrefill }) {
-  const [tx, setTx] = useState({
-    date: todayStr(), name: prefill?.name ?? "", amount: prefill ? String(prefill.amount) : "",
-    type: prefill?.type ?? "gider",
-    category_id: prefill?.category_id != null ? String(prefill.category_id) : "",
-    account_id: prefill?.account_id != null ? String(prefill.account_id) : data.accounts[0] ? String(data.accounts[0].id) : "",
+export function KalemForm({ data, reload, onClose, prefill, edit }: FormProps & {
+  prefill?: KalemPrefill; edit?: Extract<EditTarget, { kind: "transaction" | "oneoff" }>;
+}) {
+  const [tx, setTx] = useState(() => {
+    if (edit) {
+      const r = edit.row;
+      const t = edit.kind === "transaction" ? (r as Transaction) : null;
+      return {
+        date: r.date, name: r.name, amount: String(Math.abs(r.amount)),
+        type: (r.amount < 0 ? "gider" : "gelir") as "gider" | "gelir",
+        category_id: t?.category_id != null ? String(t.category_id) : "",
+        account_id: t?.account_id != null ? String(t.account_id) : "",
+      };
+    }
+    return {
+      date: todayStr(), name: prefill?.name ?? "", amount: prefill ? String(prefill.amount) : "",
+      type: (prefill?.type ?? "gider") as "gider" | "gelir",
+      category_id: prefill?.category_id != null ? String(prefill.category_id) : "",
+      account_id: prefill?.account_id != null ? String(prefill.account_id) : data.accounts[0] ? String(data.accounts[0].id) : "",
+    };
   });
   const nameRef = useRef<HTMLInputElement>(null);
   const sugs = useMemo(() => kalemSuggestions(data), [data]);
@@ -62,12 +87,28 @@ export function KalemForm({ data, reload, onClose, prefill }: FormProps & { pref
       account_id: s.account_id != null ? String(s.account_id) : t.account_id,
     }));
   };
-  const future = tx.date > todayStr(); // ISO tarihte string karşılaştırması güvenli
+  /* Yeni kayıtta tarih hedefi belirler (ileri → plan). Düzenlemede kayıt zaten bir tabloda yaşıyor:
+     tarihi ileri almak onu plana çevirmez, yalnız tarihi değişir. */
+  const future = edit ? edit.kind === "oneoff" : tx.date > todayStr(); // ISO tarihte string karşılaştırması güvenli
   const ok = !!tx.name && num(tx.amount) > 0 && !!tx.date;
   const reason = !tx.name ? "Ad gerekli" : !(num(tx.amount) > 0) ? "Tutar 0'dan büyük olmalı" : !tx.date ? "Tarih gerekli" : null;
   const save = async (andNew: boolean) => {
     if (!ok) return;
     const amount = (tx.type === "gider" ? -1 : 1) * num(tx.amount);
+    if (edit) {
+      if (edit.kind === "oneoff") {
+        await api.put(`oneoffs/${edit.row.id}`, { name: tx.name, date: tx.date, amount });
+      } else {
+        await api.put(`transactions/${edit.row.id}`, {
+          name: tx.name, date: tx.date, amount,
+          category_id: tx.category_id ? +tx.category_id : null,
+          account_id: tx.account_id ? +tx.account_id : null,
+        });
+      }
+      reload();
+      onClose();
+      return;
+    }
     if (future) {
       await api.post("oneoffs", { name: tx.name, date: tx.date, amount });
     } else {
@@ -115,34 +156,42 @@ export function KalemForm({ data, reload, onClose, prefill }: FormProps & { pref
         </div>
       )}
       <div style={{ fontSize: 12, color: T.mut, marginTop: 10, background: T.panel2, borderRadius: 8, padding: "8px 12px" }}>
-        {future
-          ? "İleri tarihli → plan kalemi olarak kaydedilir: Nakit Akışı projeksiyonuna girer, günü gelince Plan'dan \"Gerçekleşti\" ile deftere geçirebilirsin."
-          : tx.account_id
-            ? "Gerçekleşen kayıt: seçili hesabın bakiyesine hemen işler ve Rapor'a girer."
-            : "Gerçekleşen kayıt: hesap seçilmedi — sadece Rapor'a girer, bakiyeye dokunmaz."}
+        {edit
+          ? edit.kind === "oneoff"
+            ? "Plan kalemi düzenleniyor: değişiklik Nakit Akışı projeksiyonuna yansır. (Deftere geçirmek için Plan'daki “Gerçekleşti” düğmesini kullan.)"
+            : "Gerçekleşen kayıt düzenleniyor: bakiye etkisi otomatik düzeltilir — eski tutar ilgili hesaptan geri alınır, yenisi işlenir (hesabı değiştirsen bile)."
+          : future
+            ? "İleri tarihli → plan kalemi olarak kaydedilir: Nakit Akışı projeksiyonuna girer, günü gelince Plan'dan \"Gerçekleşti\" ile deftere geçirebilirsin."
+            : tx.account_id
+              ? "Gerçekleşen kayıt: seçili hesabın bakiyesine hemen işler ve Rapor'a girer."
+              : "Gerçekleşen kayıt: hesap seçilmedi — sadece Rapor'a girer, bakiyeye dokunmaz."}
       </div>
-      <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} />
+      <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} editing={!!edit} />
     </form>
   );
 }
 
 /** Kart harcaması → ekstreye işlenir, son ödeme günü nakit akışına düşer */
-export function CardTxForm({ data, reload, onClose, prefill }: FormProps & { prefill?: CardTxPrefill }) {
-  const [tf, setTf] = useState({
-    card_id: prefill?.card_id ?? 0, date: todayStr(), name: prefill?.name ?? "",
-    amount: prefill ? String(prefill.amount) : "", installments: String(prefill?.installments ?? 1),
-  });
+export function CardTxForm({ data, reload, onClose, prefill, edit }: FormProps & { prefill?: CardTxPrefill; edit?: CardTx }) {
+  const [tf, setTf] = useState(() => edit
+    ? { card_id: edit.card_id, date: edit.date, name: edit.name, amount: String(edit.amount), installments: String(edit.installments) }
+    : {
+      card_id: prefill?.card_id ?? 0, date: todayStr(), name: prefill?.name ?? "",
+      amount: prefill ? String(prefill.amount) : "", installments: String(prefill?.installments ?? 1),
+    });
   const nameRef = useRef<HTMLInputElement>(null);
   const sugs = useMemo(() => cardTxSuggestions(data), [data]);
   /** geçmişten seçildi: tutar/kart/taksit son kaydından dolar */
   const pick = (s: CardTxSuggestion) =>
     setTf((t) => ({ ...t, name: s.name, amount: String(s.amount), card_id: s.card_id, installments: String(s.installments) }));
-  useEffect(() => { if (data.cards.length === 1 && tf.card_id === 0) setTf((s) => ({ ...s, card_id: data.cards[0].id })); }, [data.cards]);
+  useEffect(() => { if (!edit && data.cards.length === 1 && tf.card_id === 0) setTf((s) => ({ ...s, card_id: data.cards[0].id })); }, [data.cards]);
   const ok = tf.card_id > 0 && !!tf.name && num(tf.amount) > 0 && !!tf.date && +tf.installments >= 1;
   const reason = tf.card_id === 0 ? "Kart seçilmeli" : !tf.name ? "Açıklama gerekli" : !(num(tf.amount) > 0) ? "Tutar 0'dan büyük olmalı" : null;
   const save = async (andNew: boolean) => {
     if (!ok) return;
-    await api.post("cardtxs", { card_id: tf.card_id, date: tf.date, name: tf.name, amount: num(tf.amount), installments: +tf.installments });
+    const body = { card_id: tf.card_id, date: tf.date, name: tf.name, amount: num(tf.amount), installments: +tf.installments };
+    if (edit) { await api.put(`cardtxs/${edit.id}`, body); reload(); onClose(); return; }
+    await api.post("cardtxs", body);
     reload();
     if (andNew) { setTf({ ...tf, name: "", amount: "", installments: "1" }); nameRef.current?.focus(); } else onClose();
   };
@@ -169,7 +218,12 @@ export function CardTxForm({ data, reload, onClose, prefill }: FormProps & { pre
           aylık pay: <span style={{ ...css.mono, color: T.text }}>{fmtMoney(num(tf.amount) / +tf.installments, "TRY", true)}</span> × {tf.installments}
         </div>
       )}
-      <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} />
+      {edit && (
+        <div style={{ fontSize: 12, color: T.mut, marginTop: 10, background: T.panel2, borderRadius: 8, padding: "8px 12px" }}>
+          Harcama düzenleniyor: tarih veya taksit değişirse harcama yeniden hesaplanıp doğru ekstrelere dağıtılır.
+        </div>
+      )}
+      <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} editing={!!edit} />
     </form>
   );
 }
@@ -337,13 +391,20 @@ export function DepositForm({ data, reload, onClose }: FormProps) {
 }
 
 /** Portföy işlemi (alış/satış) → pozisyonlara ve net varlığa yansır */
-export function TradeForm({ data, reload, onClose }: FormProps) {
-  const [f, setF] = useState({
-    date: todayStr(), asset_type: "BIST" as AssetType, symbol: "", side: "ALIŞ" as Trade["side"],
-    qty: "", price: "", fee: "", currency: "TRY" as Currency, account_id: "",
-    // portföy grubu: son kullanılan grup varsayılan gelir (art arda giriş)
-    portfolio_id: (() => { const p = lastUsedPortfolio(data); return p != null ? String(p) : ""; })(),
-  });
+export function TradeForm({ data, reload, onClose, edit }: FormProps & { edit?: Trade }) {
+  const [f, setF] = useState(() => edit
+    ? {
+      date: edit.date, asset_type: edit.asset_type, symbol: edit.symbol, side: edit.side,
+      qty: String(edit.qty), price: String(edit.price), fee: edit.fee ? String(edit.fee) : "",
+      currency: edit.currency, account_id: edit.account_id != null ? String(edit.account_id) : "",
+      portfolio_id: edit.portfolio_id != null ? String(edit.portfolio_id) : "",
+    }
+    : {
+      date: todayStr(), asset_type: "BIST" as AssetType, symbol: "", side: "ALIŞ" as Trade["side"],
+      qty: "", price: "", fee: "", currency: "TRY" as Currency, account_id: "",
+      // portföy grubu: son kullanılan grup varsayılan gelir (art arda giriş)
+      portfolio_id: (() => { const p = lastUsedPortfolio(data); return p != null ? String(p) : ""; })(),
+    });
   const symbolRef = useRef<HTMLInputElement>(null);
   const sugs = useMemo(() => symbolSuggestions(data), [data]);
   /** Sembolün güncel fiyatı — para birimi eşleşiyorsa doldurulabilir (USD fiyatı TL alanına yazılmasın) */
@@ -362,11 +423,13 @@ export function TradeForm({ data, reload, onClose }: FormProps) {
   const reason = !f.symbol ? "Sembol gerekli" : !(num(f.qty) > 0) ? "Adet/miktar 0'dan büyük olmalı" : !(num(f.price) > 0) ? "Birim fiyat 0'dan büyük olmalı" : null;
   const save = async (andNew: boolean) => {
     if (!ok) return;
-    await api.post("trades", {
+    const body = {
       ...f, symbol: f.symbol.trim(), qty: num(f.qty), price: num(f.price), fee: num(f.fee), currency: f.currency,
       account_id: f.currency === "TRY" && f.account_id ? +f.account_id : null,
       portfolio_id: f.portfolio_id ? +f.portfolio_id : null,
-    });
+    };
+    if (edit) { await api.put(`trades/${edit.id}`, body); reload(); onClose(); return; }
+    await api.post("trades", body);
     reload();
     if (andNew) { setF({ ...f, symbol: "", qty: "", price: "", fee: "" }); symbolRef.current?.focus(); } else onClose();
   };
@@ -458,7 +521,13 @@ export function TradeForm({ data, reload, onClose }: FormProps) {
           })()}
         </div>
       )}
-      <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} />
+      {edit && (
+        <div style={{ fontSize: 12, color: T.mut, marginTop: 8, background: T.panel2, borderRadius: 8, padding: "8px 12px" }}>
+          İşlem düzenleniyor: pozisyon ve ortalama maliyet baştan hesaplanır. Hesaba bağlıysa bakiye etkisi de
+          otomatik düzeltilir (eskisi geri alınır, yenisi işlenir).
+        </div>
+      )}
+      <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} editing={!!edit} />
     </form>
   );
 }

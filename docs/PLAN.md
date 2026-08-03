@@ -16,6 +16,7 @@
 - ✅ **Faz 5 tamamlandı (SaaS dönüşümü, Temmuz 2026)** — kendi auth'umuz + düz Postgres (taşınabilirlik öncelikli, Supabase Auth bilinçli elendi), `user_id` ile çok-kiracılık, global fiyat tazeleme, KVKK, yayınlama (5.0–5.5 ✅). Billing yok. Bkz. aşağıdaki Faz 5 bölümü.
 - ✅ **Faz 6–9 tamamlandı (Temmuz 2026)** — yayın sonrası ürün derinleşmesi: portföy işlemini nakit hesaba bağlama + şifre sıfırlama/aktivasyon e-postaları (6), vadeli mevduat + Hesaplar sekmesi (7), düzenli kalem & kart ekstresi gerçekleştirme (8), düzenli kalem tutar zaman çizelgesi (9). Araya iki UI işi girdi: Nakit Haritası (likit nakit + runway) ve kenar çubuğu kabuğu + gizlilik modu.
 - ✅ **Faz 10–13 tamamlandı (Temmuz–Ağustos 2026)** — çok-kullanıcı onboarding (10) + giriş sürtünmesini azaltma (10.1) + toplu içe aktarma (10.2), portföy grupları (11), hareket geçmişi (12), değer grafiği aralıkları (13). Bkz. aşağıdaki bölümler.
+- ✅ **Faz 14 tamamlandı (Ağustos 2026)** — işlem kayıtlarının düzenlenmesi (gerçekleşen gelir/gider, plan kalemi, kart harcaması, portföy işlemi); bakiye etkisi atomik olarak düzeltilir.
 - ⏳ **Açık iş (prod engelleyici): e-posta teslim edilebilirliği** — çok-kullanıcı kayıt açık ama prod'da SMTP = Gmail, aktivasyon postaları kurumsal alan adlarına ulaşmıyor (phishing sayılıp düşüyor). Gerçek kullanıcı almadan önce transactional sağlayıcı + kendi domain (SPF/DKIM/DMARC) şart; kod değişmiyor, yalnız env. Bkz. Faz 10 bölümü.
 
 ## Context (Neden)
@@ -430,6 +431,16 @@ Faz 4'te "gerekli görülmedi" denen dosya importu, **dosyasız** biçimde geri 
 
 engine: `sliceValueHistory` (1H/1A/3A/6A/1Y/TÜM) + `bucketValueHistory` (uzun pencerede kova başına SON nokta = kapanış; ilk/son korunur) + `historyChange` (dönem değişimi mutlak + %). [DegerGrafigi.tsx](apps/web/src/features/portfoy/DegerGrafigi.tsx) Özet'te tüm portföye, Portföy sekmesinde seçili gruba kapsamlı. **Dürüst kısıt**: `price_history` günde bir anlık görüntü tuttuğundan çözünürlük **gündür** — aralık düğmeleri pencereyi daraltır, veriyi sıklaştırmaz.
 
+## Faz 14 — Kayıt düzenleme ✅
+
+Kapsam kararı: **işlem kayıtları** (`transactions`, `oneoffs`, `card_txs`, `trades`) — yani yanlış tutar/tarih girmenin gerçekten olduğu yerler. Tanım kayıtları (hesap/kart/kredi/kategori/mevduat) bilinçli olarak dışarıda; onlar nadiren değişir ve düzenli kalemin tutarı için zaten Faz 9 akışı var.
+
+- **Sunucu**: `oneoffs`/`card_txs` jenerik `crud` PUT'unu kullanır (zaten vardı, arayüz kullanmıyordu). Yan etkili ikisi için yeni uç: `PUT /api/transactions/:id` ve `PUT /api/trades/:id` — tek `db.tx` içinde **eski bakiye etkisini geri al → satırı güncelle → yeni etkiyi uygula**. Hesap değiştirmek de bu yüzden serbest: iki UPDATE de kendi satırının `account_id`'sini hedefler. Sil+ekle bunu iki ayrı istekte yapardı; arada hata olsa bakiye tutarsız kalırdı. Kayıt yoksa/başkasınınsa 404.
+- **Arayüz**: [EditSheet.tsx](apps/web/src/EditSheet.tsx) — "+ Ekle" formlarını `edit` prop'uyla düzenle modunda açar. Ayrı düzenleme formu yazılmadı: doğrulama/ipucu/autocomplete mantığı iki yerde bakım demek olurdu. Düzenlemede "Kaydet, yeni ekle" gizlenir, kaydın etkisini anlatan ipucu satırı düzenlemeye özel metne döner. Giriş noktası: listelerde ✕'in yanındaki ✎ (Rapor, Plan, Kartlar, Portföy→Hareketler).
+- **Kural**: düzenleme kaydın türünü değiştirmez — gerçekleşen kaydın tarihini ileri almak onu plan kalemine çevirmez (plan→defter geçişi "Gerçekleşti" düğmesidir).
+
+Doğrulama: izole test DB'de (finans_edit_test) uçtan uca — tutar değişimi, hesap A→B taşıma, hesabı kaldırma, gider→gelir çevirme, silme; trade'de adet/yön/para birimi değişimi (TRY→USD'de eski TRY etkisi geri alınır, yenisi uygulanmaz) — bakiye her adımda beklenen değerde. Negatifler: yok olan id 404, eksik alan/bozuk JSON/NaN tutar 400, geçersiz portföy 400, **başka kullanıcının kaydı 404 + veri değişmiyor**. Playwright ile Rapor'da ✎ → önden dolu modal → tutar değişimi → API'de doğrulandı (konsol hatası yok). `pnpm build` temiz, 125 engine testi yeşil (engine'e dokunulmadı).
+
 ---
 
 ## Doğrulama
@@ -450,4 +461,4 @@ Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Faz 0–1
 **Sıradaki iş — numaralı faz değil, açık kalan kalemler (öncelik sırasıyla):**
 1. **E-posta teslim edilebilirliği** (prod engelleyici, bkz. Faz 10) — Resend/Brevo + kendi domain + SPF/DKIM/DMARC; sadece env değişikliği. Bu bitmeden çok-kullanıcı kâğıt üzerinde kalır.
 2. **Deploy disiplini** — Render'da autoDeploy kapalı; her commit sonrası Manual Deploy unutulmamalı (ya da Blueprint'e geçilip otomatikleştirilmeli).
-3. Sonraki ürün fikirleri (henüz seçilmedi): temettü/sermaye olayları, kayıt düzenleme, gün içi fiyat geçmişi, GitHub Actions CI/CD.
+3. Sonraki ürün fikirleri (henüz seçilmedi): temettü/sermaye olayları, tanım kayıtlarının düzenlenmesi, gün içi fiyat geçmişi, GitHub Actions CI/CD.

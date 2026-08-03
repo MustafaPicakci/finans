@@ -544,6 +544,46 @@ api.put("/trades/:id/portfolio", async (c) => {
   await db.run("UPDATE trades SET portfolio_id=? WHERE id=? AND user_id=?", pid, c.req.param("id"), uid);
   return c.json({ ok: true });
 });
+/* Düzenleme (Faz 14): transactions'takiyle aynı "eskisini geri al, yenisini uygula" deseni.
+   Bakiye etkisi burada da yalnız TRY + hesaba bağlı işlemde vardır; işlem TRY→USD çevrilirse
+   eski TRY etkisi geri alınır ve yenisi uygulanmaz (kural POST/DELETE ile birebir aynı kalır).
+   portfolio_id de bu uçtan düzenlenebilir; dar /trades/:id/portfolio ucu (liste içi hızlı taşıma) durur. */
+api.put("/trades/:id", async (c) => {
+  const b = await c.req.json().catch(() => null);
+  if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
+  for (const f of ["date", "asset_type", "symbol", "side", "qty", "price"])
+    if (b[f] === undefined || b[f] === "") return c.json({ error: `${f} zorunlu` }, 400);
+  const uid = c.get("user").id;
+  const id = c.req.param("id");
+  const currency = b.currency ?? "TRY";
+  const qty = Number(b.qty), price = Number(b.price), fee = Number(b.fee ?? 0);
+  if (![qty, price, fee].every(Number.isFinite)) return c.json({ error: "geçersiz sayı" }, 400);
+  const accountId = b.account_id != null && b.account_id !== "" ? Number(b.account_id) : null;
+  const portfolioId = b.portfolio_id != null && b.portfolio_id !== "" ? Number(b.portfolio_id) : null;
+  if (portfolioId != null && !(await db.get("SELECT id FROM portfolios WHERE id=? AND user_id=?", portfolioId, uid))) {
+    return c.json({ error: "geçersiz portföy" }, 400);
+  }
+  const found = await db.tx(async (t) => {
+    const old = await t.get<{ side: string; qty: number; price: number; fee: number; currency: string; account_id: number | null }>(
+      "SELECT side, qty, price, fee, currency, account_id FROM trades WHERE id=? AND user_id=?", id, uid,
+    );
+    if (!old) return false;
+    if (old.currency === "TRY" && old.account_id != null) {
+      await t.run("UPDATE accounts SET balance = balance - ? WHERE id=? AND user_id=?", tradeBalanceDelta(old.side, old.qty, old.price, old.fee), old.account_id, uid);
+    }
+    await t.run(
+      "UPDATE trades SET date=?, asset_type=?, symbol=?, side=?, qty=?, price=?, fee=?, currency=?, account_id=?, portfolio_id=? WHERE id=? AND user_id=?",
+      b.date, b.asset_type, b.symbol, b.side, qty, price, fee, currency, accountId, portfolioId, id, uid,
+    );
+    if (currency === "TRY" && accountId != null) {
+      await t.run("UPDATE accounts SET balance = balance + ? WHERE id=? AND user_id=?", tradeBalanceDelta(b.side, qty, price, fee), accountId, uid);
+    }
+    return true;
+  });
+  if (!found) return c.json({ error: "kayıt yok" }, 404);
+  console.log(`[audit] Borsa işlemi düzenlendi: ${b.symbol} ${b.side} (adet: ${qty}, fiyat: ${price}, id:${uid})`);
+  return c.json({ ok: true });
+});
 api.delete("/trades/:id", async (c) => {
   const uid = c.get("user").id;
   await db.tx(async (t) => {
@@ -745,6 +785,43 @@ api.post("/transactions/bulk", async (c) => {
   });
   console.log(`[audit] Toplu içe aktarma: ${rows.length} kayıt (id:${uid})`);
   return c.json({ inserted: rows.length });
+});
+/* Düzenleme (Faz 14): sil+ekle yerine tek atomik güncelleme. Bakiye etkisi "eskisini geri al,
+   yenisini uygula" ile düzeltilir — hesap değiştirilse bile (eski hesaptan düş, yeniye ekle),
+   çünkü iki UPDATE de eski/yeni satırın kendi account_id'sini hedefler. Sil+ekle bunu iki ayrı
+   istekte yapardı: arada hata olursa bakiye tutarsız kalırdı. */
+api.put("/transactions/:id", async (c) => {
+  const b = await c.req.json().catch(() => null);
+  if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
+  for (const f of ["date", "name", "amount"]) if (b[f] === undefined || b[f] === "") {
+    return c.json({ error: `${f} zorunlu` }, 400);
+  }
+  const amount = Number(b.amount);
+  if (!Number.isFinite(amount)) return c.json({ error: "geçersiz tutar" }, 400);
+  const uid = c.get("user").id;
+  const id = c.req.param("id");
+  const accountId = b.account_id != null && b.account_id !== "" ? Number(b.account_id) : null;
+  const categoryId = b.category_id != null && b.category_id !== "" ? Number(b.category_id) : null;
+  const found = await db.tx(async (t) => {
+    const old = await t.get<{ amount: number; account_id: number | null }>(
+      "SELECT amount, account_id FROM transactions WHERE id=? AND user_id=?", id, uid,
+    );
+    if (!old) return false;
+    if (old.account_id != null) {
+      await t.run("UPDATE accounts SET balance = balance - ? WHERE id=? AND user_id=?", old.amount, old.account_id, uid);
+    }
+    await t.run(
+      "UPDATE transactions SET date=?, name=?, amount=?, category_id=?, account_id=? WHERE id=? AND user_id=?",
+      b.date, b.name, amount, categoryId, accountId, id, uid,
+    );
+    if (accountId != null) {
+      await t.run("UPDATE accounts SET balance = balance + ? WHERE id=? AND user_id=?", amount, accountId, uid);
+    }
+    return true;
+  });
+  if (!found) return c.json({ error: "kayıt yok" }, 404);
+  console.log(`[audit] İşlem düzenlendi: ${b.name} (tutar: ${amount}, id:${uid})`);
+  return c.json({ ok: true });
 });
 api.delete("/transactions/:id", async (c) => {
   const uid = c.get("user").id;
