@@ -1,4 +1,20 @@
-export type Account = { id: number; name: string; balance: number };
+/** Hesap türü (Faz 16): nakit ve aracı kurum da birer hesaptır — para hiçbir noktada sistemden
+    "çıkmasın" diye. ATM'den çekilen para kaybolmaz, `nakit` hesabına virmanlanır; Midas'a atılan
+    para kaybolmaz, `araci` hesabına virmanlanır. Tür yalnız gruplama/ikon içindir, matematiği
+    değiştirmez — dördü de aynı defter kurallarına tabidir. */
+export type AccountKind = "banka" | "nakit" | "araci" | "fon";
+/** `last_recon_*`: son mutabakat (Faz 16) — kullanıcının "gerçek bakiye buydu" dediği an ve tutar.
+    Fark çıkmışsa 'duzeltme' hareketi yazılır, yani mutabakat sonrası defter her zaman tutar. */
+export type Account = {
+  id: number; name: string; balance: number; kind?: AccountKind;
+  last_recon_date?: string | null; last_recon_balance?: number | null;
+};
+/** Virman (Faz 16) — kendi hesapların arasında para hareketi. TEK kayıt, İKİ hareket satırı
+    (kaynak −, hedef +) yazar; net varlığı ve Rapor'u değiştirmez. Başkasına gönderilen para
+    virman DEĞİL giderdir (net varlıktan çıkar) — o `transactions`'ta kalır. */
+export type Transfer = {
+  id: number; date: string; from_account_id: number; to_account_id: number; amount: number; note?: string | null;
+};
 /** Düzenli gelir/gider. Opsiyonel hedef (`account_id` VEYA `card_id`; en fazla biri) verilirse günü
     gelince gerçek kayda dönüştürülebilir (transactions / card_txs). `auto` → cron otomatik gerçekleştirir. */
 export type Recurring = { id: number; kind: "income" | "expense"; name: string; day: number; from_month: string | null; to_month: string | null; account_id?: number | null; card_id?: number | null; category_id?: number | null; auto?: boolean };
@@ -32,7 +48,7 @@ export type Transaction = { id: number; date: string; name: string; amount: numb
 /** Hesap hareketi (Faz 15) — bakiyeyi oynatan her şey buraya bir satır yazar; değişmez kural:
     hesabın bakiyesi = Σ o hesabın hareketleri (açılış bakiyesi de 'acilis' türünde bir harekettir).
     `kind` hareketin kaynağını anlatır, `source_table`/`source_id` kaynağa geri bağlar (geri alma onu okur). */
-export type AccountEntryKind = "islem" | "portfoy" | "mevduat" | "duzeltme" | "acilis";
+export type AccountEntryKind = "islem" | "portfoy" | "mevduat" | "duzeltme" | "acilis" | "virman";
 export type AccountEntry = {
   id: number; account_id: number; date: string; amount: number; kind: AccountEntryKind;
   source_table: string | null; source_id: number | null; note: string; created_at: string;
@@ -43,5 +59,5 @@ export type AllData = {
   accounts: Account[]; recurring: Recurring[]; loans: Loan[]; oneoffs: OneOff[];
   trades: Trade[]; portfolios: Portfolio[]; cards: Card[]; card_txs: CardTx[]; prices: Price[]; price_history: PriceHistoryEntry[];
   categories: Category[]; transactions: Transaction[]; deposits: Deposit[]; recurring_realized: RecurringRealized[]; statement_payments: StatementPayment[]; settings: Record<string, string>;
-  recurring_amounts: RecurringAmount[]; account_entries: AccountEntry[];
+  recurring_amounts: RecurringAmount[]; account_entries: AccountEntry[]; transfers: Transfer[];
 };

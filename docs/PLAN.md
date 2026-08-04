@@ -18,6 +18,7 @@
 - ✅ **Faz 10–13 tamamlandı (Temmuz–Ağustos 2026)** — çok-kullanıcı onboarding (10) + giriş sürtünmesini azaltma (10.1) + toplu içe aktarma (10.2), portföy grupları (11), hareket geçmişi (12), değer grafiği aralıkları (13). Bkz. aşağıdaki bölümler.
 - ✅ **Faz 14 tamamlandı (Ağustos 2026)** — işlem kayıtlarının düzenlenmesi (gerçekleşen gelir/gider, plan kalemi, kart harcaması, portföy işlemi); bakiye etkisi atomik olarak düzeltilir.
 - ✅ **Faz 15 tamamlandı (Ağustos 2026)** — hesap hareket defteri (`account_entries`): bakiyeyi oynatan her şey iz bırakır, `balance = Σ hareketler` değişmez kuralı, Hesaplar sekmesinde yürüyen bakiyeli hareket listesi.
+- ✅ **Faz 16 tamamlandı (Ağustos 2026)** — virman (`transfers`) + hesap türleri (banka/nakit/aracı/fon) + mutabakat: kendi hesapların arası para hareketi tek kayıtta iki bacak yazar, nakit ve aracı kurum da hesap olduğundan para sistemden çıkmaz, "Doğrula" ile gerçek bakiye deftere sabitlenir.
 - ⏳ **Açık iş (prod engelleyici): e-posta teslim edilebilirliği** — çok-kullanıcı kayıt açık ama prod'da SMTP = Gmail, aktivasyon postaları kurumsal alan adlarına ulaşmıyor (phishing sayılıp düşüyor). Gerçek kullanıcı almadan önce transactional sağlayıcı + kendi domain (SPF/DKIM/DMARC) şart; kod değişmiyor, yalnız env. Bkz. Faz 10 bölümü.
 
 ## Context (Neden)
@@ -455,6 +456,25 @@ Karar: **gerçek defter** (türetilmiş görünüm değil). Yeni `account_entrie
 - **Arayüz**: Hesaplar sekmesinde hesap başına "Hareketler" — tarih, açıklama, tür rozeti, tutar ve o hareketten sonraki bakiye; giren/çıkan özeti; drift varsa uyarı (gizlenmez). Liste salt okunur: hareket kaynağından düzenlenir.
 
 Doğrulama: izole test DB'sinde her akış (açılış, işlem ekle/düzenle/sil, elle düzeltme, portföy alış + silme, mevduat açılış + silme) sonrası **balance = Σ entries** doğrulandı; dolum senaryosu (defter silinip sunucu yeniden başlatıldı) bakiyeleri birebir korudu ve yeniden başlatmada satır sayısı değişmedi (idempotent); çok-kiracılıkta başka kullanıcının hesabı 404 ve hareketleri görünmüyor. Playwright ile Hesaplar ekranı doğrulandı (konsol hatası yok). 134 engine testi (9 yeni), `pnpm build` temiz.
+
+## Faz 16 — Virman, hesap türleri, mutabakat ✅
+
+Sorun (kullanıcının tarifi): maaş → para piyasası fonu → ödeme öncesi kısmi fon satışı → başka bankaya transfer → o bankanın kart borcu → ATM'den nakit → Midas'ta hisse. Bu akışın **çoğu hareketi iki bacaklıydı ve net varlığı değiştirmiyordu**, ama modelde virman primitifi yoktu: bakiyeyi oynatan her şey (`transactions`, `trades`, `deposits`, kart ödemesi) **tek bacaklıydı**. Sonuç:
+
+- Banka A → Banka B transferi **iki ayrı sahte `transaction`** olarak giriliyordu — Rapor'da olmayan bir gider + olmayan bir gelir; biri unutulunca bakiye kayıyordu ve hiçbir şey uyarmıyordu.
+- **Nakit ve aracı kurum hesap değildi** → ATM'den çekilen ve Midas'a atılan para sistemden çıkıyordu; hem bakiye hem net varlık yanlış kalıyordu.
+- Bakiye gerçekle tutmadığında yapılacak tek şey elle düzeltmeydi; **"gerçekte ne kadar var"ı sisteme söyleyip farkı bulduran bir akış yoktu**.
+
+"Eksik/hatalı işleme müsait olma" bir disiplin sorunu değil, modelin kullanıcıyı her transferde **birbirine bağlı olmayan iki kayıt** girmeye zorlamasıydı.
+
+- **`transfers` (virman)**: tek kayıt, `db.tx` içinde **iki** `account_entries` satırı (kaynak −, hedef +, `kind='virman'`). Rapor'a girmez (gelir/gider değil), net varlığı değiştirmez. Yarım virman yazmak artık **yapısal olarak imkânsız**. Düzenle/sil deseni diğer yan etkili uçlarla aynı: `revertEntries(…, "transfers", id)` iki bacağı birden geri alır, sonra yenisi uygulanır — hesap değişse bile doğru satırlar hedeflenir. Doğrulamalar: aynı hesap 400, tutar ≤ 0 400, iki hesabın da kullanıcıya ait olması şart (`ownsAccounts`).
+- **`accounts.kind`** (`banka|nakit|araci|fon`, mevcut hesaplar `banka`): nakit cüzdanı ve aracı kurum da birer hesap. Tür yalnız gruplama/ikon içindir — dördü de aynı defter kurallarına tabidir; matematik değişmez. Böylece ATM çekimi ve Midas'a aktarım "kaybolan para" olmaktan çıkıp virman olur.
+- **Mutabakat** (`POST /api/accounts/:id/reconcile` + `accounts.last_recon_date/balance`): kullanıcı gerçek bakiyeyi girer, fark 'duzeltme' hareketi olarak **deftere yazılır** (gizlenmez). Fark 0 ise hareket yazılmaz, yalnız damga atılır — "doğruladım, tutuyor" da bilgidir. Arayüzde fark gösterilirken **son doğrulamadan bu yanaki hareketler** listelenir: unutulan kayıt orada yakalanır. Soru "bakiyem tutuyor mu"dan "en son ne zaman doğruladım"a döner.
+- **Engine** [accounts.ts](packages/engine/src/accounts.ts): `reconcileDiff`, `reconStatus` (hic/guncel/bayat, eşik 30 gün), `entriesSinceRecon`, `accountKindOf`, `ACCOUNT_KIND_LABEL`.
+- **Arayüz**: "+ Ekle → Transfer (virman)" formu (yön değiştirme düğmesi, iki hesabın kayıt-sonrası bakiye önizlemesi, eksiye düşme uyarısı); Hesaplar sekmesinde tür rozeti + tür seçici + "Doğrula" paneli + "Transferler" listesi (düzenle/sil). `ledgerDrift` uyarısı ile **karıştırılmamalı**: drift defter-içi tutarsızlığı, mutabakat dış dünyayla farkı yakalar.
+- **Sınır**: başkasına gönderilen para virman **değil giderdir** (net varlıktan çıkar) — `transactions`'ta kalır. Bu ayrım hem form hem liste metninde açıkça yazılı.
+
+Doğrulama: izole test DB'sinde (`finans_faz16_test`) uçtan uca — virman ekle (50000/0/0 → 45000/5000/0), **düzenle** (tutar 5000→7000 + hedef Cüzdan→Midas → 43000/0/7000, yani eski bacaklar tam geri alındı), sil (→ 50000/0/0 birebir başlangıç). Negatifler: aynı hesap 400, negatif tutar 400, olmayan hesap 400, oturumsuz 401. Mutabakat: kayıt 50000 iken gerçek 48750 → `diff:-1250`, 'duzeltme' hareketi yazıldı, `balance = Σ entries` korundu; fark 0 ile tekrar doğrulama hareket **yazmadı**, yalnız damgayı güncelledi. Göç: Faz 15 şemalı gerçek yerel DB'de `ALTER TABLE ... IF NOT EXISTS` sonrası bakiyeler ve defter toplamları birebir aynı (fark 0). `pnpm build` temiz, 140 engine testi yeşil (6 yeni).
 
 ---
 

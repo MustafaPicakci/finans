@@ -249,7 +249,7 @@ api.use("*", async (c, next) => {
 /* ---- tek seferde tüm veri (kullanıcıya scope'lu; prices/price_history GLOBAL) ---- */
 api.get("/all", async (c) => {
   const uid = c.get("user").id;
-  const [accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, account_entries, autoPrices, userPrices, price_history, globalSettings, userSettings] =
+  const [accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, account_entries, transfers, autoPrices, userPrices, price_history, globalSettings, userSettings] =
     await Promise.all([
       db.all("SELECT * FROM accounts WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM recurring WHERE user_id=? ORDER BY day, id", uid),
@@ -267,6 +267,7 @@ api.get("/all", async (c) => {
       db.all("SELECT card_id, due FROM statement_payments WHERE user_id=?", uid),
       // Faz 15 — hesap hareket defteri: yeniden eskiye (yürüyen bakiye istemcide bugünden geriye çözülür)
       db.all("SELECT * FROM account_entries WHERE user_id=? ORDER BY date DESC, id DESC", uid),
+      db.all("SELECT * FROM transfers WHERE user_id=? ORDER BY date DESC, id DESC", uid),
       db.all<any>("SELECT symbol, asset_type, price, source, updated_at, currency FROM prices"),
       db.all<any>("SELECT symbol, asset_type, price, updated_at, currency FROM user_prices WHERE user_id=?", uid),
       db.all("SELECT * FROM price_history ORDER BY date"),
@@ -277,7 +278,7 @@ api.get("/all", async (c) => {
   const pm = new Map<string, any>(autoPrices.map((p) => [`${p.asset_type}:${p.symbol}`, { ...p, source: "auto" }]));
   for (const up of userPrices) pm.set(`${up.asset_type}:${up.symbol}`, { ...up, source: "manual" });
   return c.json({
-    accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, account_entries,
+    accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, account_entries, transfers,
     prices: [...pm.values()], price_history,
     // global (fx/tefas) + kullanıcı ayarları (horizon/cash_funds); kullanıcı çakışmada kazanır
     settings: Object.fromEntries([...globalSettings, ...userSettings].map((s) => [s.key, s.value])),
@@ -325,7 +326,7 @@ function crud(route: string, table: string, cols: Col[]) {
    `applyEntry` bakiyeyi oynatır + hareketi yazar; `revertEntries` kaynağın YAZILMIŞ hareketlerini
    okuyup tersini uygular ve satırları siler — eski tutarı yeniden hesaplamaz, bu yüzden kaynak kaydı
    düzenlenmiş/silinmiş olsa da geri alma her zaman tutar. Düzenleme = revert + apply. */
-type EntryMeta = { date: string; kind: "islem" | "portfoy" | "mevduat" | "duzeltme" | "acilis"; note: string; source_table?: string; source_id?: number };
+type EntryMeta = { date: string; kind: "islem" | "portfoy" | "mevduat" | "duzeltme" | "acilis" | "virman"; note: string; source_table?: string; source_id?: number };
 async function applyEntry(t: TxClient, uid: number, accountId: number | null, amount: number, m: EntryMeta): Promise<void> {
   if (accountId == null || !amount) return; // hesapsız kayıt bakiyeye dokunmaz; 0 tutar defteri kirletmez
   await t.run("UPDATE accounts SET balance = balance + ? WHERE id=? AND user_id=?", amount, accountId, uid);
@@ -348,6 +349,7 @@ async function revertEntries(t: TxClient, uid: number, sourceTable: string, sour
 /* accounts: jenerik crud yerine elle — bakiye defterle birlikte yaşıyor. POST'ta açılış bakiyesi bir
    'acilis' hareketi olur; PUT'ta elle bakiye düzeltmesi FARK kadar 'duzeltme' hareketi yazar (eskiden
    izsiz bir sayı değişimiydi — "bakiyem neden tutmuyor" sorusunun cevabı buradaydı). */
+const ACCOUNT_KINDS = ["banka", "nakit", "araci", "fon"];
 api.post("/accounts", async (c) => {
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
@@ -355,8 +357,9 @@ api.post("/accounts", async (c) => {
   const uid = c.get("user").id;
   const balance = Number(b.balance ?? 0);
   if (!Number.isFinite(balance)) return c.json({ error: "geçersiz bakiye" }, 400);
+  const kind = ACCOUNT_KINDS.includes(b.kind) ? b.kind : "banka";
   const id = await db.tx(async (t) => {
-    const info = await t.run("INSERT INTO accounts (name,balance,user_id) VALUES (?,?,?) RETURNING id", b.name, 0, uid);
+    const info = await t.run("INSERT INTO accounts (name,balance,kind,user_id) VALUES (?,?,?,?) RETURNING id", b.name, 0, kind, uid);
     await applyEntry(t, uid, info.id ?? null, balance, { date: todayLocal(), kind: "acilis", note: "Açılış bakiyesi" });
     return info.id;
   });
@@ -370,6 +373,7 @@ api.put("/accounts/:id", async (c) => {
     const old = await t.get<{ balance: number }>("SELECT balance FROM accounts WHERE id=? AND user_id=?", id, uid);
     if (!old) return false;
     if (b.name !== undefined) await t.run("UPDATE accounts SET name=? WHERE id=? AND user_id=?", b.name, id, uid);
+    if (b.kind !== undefined && ACCOUNT_KINDS.includes(b.kind)) await t.run("UPDATE accounts SET kind=? WHERE id=? AND user_id=?", b.kind, id, uid);
     if (b.balance !== undefined) {
       const next = Number(b.balance);
       if (!Number.isFinite(next)) return false;
@@ -383,6 +387,120 @@ api.put("/accounts/:id", async (c) => {
 api.delete("/accounts/:id", async (c) => {
   // account_entries FK'si ON DELETE CASCADE — hesabın hareketleri onunla gider
   await db.run("DELETE FROM accounts WHERE id=? AND user_id=?", c.req.param("id"), c.get("user").id);
+  return c.json({ ok: true });
+});
+
+/* ---- mutabakat (Faz 16) ----
+   Defteri dış dünyaya sabitler: kullanıcı "bu hesapta gerçekte şu kadar var" der; fark varsa
+   'duzeltme' hareketi olarak YAZILIR (gizlenmez — tarihi, tutarı ve notu defterde durur), sonra
+   damga atılır. Fark 0 ise hareket yazılmaz (applyEntry zaten 0'ı eler), yalnız damga güncellenir:
+   "doğruladım, tutuyor" bilgisi de değerlidir. Bundan sonra soru "bakiyem tutuyor mu" değil,
+   "en son ne zaman doğruladım" olur. */
+api.post("/accounts/:id/reconcile", async (c) => {
+  const b = await c.req.json().catch(() => null);
+  if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
+  const real = Number(b.balance);
+  if (!Number.isFinite(real)) return c.json({ error: "geçersiz bakiye" }, 400);
+  const uid = c.get("user").id, id = Number(c.req.param("id"));
+  const date = typeof b.date === "string" && b.date ? b.date : todayLocal();
+  const res = await db.tx(async (t) => {
+    const acc = await t.get<{ balance: number }>("SELECT balance FROM accounts WHERE id=? AND user_id=?", id, uid);
+    if (!acc) return null;
+    const diff = real - acc.balance;
+    await applyEntry(t, uid, id, diff, {
+      date, kind: "duzeltme",
+      note: b.note ? `Mutabakat: ${String(b.note).slice(0, 120)}` : "Mutabakat farkı",
+    });
+    await t.run("UPDATE accounts SET last_recon_date=?, last_recon_balance=? WHERE id=? AND user_id=?", date, real, id, uid);
+    return { diff };
+  });
+  if (!res) return c.json({ error: "kayıt yok" }, 404);
+  return c.json({ ok: true, diff: res.diff });
+});
+
+/* ---- virman (Faz 16) ----
+   Kendi hesapların arasındaki para hareketi: TEK kayıt + İKİ hareket satırı (kaynak −, hedef +),
+   hepsi aynı db.tx içinde. Rapor'a girmez, net varlığı değiştirmez. Düzenleme/silme deseni diğer
+   yan etkili uçlarla aynı: revertEntries ile YAZILMIŞ bacaklar geri alınır, yenisi uygulanır —
+   böylece hesaplar değişse bile geri alma doğru satırları hedefler.
+   NOT: başkasına gönderilen para virman değildir (net varlıktan çıkar) — o `transactions`'ta gider. */
+async function validTransfer(c: any): Promise<{ err: string } | { date: string; from: number; to: number; amount: number; note: string | null }> {
+  const b = await c.req.json().catch(() => null);
+  if (!b || typeof b !== "object") return { err: "geçersiz gövde" };
+  const from = Number(b.from_account_id), to = Number(b.to_account_id), amount = Number(b.amount);
+  if (!b.date) return { err: "date zorunlu" };
+  if (!Number.isInteger(from) || !Number.isInteger(to)) return { err: "hesaplar zorunlu" };
+  if (from === to) return { err: "kaynak ve hedef hesap aynı olamaz" };
+  if (!Number.isFinite(amount) || amount <= 0) return { err: "tutar 0'dan büyük olmalı" };
+  return { date: String(b.date), from, to, amount, note: b.note ? String(b.note).slice(0, 200) : null };
+}
+/** İki hesabın da bu kullanıcıya ait olduğunu doğrular — aksi halde başkasının hesabına para yazılabilirdi */
+async function ownsAccounts(t: TxClient, uid: number, ids: number[]): Promise<boolean> {
+  const rows = await t.all<{ id: number }>(
+    `SELECT id FROM accounts WHERE user_id=? AND id IN (${ids.map(() => "?").join(",")})`, uid, ...ids,
+  );
+  return rows.length === ids.length;
+}
+/** Virmanın iki bacağını yazar (kaynak −, hedef +); ikisi de aynı transfer'e bağlı olduğundan
+    revertEntries tek çağrıda ikisini birden geri alır. */
+async function applyTransfer(
+  t: TxClient, uid: number, id: number,
+  v: { date: string; from: number; to: number; amount: number; note: string | null },
+  fromName: string, toName: string,
+): Promise<void> {
+  const meta = { date: v.date, kind: "virman" as const, source_table: "transfers", source_id: id };
+  await applyEntry(t, uid, v.from, -v.amount, { ...meta, note: v.note ?? `→ ${toName}` });
+  await applyEntry(t, uid, v.to, v.amount, { ...meta, note: v.note ?? `← ${fromName}` });
+}
+/** Bacak notlarında kullanılan hesap adları ("→ Nakit cüzdan") */
+async function accountNames(t: TxClient, uid: number, ids: number[]): Promise<Map<number, string>> {
+  const rows = await t.all<{ id: number; name: string }>(
+    `SELECT id, name FROM accounts WHERE user_id=? AND id IN (${ids.map(() => "?").join(",")})`, uid, ...ids,
+  );
+  return new Map(rows.map((r) => [r.id, r.name]));
+}
+api.post("/transfers", async (c) => {
+  const v = await validTransfer(c);
+  if ("err" in v) return c.json({ error: v.err }, 400);
+  const uid = c.get("user").id;
+  const res = await db.tx(async (t) => {
+    if (!(await ownsAccounts(t, uid, [v.from, v.to]))) return null;
+    const names = await accountNames(t, uid, [v.from, v.to]);
+    const info = await t.run(
+      "INSERT INTO transfers (date,from_account_id,to_account_id,amount,note,user_id) VALUES (?,?,?,?,?,?) RETURNING id",
+      v.date, v.from, v.to, v.amount, v.note, uid,
+    );
+    await applyTransfer(t, uid, info.id!, v, names.get(v.from) ?? "", names.get(v.to) ?? "");
+    return info.id;
+  });
+  if (res == null) return c.json({ error: "hesap bulunamadı" }, 400);
+  return c.json({ id: res });
+});
+api.put("/transfers/:id", async (c) => {
+  const v = await validTransfer(c);
+  if ("err" in v) return c.json({ error: v.err }, 400);
+  const uid = c.get("user").id, id = Number(c.req.param("id"));
+  const ok = await db.tx(async (t) => {
+    const row = await t.get<{ id: number }>("SELECT id FROM transfers WHERE id=? AND user_id=?", id, uid);
+    if (!row || !(await ownsAccounts(t, uid, [v.from, v.to]))) return false;
+    await revertEntries(t, uid, "transfers", id); // eski iki bacak birden geri alınır
+    const names = await accountNames(t, uid, [v.from, v.to]);
+    await t.run(
+      "UPDATE transfers SET date=?, from_account_id=?, to_account_id=?, amount=?, note=? WHERE id=? AND user_id=?",
+      v.date, v.from, v.to, v.amount, v.note, id, uid,
+    );
+    await applyTransfer(t, uid, id, v, names.get(v.from) ?? "", names.get(v.to) ?? "");
+    return true;
+  });
+  if (!ok) return c.json({ error: "kayıt yok veya hesap bulunamadı" }, 404);
+  return c.json({ ok: true });
+});
+api.delete("/transfers/:id", async (c) => {
+  const uid = c.get("user").id, id = c.req.param("id");
+  await db.tx(async (t) => {
+    await revertEntries(t, uid, "transfers", id);
+    await t.run("DELETE FROM transfers WHERE id=? AND user_id=?", id, uid);
+  });
   return c.json({ ok: true });
 });
 
@@ -936,7 +1054,7 @@ api.put("/settings", async (c) => {
 /* ---- KVKK: kullanıcının tüm verisini JSON indir ---- */
 api.get("/export", async (c) => {
   const uid = c.get("user").id;
-  const [accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, account_entries, userSettings] =
+  const [accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, account_entries, transfers, userSettings] =
     await Promise.all([
       db.all("SELECT * FROM accounts WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM recurring WHERE user_id=? ORDER BY id", uid),
@@ -953,13 +1071,14 @@ api.get("/export", async (c) => {
       db.all("SELECT * FROM recurring_realized WHERE user_id=? ORDER BY recurring_id, ym", uid),
       db.all("SELECT * FROM statement_payments WHERE user_id=? ORDER BY card_id, due", uid),
       db.all("SELECT * FROM account_entries WHERE user_id=? ORDER BY id", uid),
+      db.all("SELECT * FROM transfers WHERE user_id=? ORDER BY id", uid),
       db.all<{ key: string; value: string }>("SELECT key, value FROM user_settings WHERE user_id=?", uid),
     ]);
   c.header("Content-Disposition", `attachment; filename="finans-export-${todayLocal()}.json"`);
   console.log(`[audit] Veri dışa aktarma (KVKK Export): (id:${uid})`);
   return c.json({
     exported_at: nowLocal(), user: c.get("user"),
-    accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, account_entries,
+    accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, account_entries, transfers,
     settings: Object.fromEntries(userSettings.map((s) => [s.key, s.value])),
   });
 });

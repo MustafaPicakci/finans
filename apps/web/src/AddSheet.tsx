@@ -2,7 +2,7 @@ import React, { useMemo } from "react";
 import type { AllData } from "@finans/engine";
 import { T, css, fmtMoney } from "./theme";
 import { Modal } from "./ui";
-import { KalemForm, CardTxForm, RecurringForm, LoanForm, TradeForm, DepositForm, ImportForm, type AddKind, type KalemPrefill, type CardTxPrefill } from "./features/forms";
+import { KalemForm, TransferForm, CardTxForm, RecurringForm, LoanForm, TradeForm, DepositForm, ImportForm, type AddKind, type KalemPrefill, type CardTxPrefill } from "./features/forms";
 import { shortcuts } from "./features/forms/recall";
 
 export type { AddKind, KalemPrefill };
@@ -15,6 +15,7 @@ export type AddState = { kind: AddKind | "pick"; prefill?: KalemPrefill; cardPre
 
 const OPTIONS: { kind: AddKind; dot: string; title: string; desc: string }[] = [
   { kind: "kalem", dot: "var(--cat-1)", title: "Gelir / Gider kalemi", desc: "Bugün veya geçmiş tarihli → gerçekleşen kayıt: hesabın bakiyesine işler, Rapor'a girer. İleri tarihli → plan: nakit projeksiyonuna girer" },
+  { kind: "transfer", dot: "var(--type-doviz)", title: "Transfer (virman)", desc: "Kendi hesapların arasında para taşı: bankadan bankaya, ATM'den nakde, aracı kuruma. İki bacağı tek kayıtta yazar; Rapor'a girmez, net varlığın değişmez" },
   { kind: "cardtx", dot: "var(--neg)", title: "Kart harcaması", desc: "Kesim gününe göre ekstreye işlenir; son ödeme günü nakit akışına gider olarak düşer" },
   { kind: "recurring", dot: "var(--brand)", title: "Düzenli gelir / gider", desc: "Maaş, kira, fatura… her ay tekrarlar, nakit projeksiyonuna girer" },
   { kind: "loan", dot: "var(--cat-8)", title: "Kredi / taksit", desc: "Sabit taksit planı; kalan taksitler nakit projeksiyonuna ve kredi borcuna girer" },
@@ -25,6 +26,7 @@ const OPTIONS: { kind: AddKind; dot: string; title: string; desc: string }[] = [
 
 const TITLES: Record<AddKind, string> = {
   kalem: "Gelir / Gider Kalemi",
+  transfer: "Transfer (Virman)",
   cardtx: "Kart Harcaması",
   recurring: "Düzenli Gelir / Gider",
   loan: "Kredi / Taksit",
@@ -57,18 +59,21 @@ export function AddSheet({ data, state, setState, onClose, reload }: {
         )}
         <div style={{ display: "grid", gap: 8 }}>
           {OPTIONS.map((o) => {
-            const noCard = o.kind === "cardtx" && data.cards.length === 0;
+            // ön koşulu olmayan seçenekler kapalı görünür ve nedenini söyler (boş forma girip anlamaktansa)
+            const blocked = o.kind === "cardtx" && data.cards.length === 0 ? "Önce Kartlar sekmesinden bir kart tanımla"
+              : o.kind === "transfer" && data.accounts.length < 2 ? "Virman için en az iki hesap gerekir (Özet → Hesaplar)"
+                : null;
             return (
-              <button key={o.kind} disabled={noCard} onClick={() => setState({ kind: o.kind })} style={{
-                display: "flex", alignItems: "flex-start", gap: 12, textAlign: "left", cursor: noCard ? "not-allowed" : "pointer",
+              <button key={o.kind} disabled={!!blocked} onClick={() => setState({ kind: o.kind })} style={{
+                display: "flex", alignItems: "flex-start", gap: 12, textAlign: "left", cursor: blocked ? "not-allowed" : "pointer",
                 background: T.panel2, border: `1px solid ${T.line}`, borderRadius: 12, padding: "12px 14px",
-                fontFamily: T.disp, color: T.text, opacity: noCard ? 0.5 : 1,
+                fontFamily: T.disp, color: T.text, opacity: blocked ? 0.5 : 1,
               }}>
                 <span style={{ width: 9, height: 9, borderRadius: 3, background: o.dot, marginTop: 5, flexShrink: 0 }} />
                 <span>
                   <span style={{ display: "block", fontSize: 14, fontWeight: 640 }}>{o.title}</span>
                   <span style={{ display: "block", fontSize: 12, color: T.mut, marginTop: 2 }}>
-                    {noCard ? "Önce Kartlar sekmesinden bir kart tanımla" : o.desc}
+                    {blocked ?? o.desc}
                   </span>
                 </span>
               </button>
@@ -83,6 +88,7 @@ export function AddSheet({ data, state, setState, onClose, reload }: {
   return (
     <Modal title={state.prefill?.oneoffId ? "Kalemi Gerçekleştir" : TITLES[state.kind]} onClose={onClose}>
       {state.kind === "kalem" && <KalemForm {...props} prefill={state.prefill} />}
+      {state.kind === "transfer" && <TransferForm {...props} />}
       {state.kind === "cardtx" && <CardTxForm {...props} prefill={state.cardPrefill} />}
       {state.kind === "recurring" && <RecurringForm {...props} />}
       {state.kind === "loan" && <LoanForm {...props} />}

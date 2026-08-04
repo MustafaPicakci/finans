@@ -3,7 +3,7 @@ import {
   todayStr, num, fmtD,
   depositMaturity, depositGrossInterest, depositNetInterest, depositMaturityValue,
   type AllData, type AssetType, type CardTx, type Currency, type Deposit, type OneOff, type Recurring,
-  type Trade, type Transaction,
+  type Trade, type Transaction, type Transfer,
 } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, fmtMoney, TYPE_HINT } from "../../theme";
@@ -20,7 +20,7 @@ const defaultCcy = (t: AssetType): Currency => (t === "KRIPTO" || t === "ETF" ? 
    Her form modal içinde yaşar: "Kaydet" kaydedip kapatır, "Kaydet, yeni ekle"
    kaydedip formu sıfırlar ve odağı ilk alana döndürür (art arda giriş). */
 
-export type AddKind = "kalem" | "cardtx" | "recurring" | "loan" | "trade" | "deposit" | "import";
+export type AddKind = "kalem" | "transfer" | "cardtx" | "recurring" | "loan" | "trade" | "deposit" | "import";
 export { ImportForm } from "./ImportForm";
 type FormProps = { data: AllData; reload: () => void; onClose: () => void };
 /** Formu önden doldurma: Plan'daki ileri tarihli kalemi "Gerçekleşti" ile deftere geçirirken
@@ -40,7 +40,8 @@ export type EditTarget =
   | { kind: "transaction"; row: Transaction }
   | { kind: "oneoff"; row: OneOff }
   | { kind: "cardtx"; row: CardTx }
-  | { kind: "trade"; row: Trade };
+  | { kind: "trade"; row: Trade }
+  | { kind: "transfer"; row: Transfer };
 
 /** Kaydet (kapat) + Kaydet-yeni-ekle buton çifti; düzenlemede tek "Kaydet" kalır */
 function SaveButtons({ ok, reason, onSaveNew, editing }: { ok: boolean; reason: string | null; onSaveNew: () => void; editing?: boolean }) {
@@ -386,6 +387,78 @@ export function DepositForm({ data, reload, onClose }: FormProps) {
         </div>
       )}
       <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} />
+    </form>
+  );
+}
+
+/** Virman (Faz 16) — kendi hesapların arası para hareketi. TEK kayıt iki bacağı birden yazar:
+    kaynaktan düşer, hedefe ekler. Rapor'a girmez, net varlığı değiştirmez.
+    Bu form olmadan kullanıcı iki sahte gelir/gider kaydı girmek zorundaydı — biri unutulunca
+    bakiye kayar, Rapor'da olmayan bir gelir/gider görünürdü. */
+export function TransferForm({ data, reload, onClose, edit }: FormProps & { edit?: Transfer }) {
+  const [f, setF] = useState(() => edit
+    ? {
+      date: edit.date, from_account_id: String(edit.from_account_id),
+      to_account_id: String(edit.to_account_id), amount: String(edit.amount), note: edit.note ?? "",
+    }
+    : { date: todayStr(), from_account_id: "", to_account_id: "", amount: "", note: "" });
+  const amountRef = useRef<HTMLInputElement>(null);
+  const from = f.from_account_id ? data.accounts.find((a) => a.id === +f.from_account_id) : null;
+  const to = f.to_account_id ? data.accounts.find((a) => a.id === +f.to_account_id) : null;
+  const amount = num(f.amount);
+  const same = !!from && !!to && from.id === to.id;
+  const ok = !!from && !!to && !same && amount > 0 && !!f.date;
+  const reason = !from ? "Kaynak hesap seçilmeli" : !to ? "Hedef hesap seçilmeli"
+    : same ? "Kaynak ve hedef hesap aynı olamaz" : !(amount > 0) ? "Tutar 0'dan büyük olmalı" : null;
+  const save = async (andNew: boolean) => {
+    if (!ok) return;
+    const body = {
+      date: f.date, from_account_id: +f.from_account_id, to_account_id: +f.to_account_id,
+      amount, note: f.note.trim() || null,
+    };
+    if (edit) { await api.put(`transfers/${edit.id}`, body); reload(); onClose(); return; }
+    await api.post("transfers", body);
+    reload();
+    if (andNew) { setF({ ...f, amount: "", note: "" }); amountRef.current?.focus(); } else onClose();
+  };
+  const swap = () => setF({ ...f, from_account_id: f.to_account_id, to_account_id: f.from_account_id });
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); save(false); }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <Field label="Tarih"><input type="date" style={css.input} value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field>
+        <AmountField label="Tutar (TL)" value={f.amount} onChange={(v) => setF({ ...f, amount: v })} inputRef={amountRef} />
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8, alignItems: "flex-end" }}>
+        <Field label="Nereden" flex={2}>
+          <select autoFocus style={css.input} value={f.from_account_id} onChange={(e) => setF({ ...f, from_account_id: e.target.value })}>
+            <option value="">— seç —</option>
+            {data.accounts.map((a) => <option key={a.id} value={a.id}>{a.name} · {fmtMoney(a.balance, "TRY", true)}</option>)}
+          </select>
+        </Field>
+        <button type="button" onClick={swap} title="Yönü değiştir"
+          style={{ ...css.ghost, padding: "9px 12px", flexShrink: 0 }}>⇄</button>
+        <Field label="Nereye" flex={2}>
+          <select style={css.input} value={f.to_account_id} onChange={(e) => setF({ ...f, to_account_id: e.target.value })}>
+            <option value="">— seç —</option>
+            {data.accounts.map((a) => <option key={a.id} value={a.id}>{a.name} · {fmtMoney(a.balance, "TRY", true)}</option>)}
+          </select>
+        </Field>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+        <Field label="Not (opsiyonel)" flex={2}>
+          <input style={css.input} value={f.note} placeholder="örn. ATM çekimi, Midas'a aktarım"
+            onChange={(e) => setF({ ...f, note: e.target.value })} />
+        </Field>
+      </div>
+      {ok && from && to && (
+        <div style={{ fontSize: 12, color: T.mut, marginTop: 10, background: T.panel2, borderRadius: 8, padding: "10px 12px", display: "grid", gap: 4 }}>
+          <div><b>{from.name}</b> <span style={{ color: T.neg }}>−{fmtMoney(amount, "TRY", true)}</span> → <span style={{ ...css.mono }}>{fmtMoney(from.balance - amount, "TRY", true)}</span></div>
+          <div><b>{to.name}</b> <span style={{ color: T.pos }}>+{fmtMoney(amount, "TRY", true)}</span> → <span style={{ ...css.mono }}>{fmtMoney(to.balance + amount, "TRY", true)}</span></div>
+          <div style={{ color: T.mut3 }}>Net varlığın değişmez; Rapor'a gelir/gider olarak girmez.</div>
+          {from.balance - amount < 0 && <div style={{ color: T.neg }}>Uyarı: {from.name} bakiyesi eksiye düşüyor.</div>}
+        </div>
+      )}
+      <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} editing={!!edit} />
     </form>
   );
 }

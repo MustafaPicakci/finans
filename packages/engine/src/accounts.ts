@@ -1,4 +1,4 @@
-import type { Account, AccountEntry } from "./types.js";
+import type { Account, AccountEntry, AccountKind } from "./types.js";
 
 /* ————— HESAP HAREKET DEFTERİ (Faz 15) —————
    Defterin değişmez kuralı: **hesabın bakiyesi = Σ o hesabın hareketleri** (açılış bakiyesi de
@@ -43,4 +43,41 @@ export function ledgerSummary(rows: LedgerRow[]): { in: number; out: number; net
   let inn = 0, out = 0;
   for (const r of rows) (r.entry.amount >= 0 ? (inn += r.entry.amount) : (out += -r.entry.amount));
   return { in: inn, out, net: inn - out };
+}
+
+/* ————— MUTABAKAT (Faz 16) —————
+   Defter kendi içinde tutarlı olsa bile GERÇEK hesapla ayrışabilir: unutulan bir harcama, girilmemiş
+   bir transfer, banka masrafı. `ledgerDrift` defter-içi tutarsızlığı yakalar; mutabakat ise defteri
+   dış dünyaya sabitler — kullanıcı "bankada şu an şu kadar var" der, fark 'duzeltme' hareketi olarak
+   YAZILIR (gizlenmez, tarihi ve tutarı defterde durur). Mutabakat sonrası bakiye tanım gereği doğrudur;
+   soru "bakiyem tutuyor mu" olmaktan çıkıp "en son ne zaman doğruladım" olur. */
+
+export const ACCOUNT_KIND_LABEL: Record<AccountKind, string> = {
+  banka: "Banka", nakit: "Nakit", araci: "Aracı kurum", fon: "Fon",
+};
+export const accountKindOf = (a: Account): AccountKind => a.kind ?? "banka";
+
+/** Mutabakat farkı: gerçek bakiye − kayıtlı bakiye. Pozitif = defterde eksik para (girilmemiş gelir/
+    unutulan transfer), negatif = defterde fazla para (girilmemiş harcama). */
+export function reconcileDiff(account: Account, realBalance: number): number {
+  return realBalance - account.balance;
+}
+
+/** Mutabakat durumu — `staleDays` günden eski (veya hiç yapılmamış) doğrulama arayüzde hatırlatılır.
+    `today`/`last_recon_date` 'YYYY-MM-DD'; sözlük sırası tarih sırasıyla aynı olduğundan gün farkı
+    yerine doğrudan eşik tarihiyle karşılaştırılır. */
+export function reconStatus(account: Account, today: string, staleDays = 30): "hic" | "guncel" | "bayat" {
+  const last = account.last_recon_date;
+  if (!last) return "hic";
+  const t = new Date(`${today}T00:00:00`);
+  t.setDate(t.getDate() - staleDays);
+  const cutoff = t.toISOString().slice(0, 10);
+  return last >= cutoff ? "guncel" : "bayat";
+}
+
+/** Mutabakat sonrası kontrol için: son mutabakattan BU YANA yazılmış hareketler (o günden sonrası).
+    "Fark nereden çıktı" sorusunda bakılacak pencere budur. */
+export function entriesSinceRecon(entries: AccountEntry[], account: Account): AccountEntry[] {
+  const since = account.last_recon_date;
+  return entries.filter((e) => e.account_id === account.id && (!since || e.date >= since)).sort(chrono).reverse();
 }
