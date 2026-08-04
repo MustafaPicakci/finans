@@ -9,7 +9,7 @@ import { txShares, keyOf, REC_AMOUNT_BEGIN, type Card, type CardTx } from "@fina
 import { db, initDb, nowLocal, todayLocal, TENANT_TABLES, GLOBAL_SETTING_KEYS, type TxClient } from "./db.js";
 import { refreshAll } from "./prices.js";
 import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, SESSION_COOKIE, type SessionUser } from "./auth.js";
-import { sendMail, resetEmail, verifyEmail, mailConfigured } from "./mail.js";
+import { sendMail, resetEmail, verifyEmail, mailConfigured, verifyMailConfig, mailFromWarning } from "./mail.js";
 
 const app = new Hono();
 app.use("*", logger());
@@ -136,9 +136,9 @@ api.post("/auth/register", async (c) => {
      (doğrulanmamış giriş login'de 403). Frontend "e-postanı doğrula" gösterir. */
   const vtoken = await createEmailToken(info.id!, "verify", 24 * 60 * 60_000); // 24 saat
   const link = `${appBaseUrl(c)}/?verify=${vtoken}`;
-  const { subject, html } = verifyEmail(link);
+  const { subject, html, text } = verifyEmail(link);
   console.log(`[audit] Yeni kayıt (beklemede): ${email2} (id:${info.id})`);
-  sendMail(email2, subject, html).catch((e) => console.error("[mail] aktivasyon gönderilemedi:", e));
+  sendMail(email2, subject, html, text).catch(() => { /* mail.ts loglar; kayıt akışı bloklanmaz */ });
   return c.json({ pending: true });
 });
 
@@ -190,8 +190,8 @@ api.post("/auth/forgot", async (c) => {
     if (user) {
       const token = await createEmailToken(user.id, "reset", 60 * 60_000); // 1 saat
       const link = `${appBaseUrl(c)}/?reset=${token}`;
-      const { subject, html } = resetEmail(link);
-      sendMail(email2, subject, html).catch((e) => console.error("[mail] reset gönderilemedi:", e));
+      const { subject, html, text } = resetEmail(link);
+      sendMail(email2, subject, html, text).catch(() => { /* mail.ts loglar */ });
     }
   }
   return c.json({ ok: true });
@@ -231,8 +231,8 @@ api.post("/auth/resend-verify", async (c) => {
     if (user && !user.email_verified) {
       const vtoken = await createEmailToken(user.id, "verify", 24 * 60 * 60_000);
       const link = `${appBaseUrl(c)}/?verify=${vtoken}`;
-      const { subject, html } = verifyEmail(link);
-      sendMail(email2, subject, html).catch((e) => console.error("[mail] aktivasyon (resend) gönderilemedi:", e));
+      const { subject, html, text } = verifyEmail(link);
+      sendMail(email2, subject, html, text).catch(() => { /* mail.ts loglar */ });
     }
   }
   return c.json({ ok: true });
@@ -1203,7 +1203,15 @@ cron.schedule("*/15 * * * *", runScheduledJobs);
 const port = Number(process.env.PORT || 8787);
 /* şema hazır olsun, sonra sun */
 await initDb();
+/* E-posta yapılandırması açılışta kontrol edilir (Faz 19): bozuk SMTP ayarı ilk kayıt denemesinde
+   değil, ilk saniyede belli olsun — "kimse aktivasyon alamıyor" sessizce keşfedilecek bir durum
+   olmamalı. Hiçbiri bloklamaz, yalnız loglar. */
 if (isProd && !mailConfigured) console.warn("[mail] UYARI: prod'da SMTP yapılandırılmadı — yeni kullanıcılar aktivasyon e-postası alamaz, kayıt olsalar da giriş yapamaz. SMTP_* env'lerini ayarla.");
+if (mailConfigured) {
+  const warn = mailFromWarning();
+  if (warn) console.warn(`[mail] UYARI: ${warn}`);
+  verifyMailConfig().catch(() => { /* verifyMailConfig kendi hatasını loglar */ });
+}
 if (isProd && !process.env.APP_URL) console.warn("[auth] UYARI: prod'da APP_URL ayarlanmadı — aktivasyon/şifre-sıfırlama linkleri istek host'undan türetilir; güvenilir sabit URL için APP_URL env'ini ayarla.");
 serve({ fetch: app.fetch, port }, () => console.log(`finans → http://localhost:${port}`));
 

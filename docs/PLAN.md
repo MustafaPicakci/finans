@@ -21,6 +21,7 @@
 - ✅ **Faz 16 tamamlandı (Ağustos 2026)** — virman (`transfers`) + hesap türleri (banka/nakit/aracı/fon) + mutabakat: kendi hesapların arası para hareketi tek kayıtta iki bacak yazar, nakit ve aracı kurum da hesap olduğundan para sistemden çıkmaz, "Doğrula" ile gerçek bakiye deftere sabitlenir.
 - ✅ **Faz 17 tamamlandı (Ağustos 2026, kısmi kapsam)** — fon girişinde tutar modu (adet NAV'dan türetilir) + ödeme öncesi "fon boz" önerisi. Fon mutabakatı (kayma düzeltme) bilinçli olarak **ertelendi** — kayma görünür hale gelince eklenecek.
 - ✅ **Faz 18 tamamlandı (Ağustos 2026)** — tanım kayıtlarının düzenlenmesi (hesap adı, kart, kredi, kategori, portföy grubu, vadeli mevduat, düzenli kalem kimliği); `crud()` PUT/DELETE artık eşleşen satır yoksa 404 döner.
+- ✅ **Faz 19 tamamlandı (Ağustos 2026)** — e-posta teslim edilebilirliği (kod tarafı): multipart düz metin alternatifi, açılışta SMTP doğrulaması, MAIL_FROM tuzak kontrolü, SMTP zaman aşımları, görünür gönderim hatası. **Sağlayıcı + DNS hâlâ senin işin** (aşağıdaki açık iş).
 - ⏳ **Açık iş (prod engelleyici): e-posta teslim edilebilirliği** — çok-kullanıcı kayıt açık ama prod'da SMTP = Gmail, aktivasyon postaları kurumsal alan adlarına ulaşmıyor (phishing sayılıp düşüyor). Gerçek kullanıcı almadan önce transactional sağlayıcı + kendi domain (SPF/DKIM/DMARC) şart; kod değişmiyor, yalnız env. Bkz. Faz 10 bölümü.
 
 ## Context (Neden)
@@ -504,6 +505,20 @@ Faz 14 *işlem* kayıtlarını düzenlenebilir yaptı; *tanım* kayıtları (hes
 - **`crud()` artık dürüst**: PUT/DELETE etkilenen satır sayısını kontrol eder, eşleşme yoksa **404** döner. `WHERE ... AND user_id=?` başkasının kaydını zaten değiştirmiyordu (güvenlik açığı yoktu), ama uç `{ok:true}` dönüyordu — arayüz "kaydedildi" der, hiçbir şey değişmezdi. Tanımlar düzenlenebilir olunca bu sessiz yalan kullanıcının göreceği bir hataya dönüşürdü.
 
 Doğrulama: izole test DB'sinde (`finans_faz18_test`) mevduat aç → düzenle (anapara 30.000→45.000 **ve** hesap Garanti→Akbank) → sil: bakiyeler her adımda beklenen değerde (100.000/50.000 → 70.000/50.000 → 100.000/5.000 → 100.000/50.000), `balance = Σ entries` korundu. Kredi/kart/kategori/portföy/düzenli kalem PUT'ları alanları güncelledi; **düzenli kalemin tutarı (80.000) identity PUT'unda değişmedi**. Negatifler: olmayan kayıt 404, anapara 0 / vade 0 / stopaj %150 → 400, eksik alan 400, bozuk JSON 400, oturumsuz 401. Çok kiracılık: ikinci kullanıcı yedi tanım ucunun hepsinde **404** aldı ve birinci kullanıcının verisi bit bit aynı kaldı. `pnpm build` temiz, 158 engine testi yeşil (engine'e dokunulmadı).
+
+## Faz 19 — E-posta teslim edilebilirliği (kod tarafı) ✅
+
+`mail.ts` zaten generic SMTP olduğundan **sağlayıcı geçişi gerçekten env işi** (Resend/Brevo örnekleri `.env.example`'da). Kod tarafında kalan boşluklar teslim oranı ve **görünürlüktü**:
+
+- **Yalnız-HTML gönderim** yaygın bir spam sinyalidir. Artık `multipart/alternative`: şablonlar düz metin karşılığını da üretir (HTML'den regex ile soyulmuş değil, elle yazılmış — bağlantı tek başına satırda durur, istemciler doğru linkler).
+- **Açılışta `transporter.verify()`**: bozuk SMTP ayarı ilk kayıt denemesinde değil, ilk saniyede belli olur. Bloklamaz, loglar.
+- **MAIL_FROM tuzak kontrolü**: Resend'de `SMTP_USER=resend` olduğundan MAIL_FROM verilmezse From başlığı `Finans <resend>` olur — geçersiz adres, teslim çöker. Artık açılışta uyarı verir. Gmail SMTP kullanımı da ayrıca uyarılır.
+- **SMTP zaman aşımları** (`connectionTimeout`/`greetingTimeout`/`socketTimeout`): **test sırasında bulundu** — yanıtsız (karadelik) bir SMTP sunucusunda bağlantı sonsuza dek asılı kalıyordu; gönderim promise'i ne çözülüyor ne reddediliyordu, dolayısıyla hata da loglanmıyordu. Sessiz asılma açık hatadan beterdir: açılış doğrulaması "her şey yolunda" sanısı verirdi.
+- **Görünür gönderim hatası**: `sendMail` hatayı `[mail] GÖNDERİLEMEDİ to=… konu=…: <sebep>` olarak loglar ve `lastMailError`'a yazar. Gönderim **bilinçli olarak bloklamaya devam eder** (kayıt akışı e-postayı beklemez — Faz 10 kararı).
+
+Doğrulama: yerel sahte SMTP sunucusuna karşı uçtan uca. MAIL_FROM'suz açılış → `Finans <resend>` uyarısı çıktı. Yanıtsız sunucu → 10 sn'de `Timeout` hatası loglandı (zaman aşımı öncesi sonsuza dek sessizdi). Doğru yapılandırmada açılışta `SMTP doğrulandı` + gerçek kayıtta yakalanan posta `multipart/alternative`, `text/plain` + `text/html` bölümlü, From `Finans <no-reply@phexum.com>`, düz metin bölümü Türkçe karakterler ve tek satırlık bağlantıyla doğru. SMTP ölüyken kayıt **0,24 sn**'de döndü (bloklanmadı) ve hata net loglandı. `pnpm build` temiz, 158 engine testi yeşil (engine'e dokunulmadı).
+
+**Hâlâ senin yapman gereken** (kod değil): Resend/Brevo hesabı → domain ekle → verilen SPF/DKIM (+DMARC) kayıtlarını DNS'e yayınla → `SMTP_*` ve `MAIL_FROM`'u Render env'ine gir. Doğrulanmış domain olmadan teslim zayıf kalır.
 
 ---
 
