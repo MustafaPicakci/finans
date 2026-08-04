@@ -19,6 +19,7 @@
 - ✅ **Faz 14 tamamlandı (Ağustos 2026)** — işlem kayıtlarının düzenlenmesi (gerçekleşen gelir/gider, plan kalemi, kart harcaması, portföy işlemi); bakiye etkisi atomik olarak düzeltilir.
 - ✅ **Faz 15 tamamlandı (Ağustos 2026)** — hesap hareket defteri (`account_entries`): bakiyeyi oynatan her şey iz bırakır, `balance = Σ hareketler` değişmez kuralı, Hesaplar sekmesinde yürüyen bakiyeli hareket listesi.
 - ✅ **Faz 16 tamamlandı (Ağustos 2026)** — virman (`transfers`) + hesap türleri (banka/nakit/aracı/fon) + mutabakat: kendi hesapların arası para hareketi tek kayıtta iki bacak yazar, nakit ve aracı kurum da hesap olduğundan para sistemden çıkmaz, "Doğrula" ile gerçek bakiye deftere sabitlenir.
+- ✅ **Faz 17 tamamlandı (Ağustos 2026, kısmi kapsam)** — fon girişinde tutar modu (adet NAV'dan türetilir) + ödeme öncesi "fon boz" önerisi. Fon mutabakatı (kayma düzeltme) bilinçli olarak **ertelendi** — kayma görünür hale gelince eklenecek.
 - ⏳ **Açık iş (prod engelleyici): e-posta teslim edilebilirliği** — çok-kullanıcı kayıt açık ama prod'da SMTP = Gmail, aktivasyon postaları kurumsal alan adlarına ulaşmıyor (phishing sayılıp düşüyor). Gerçek kullanıcı almadan önce transactional sağlayıcı + kendi domain (SPF/DKIM/DMARC) şart; kod değişmiyor, yalnız env. Bkz. Faz 10 bölümü.
 
 ## Context (Neden)
@@ -475,6 +476,22 @@ Sorun (kullanıcının tarifi): maaş → para piyasası fonu → ödeme öncesi
 - **Sınır**: başkasına gönderilen para virman **değil giderdir** (net varlıktan çıkar) — `transactions`'ta kalır. Bu ayrım hem form hem liste metninde açıkça yazılı.
 
 Doğrulama: izole test DB'sinde (`finans_faz16_test`) uçtan uca — virman ekle (50000/0/0 → 45000/5000/0), **düzenle** (tutar 5000→7000 + hedef Cüzdan→Midas → 43000/0/7000, yani eski bacaklar tam geri alındı), sil (→ 50000/0/0 birebir başlangıç). Negatifler: aynı hesap 400, negatif tutar 400, olmayan hesap 400, oturumsuz 401. Mutabakat: kayıt 50000 iken gerçek 48750 → `diff:-1250`, 'duzeltme' hareketi yazıldı, `balance = Σ entries` korundu; fark 0 ile tekrar doğrulama hareket **yazmadı**, yalnız damgayı güncelledi. Göç: Faz 15 şemalı gerçek yerel DB'de `ALTER TABLE ... IF NOT EXISTS` sonrası bakiyeler ve defter toplamları birebir aynı (fark 0). `pnpm build` temiz, 140 engine testi yeşil (6 yeni).
+
+## Faz 17 — Fon girişinde tutar modu + "fon boz" önerisi ✅
+
+Sorun: kullanıcının **en sık yaptığı** işlem (maaşı para piyasası fonuna park etmek, her ödemeden önce ihtiyacı kadar bozmak) **en zor girilen** işlemdi. Fon işlemi adet ister; NAV ~0,043210 olduğundan "50.000 ₺ fona attım" demek için `50000 / 0,043210 = 1.157.139,55…` hesabını elde yapmak gerekiyordu. Ödeme öncesi "12.400 ₺ lazım" derken de aynı bölme, ters yönde — her seferinde yuvarlama artığı riski.
+
+- **Tutar modu** ([forms/index.tsx](apps/web/src/features/forms/index.tsx)): TradeForm'da `Adet gir ⇄ Tutar gir` geçişi. Tutar = **hesaba giren/çıkan para**, yani sunucudaki `tradeBalanceDelta`'nın tam tersi — engine'de `qtyFromAmount`/`amountFromQty` ([portfolio.ts](packages/engine/src/portfolio.ts)):
+  `ALIŞ qty = (tutar − fee)/price`, `SATIŞ qty = (tutar + fee)/price`. Böylece "12.400 gelsin" dendiğinde hesaba kuruşu kuruşuna 12.400 girer. Türetilen adet formda görünür (kaydedilen sayı odur). Şema ve sunucu **değişmedi**: POST hâlâ qty/price taşır.
+  Varsayılan mod varlık türünün doğasından gelir: `FON` → tutar, diğerleri → adet (hissede "50 lot" diye düşünülür). Mod değişiminde girilen değer korunur; "Tümünü sat" kısayolu tutar modunda TL karşılığını yazar.
+- **"Fon boz" önerisi** ([funds.ts](packages/engine/src/funds.ts) + Özet): saf nakit önümüzdeki 7 günde eksiye düşüyorsa "3 Eylül'de 20.600 ₺ açık var — TPP'den 20.600 ₺ boz" satırı çıkar; düğme TradeForm'u **tutar modunda, SATIŞ, sembol/tutar/tarih/hesap dolu** açar. İki bilinçli karar:
+  - **Saf nakit (`bal`) bakılır, etkin nakit (`bal + cashFunds`) değil** — amaç zaten fondaki parayı nakde çevirmek; etkin nakde bakan bir kontrol "sorun yok, fonda paran var" der ve öneri hiç çıkmaz.
+  - **Tutar pencerenin EN DERİN noktasından gelir**, ilk eksi günden değil: `bal` kümülatiftir, bugün X bozarsan sonraki tüm günler +X kayar. İlk eksi güne göre bozarsan iki gün sonra yine açık verir ve ritüeli iki kez yaparsın.
+  - Fon açığı karşılamıyorsa tutar **fonun tamamıyla sınırlanır** ve `covered:false` ile "fon açığın tamamını kapatmıyor" uyarısı çıkar — olmayan parayı önermek kullanıcıyı yanlış işleme sürükler.
+  - Satışın gireceği hesap, o fonda **en son kullanılan hesaptır** (kullanıcı tercihini geçmişte zaten söylemiş).
+- **Kapsam dışı bırakıldı**: fon mutabakatı. TEFAS NAV'ı T-1 olduğundan türetilen adet küçük bir hata taşır ve aylar içinde gerçek fon bakiyesinden ayrışabilir. Kayma ölçülebilir hale gelince Faz 16'daki mutabakat deseni fona uygulanacak (fark = `account_id=null` bir düzeltme işlemi → pozisyonu düzeltir, bakiyeye dokunmaz).
+
+Doğrulama: izole test DB'sinde (`finans_faz17_test`) gerçek akış — NAV 0,043210 ile 50.000 ₺ ALIŞ → hesap **tam 0**; 12.400 ₺ hedefli SATIŞ → hesap **tam 12.400**; komisyonlu (25 ₺) 5.000 ₺ hedefli satış → **tam 17.400**, `balance = Σ entries` korundu. Öneri, API'den çekilen gerçek `AllData` üzerinde `project()` ile: ilk eksi gün 7 Ağustos (−12.600) iken **en derin** 9 Ağustos (−20.600) seçildi, `sellBy` = 6 Ağustos, türetilen adet 20.600,00 ₺ getirdi, satış sonrası minimum nakit **0**. Karşılanamayan açık senaryosunda tutar fonun tamamına (32.575 ₺) sabitlendi, `covered:false`, kalan açık gizlenmedi. Kullanıcıya özel elle fiyat (`user_prices`) merge'i de bu akışta doğrulandı. `pnpm build` temiz, 158 engine testi yeşil (18 yeni).
 
 ---
 

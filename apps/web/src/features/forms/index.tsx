@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  todayStr, num, fmtD,
+  todayStr, num, fmtD, qtyFromAmount, amountFromQty,
   depositMaturity, depositGrossInterest, depositNetInterest, depositMaturityValue,
   type AllData, type AssetType, type CardTx, type Currency, type Deposit, type OneOff, type Recurring,
   type Trade, type Transaction, type Transfer,
@@ -463,21 +463,44 @@ export function TransferForm({ data, reload, onClose, edit }: FormProps & { edit
   );
 }
 
+/* ————— GİRİŞ MODU: ADET ⇄ TUTAR (Faz 17) —————
+   Fonda kullanıcının kafasındaki sayı adet değil tutardır ("50 bin lira fona attım"); NAV ~0,043210
+   olduğundan adedi elde hesaplamak hem zahmetli hem hataya açıktı. Tutar modunda tek sayı girilir,
+   adet `qtyFromAmount` ile türetilir. Tutar = **hesaba giren/çıkan para** (bakiye etkisinin tersi),
+   böylece "12.400 lazım" dendiğinde hesaba kuruşu kuruşuna 12.400 girer.
+   Varsayılan mod varlık türüne göre: fonda tutar, hissede adet — çünkü hissede "50 lot" diye düşünülür. */
+type TradeMode = "adet" | "tutar";
+const defaultMode = (t: AssetType): TradeMode => (t === "FON" ? "tutar" : "adet");
+
+/** Özet'teki "fon boz" önerisinden gelen önden doldurma (Faz 17) */
+export type TradePrefill = {
+  asset_type: AssetType; symbol: string; side: Trade["side"]; amount: number;
+  date?: string; account_id?: number | null;
+};
+
 /** Portföy işlemi (alış/satış) → pozisyonlara ve net varlığa yansır */
-export function TradeForm({ data, reload, onClose, edit }: FormProps & { edit?: Trade }) {
+export function TradeForm({ data, reload, onClose, edit, prefill }: FormProps & { edit?: Trade; prefill?: TradePrefill }) {
   const [f, setF] = useState(() => edit
     ? {
       date: edit.date, asset_type: edit.asset_type, symbol: edit.symbol, side: edit.side,
-      qty: String(edit.qty), price: String(edit.price), fee: edit.fee ? String(edit.fee) : "",
+      qty: String(edit.qty), amount: "", price: String(edit.price), fee: edit.fee ? String(edit.fee) : "",
       currency: edit.currency, account_id: edit.account_id != null ? String(edit.account_id) : "",
       portfolio_id: edit.portfolio_id != null ? String(edit.portfolio_id) : "",
     }
     : {
-      date: todayStr(), asset_type: "BIST" as AssetType, symbol: "", side: "ALIŞ" as Trade["side"],
-      qty: "", price: "", fee: "", currency: "TRY" as Currency, account_id: "",
+      date: prefill?.date ?? todayStr(),
+      asset_type: prefill?.asset_type ?? ("BIST" as AssetType),
+      symbol: prefill?.symbol ?? "",
+      side: prefill?.side ?? ("ALIŞ" as Trade["side"]),
+      qty: "", amount: prefill ? String(prefill.amount) : "",
+      price: prefill ? String(priceOf(data, prefill.symbol, prefill.asset_type) ?? "") : "",
+      fee: "", currency: defaultCcy(prefill?.asset_type ?? "BIST") as Currency,
+      account_id: prefill?.account_id != null ? String(prefill.account_id) : "",
       // portföy grubu: son kullanılan grup varsayılan gelir (art arda giriş)
       portfolio_id: (() => { const p = lastUsedPortfolio(data); return p != null ? String(p) : ""; })(),
     });
+  /* Düzenlemede kayıt adet taşır → adet modu; yenisinde varlık türünün doğal modu (öneriden gelen tutarlı) */
+  const [mode, setMode] = useState<TradeMode>(() => edit ? "adet" : prefill ? "tutar" : defaultMode(f.asset_type));
   const symbolRef = useRef<HTMLInputElement>(null);
   const sugs = useMemo(() => symbolSuggestions(data), [data]);
   /** Sembolün güncel fiyatı — para birimi eşleşiyorsa doldurulabilir (USD fiyatı TL alanına yazılmasın) */
@@ -492,19 +515,32 @@ export function TradeForm({ data, reload, onClose, edit }: FormProps & { edit?: 
     portfolio_id: s.portfolio_id != null ? String(s.portfolio_id) : x.portfolio_id,
     price: s.price != null && priceCcyOf(data, s.symbol, s.asset_type) === s.currency ? String(s.price) : x.price,
   }));
-  const ok = !!f.symbol && num(f.qty) > 0 && num(f.price) > 0 && !!f.date;
-  const reason = !f.symbol ? "Sembol gerekli" : !(num(f.qty) > 0) ? "Adet/miktar 0'dan büyük olmalı" : !(num(f.price) > 0) ? "Birim fiyat 0'dan büyük olmalı" : null;
+  /* Kaydedilen her zaman adettir; tutar modunda fiyat ve komisyondan türetilir. */
+  const price = num(f.price), fee = num(f.fee);
+  const qty = mode === "tutar" ? qtyFromAmount(f.side, num(f.amount), price, fee) : num(f.qty);
+  /** Mod değişiminde girilen değer korunur (aynı işlemin iki farklı ifadesi) */
+  const switchMode = (m: TradeMode) => {
+    if (m === mode) return;
+    if (m === "tutar") setF((x) => ({ ...x, amount: qty > 0 && price > 0 ? String(+amountFromQty(x.side, qty, price, fee).toFixed(2)) : "" }));
+    else setF((x) => ({ ...x, qty: qty > 0 ? String(qty) : "" }));
+    setMode(m);
+  };
+  const ok = !!f.symbol && qty > 0 && price > 0 && !!f.date;
+  const reason = !f.symbol ? "Sembol gerekli"
+    : !(price > 0) ? "Birim fiyat 0'dan büyük olmalı"
+      : !(qty > 0) ? (mode === "tutar" ? "Tutar 0'dan büyük olmalı (komisyonu aşmalı)" : "Adet/miktar 0'dan büyük olmalı")
+        : null;
   const save = async (andNew: boolean) => {
     if (!ok) return;
     const body = {
-      ...f, symbol: f.symbol.trim(), qty: num(f.qty), price: num(f.price), fee: num(f.fee), currency: f.currency,
+      ...f, symbol: f.symbol.trim(), qty, price, fee, currency: f.currency,
       account_id: f.currency === "TRY" && f.account_id ? +f.account_id : null,
       portfolio_id: f.portfolio_id ? +f.portfolio_id : null,
     };
     if (edit) { await api.put(`trades/${edit.id}`, body); reload(); onClose(); return; }
     await api.post("trades", body);
     reload();
-    if (andNew) { setF({ ...f, symbol: "", qty: "", price: "", fee: "" }); symbolRef.current?.focus(); } else onClose();
+    if (andNew) { setF({ ...f, symbol: "", qty: "", amount: "", price: "", fee: "" }); symbolRef.current?.focus(); } else onClose();
   };
   return (
     <form onSubmit={(e) => { e.preventDefault(); save(false); }}>
@@ -512,7 +548,11 @@ export function TradeForm({ data, reload, onClose, edit }: FormProps & { edit?: 
         <Field label="Tarih"><input type="date" style={css.input} value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field>
         <Field label="Varlık türü">
           <select style={css.input} value={f.asset_type}
-            onChange={(e) => { const at = e.target.value as AssetType; setF({ ...f, asset_type: at, symbol: "", currency: defaultCcy(at) }); }}>
+            onChange={(e) => {
+              const at = e.target.value as AssetType;
+              setF({ ...f, asset_type: at, symbol: "", currency: defaultCcy(at) });
+              if (!edit) setMode(defaultMode(at)); // tür değişince o türün doğal giriş modu
+            }}>
             {(["BIST", "FON", "ALTIN", "DOVIZ", "KRIPTO", "ETF"] as AssetType[]).map((t) => <option key={t}>{t}</option>)}
           </select>
         </Field>
@@ -539,11 +579,31 @@ export function TradeForm({ data, reload, onClose, edit }: FormProps & { edit?: 
           </div>
         </Field>
       </div>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-        <Field label="Adet / Miktar"><input style={css.input} inputMode="decimal" placeholder="0" value={f.qty} onChange={(e) => setF({ ...f, qty: e.target.value })} /></Field>
+      {/* Giriş modu: fonda tutar ("50 bin lira attım"), hissede adet ("50 lot aldım") */}
+      <div style={{ display: "flex", gap: 6, marginTop: 10, alignItems: "center" }}>
+        <span style={{ ...css.label, marginBottom: 0 }}>Giriş</span>
+        {(["adet", "tutar"] as TradeMode[]).map((m) => (
+          <button key={m} type="button" onClick={() => switchMode(m)} style={{
+            ...css.chip, fontWeight: 600,
+            ...(mode === m ? { background: T.acc, color: T.accInk, borderColor: T.acc } : {}),
+          }}>{m === "adet" ? "Adet gir" : "Tutar gir"}</button>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
+        {mode === "tutar"
+          ? <AmountField label={f.side === "SATIŞ" ? `Hesaba girecek (${f.currency === "USD" ? "$" : "TL"})` : `Hesaptan çıkacak (${f.currency === "USD" ? "$" : "TL"})`}
+            value={f.amount} onChange={(v) => setF({ ...f, amount: v })} ccy={f.currency} />
+          : <Field label="Adet / Miktar"><input style={css.input} inputMode="decimal" placeholder="0" value={f.qty} onChange={(e) => setF({ ...f, qty: e.target.value })} /></Field>}
         <AmountField label={`Birim fiyat (${f.currency === "USD" ? "$" : "TL"})`} value={f.price} onChange={(v) => setF({ ...f, price: v })} ccy={f.currency} />
         <AmountField label={`Komisyon (${f.currency === "USD" ? "$" : "TL"})`} value={f.fee} onChange={(v) => setF({ ...f, fee: v })} ccy={f.currency} />
       </div>
+      {/* Tutar modunda türetilen adet görünür olmalı: kaydedilen sayı bu */}
+      {mode === "tutar" && qty > 0 && (
+        <div style={{ fontSize: 12, color: T.mut, marginTop: 6 }}>
+          Kaydedilecek adet: <span style={{ ...css.mono, color: T.text }}>{qty.toLocaleString("tr-TR", { maximumFractionDigits: 6 })}</span>
+          {" "}<span style={{ color: T.mut3 }}>({fmtMoney(num(f.amount), f.currency, true)} ÷ {fmtMoney(price, f.currency, true)})</span>
+        </div>
+      )}
       {/* tek tık doldurmalar: güncel piyasa fiyatı ve (satışta) elde tutulan miktar */}
       {(livePrice != null || (f.side === "SATIŞ" && held > 0)) && (
         <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
@@ -553,8 +613,10 @@ export function TradeForm({ data, reload, onClose, edit }: FormProps & { edit?: 
             </button>
           )}
           {f.side === "SATIŞ" && held > 0 && (
-            <button type="button" style={css.chip} onClick={() => setF({ ...f, qty: String(held) })}>
-              Tümünü sat: {held}
+            <button type="button" style={css.chip} onClick={() => mode === "tutar"
+              ? setF({ ...f, amount: String(+amountFromQty("SATIŞ", held, price, fee).toFixed(2)) })
+              : setF({ ...f, qty: String(held) })}>
+              Tümünü sat: {mode === "tutar" && price > 0 ? fmtMoney(amountFromQty("SATIŞ", held, price, fee), f.currency, true) : held}
             </button>
           )}
         </div>
@@ -578,12 +640,12 @@ export function TradeForm({ data, reload, onClose, edit }: FormProps & { edit?: 
       </div>
       {ok && (
         <div style={{ fontSize: 12, color: T.mut, marginTop: 8 }}>
-          İşlem tutarı: <span style={{ ...css.mono, color: T.text }}>{fmtMoney(num(f.qty) * num(f.price), f.currency, true)}</span>
+          İşlem tutarı: <span style={{ ...css.mono, color: T.text }}>{fmtMoney(qty * price, f.currency, true)}</span>
           {f.currency === "TRY" && f.account_id && (() => {
             const acc = data.accounts.find((a) => a.id === +f.account_id);
             if (!acc) return null;
-            const proceeds = num(f.qty) * num(f.price) - num(f.fee);
-            const cost = num(f.qty) * num(f.price) + num(f.fee);
+            const proceeds = qty * price - fee;
+            const cost = qty * price + fee;
             return (
               <div style={{ marginTop: 4 }}>
                 {f.side === "SATIŞ"

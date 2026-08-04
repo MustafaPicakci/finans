@@ -2,12 +2,12 @@ import React, { useMemo } from "react";
 import type { AllData } from "@finans/engine";
 import { T, css, fmtMoney } from "./theme";
 import { Modal } from "./ui";
-import { KalemForm, TransferForm, CardTxForm, RecurringForm, LoanForm, TradeForm, DepositForm, ImportForm, type AddKind, type KalemPrefill, type CardTxPrefill } from "./features/forms";
+import { KalemForm, TransferForm, CardTxForm, RecurringForm, LoanForm, TradeForm, DepositForm, ImportForm, type AddKind, type KalemPrefill, type CardTxPrefill, type TradePrefill } from "./features/forms";
 import { shortcuts } from "./features/forms/recall";
 
-export type { AddKind, KalemPrefill };
+export type { AddKind, KalemPrefill, TradePrefill };
 /** Açık form + (varsa) önden doldurma. `prefill` formun türüne göre yorumlanır. */
-export type AddState = { kind: AddKind | "pick"; prefill?: KalemPrefill; cardPrefill?: CardTxPrefill };
+export type AddState = { kind: AddKind | "pick"; prefill?: KalemPrefill; cardPrefill?: CardTxPrefill; tradePrefill?: TradePrefill };
 
 /* ————— GLOBAL "+ EKLE" AKIŞI —————
    Tüm işlem girişlerinin tek kapısı. Seçim listesindeki açıklamalar, her kaydın
@@ -92,7 +92,7 @@ export function AddSheet({ data, state, setState, onClose, reload }: {
       {state.kind === "cardtx" && <CardTxForm {...props} prefill={state.cardPrefill} />}
       {state.kind === "recurring" && <RecurringForm {...props} />}
       {state.kind === "loan" && <LoanForm {...props} />}
-      {state.kind === "trade" && <TradeForm {...props} />}
+      {state.kind === "trade" && <TradeForm {...props} prefill={state.tradePrefill} />}
       {state.kind === "deposit" && <DepositForm {...props} />}
       {state.kind === "import" && <ImportForm {...props} />}
     </Modal>

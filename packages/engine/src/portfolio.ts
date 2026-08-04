@@ -20,6 +20,28 @@ export function convert(amount: number, from: Currency, to: Currency, rates: Rat
   return amount;
 }
 
+/* ————— TUTAR ↔ ADET (Faz 17) —————
+   Fon işlemlerinde kullanıcının kafasındaki sayı adet değil TUTAR'dır ("50 bin lira fona attım",
+   "12.400 lazım, o kadar boz"). Adedi elde hesaplamak (tutar / NAV, NAV ~0,043210) hem zahmetli
+   hem yuvarlama hatasına açıktı. `tutar` burada **hesaba giren/çıkan para** olarak tanımlıdır —
+   yani sunucudaki bakiye etkisinin (`tradeBalanceDelta`) tam tersi:
+     ALIŞ  tutar = qty*price + fee  →  qty = (tutar − fee) / price
+     SATIŞ tutar = qty*price − fee  →  qty = (tutar + fee) / price
+   Böylece "12.400 gelsin" dendiğinde hesaba kuruşu kuruşuna 12.400 girer. */
+
+/** Tutardan (hesaba giren/çıkan para) adet türetir. Geçersiz girdide 0 döner (form kaydetmez). */
+export function qtyFromAmount(side: Trade["side"], amount: number, price: number, fee = 0): number {
+  if (!(price > 0) || !Number.isFinite(amount) || !Number.isFinite(fee)) return 0;
+  const gross = side === "SATIŞ" ? amount + fee : amount - fee;
+  return gross > 0 ? gross / price : 0;
+}
+
+/** Adetten tutar (ters yön) — mod değiştirirken girilen değeri korumak için. */
+export function amountFromQty(side: Trade["side"], qty: number, price: number, fee = 0): number {
+  if (!(qty > 0) || !(price > 0)) return 0;
+  return side === "SATIŞ" ? qty * price - fee : qty * price + fee;
+}
+
 /** Ağırlıklı ortalama maliyetli portföy; pozisyon kapanıp yeniden açılınca maliyet sıfırlanır.
     Her pozisyon kendi doğal para biriminde (o sembolün işlemlerinin currency'si) hesaplanır. */
 export function positions(trades: Trade[], prices: AllData["prices"]): Position[] {

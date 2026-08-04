@@ -4,13 +4,14 @@ import {
   PieChart, Pie, Cell,
 } from "recharts";
 import {
-  fmtD, parseD, convert, depositValueOn,
+  fmtD, parseD, keyOf, convert, depositValueOn, fundSellSuggestion,
   type AllData, type Day, type Position, type Rates, type Currency,
 } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, tl, TYPE_COLORS } from "../../theme";
 import { Money, Empty } from "../../ui";
 import { DegerGrafigi } from "../portfoy/DegerGrafigi";
+import type { TradePrefill } from "../../AddSheet";
 
 export type OzetSummary = {
   netWorthTry: number; cash: number; portValueTry: number; depositsValueTry: number;
@@ -32,10 +33,21 @@ function sparkPath(vals: number[], W: number, H: number, pad = 6): { line: strin
 /* Özet grafikleri TRY canonical'dır (nakit projeksiyonu + portföy değeri geçmişi hep TRY).
    Hero net varlık + KPI kartları buradadır (değerler App.tsx'te TRY hesaplanıp görüntü birimine çevrilerek gelir).
    Hesap/mevduat yönetimi Hesaplar sekmesindedir; burada yalnız özet + "Yönet" kısayolu. */
-export function Ozet({ data, days, pos, cash, rates, reload, summary, m, ccy, onGoAccounts }: {
+export function Ozet({ data, days, pos, cash, rates, reload, summary, m, ccy, onGoAccounts, onSellFund }: {
   data: AllData; days: Day[]; pos: Position[]; cash: number; rates: Rates; reload: () => void;
   summary: OzetSummary; m: (v: number, dec?: boolean) => string; ccy: Currency; onGoAccounts: () => void;
+  onSellFund: (p: TradePrefill) => void;
 }) {
+  /* "Ödeme öncesi fon boz" önerisi (Faz 17): saf nakit önümüzdeki hafta eksiye düşüyorsa,
+     nakit sayılan fondan ne kadar bozulacağını hesaplar. Bkz. funds.ts — tutar pencerenin
+     EN DERİN noktasından gelir, yoksa iki gün sonra yine açık verilir. */
+  const sell = fundSellSuggestion(days, data, rates);
+  /* Satışın hangi hesaba gireceği: o fonda en son kullandığın hesap (yoksa ilk hesap) —
+     paranın nereye gitmesi gerektiğini kullanıcı zaten geçmişte söylemiş. */
+  const sellAccountId = sell
+    ? [...data.trades].reverse().find((t) => t.asset_type === "FON" && t.symbol.toUpperCase() === sell.fund.symbol && t.account_id != null)?.account_id
+      ?? data.accounts[0]?.id ?? null
+    : null;
   /* Likit (etkin) nakit = harcanabilir nakit + "nakit say" işaretli para piyasası fonları.
      Takvimle aynı tanım; portföy/hisse/vadeli buna girmez (onlar toplam varlıkta). */
   const eff = (d: Day) => d.bal + d.cashFunds;
@@ -128,6 +140,32 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, ccy, on
       ) : (
         <div style={{ display: "flex", alignItems: "center", gap: 8, color: T.pos, background: T.posSoft, borderRadius: 10, padding: "8px 12px", fontSize: 13, marginTop: 8, fontWeight: 500 }}>
           ✓ Seçili {data.settings.horizon || "6"} ay boyunca likit nakitiniz eksiye düşmüyor.
+        </div>
+      )}
+      {/* Ödeme öncesi fon boz önerisi — kullanıcının gerçek ritüelinin tek tıkla karşılığı.
+          Etkin nakit (bal + fon) değil SAF nakit eksiye düştüğünde çıkar: yapılacak iş zaten
+          fondaki parayı nakde çevirmek. Tıklayınca TradeForm tutar modunda önden dolu açılır. */}
+      {sell && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 8,
+          background: T.panel2, border: `1px solid ${T.acc}`, borderRadius: 10, padding: "10px 12px",
+        }}>
+          <div style={{ flex: 1, minWidth: 220, fontSize: 13 }}>
+            <b>{fmtD(sell.gap.firstNegative.date, { day: "numeric", month: "long" })}</b> günü nakitin{" "}
+            <span style={{ ...css.mono, color: T.neg }}>{tl.format(Math.round(sell.gap.amount))}</span> açık veriyor.{" "}
+            <b>{sell.fund.symbol}</b> fonundan <span style={{ ...css.mono, color: T.acc }}>{tl.format(Math.round(sell.amount))}</span> bozarsan kapanır.
+            <div style={{ fontSize: 11.5, color: T.mut3, marginTop: 2 }}>
+              en geç {fmtD(sell.sellBy, { day: "numeric", month: "long" })} · fonda{" "}
+              {tl.format(Math.round(sell.fund.valueTry))} var
+              {!sell.covered && <span style={{ color: T.warn }}> · fon açığın tamamını kapatmıyor</span>}
+            </div>
+          </div>
+          <button style={{ ...css.btn, padding: "8px 14px", fontSize: 13 }} onClick={() => onSellFund({
+            asset_type: "FON", symbol: sell.fund.symbol, side: "SATIŞ",
+            amount: +sell.amount.toFixed(2),
+            date: keyOf(sell.sellBy), // yerel gün — toISOString UTC'ye kaydırıp bir gün geri alırdı
+            account_id: sellAccountId,
+          })}>Fon boz</button>
         </div>
       )}
       <div style={{ height: 220, marginTop: 8 }}>
