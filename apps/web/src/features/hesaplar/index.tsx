@@ -2,7 +2,8 @@ import React, { useRef, useState } from "react";
 import {
   fmtD, num, todayStr,
   depositMaturity, depositValueOn, depositMaturityValue, depositNetInterest, depositAccruedInterest, depositDaysRemaining, depositMatured,
-  type AllData,
+  accountLedger, ledgerDrift, ledgerSummary,
+  type AccountEntry, type AllData,
 } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, tl } from "../../theme";
@@ -48,20 +49,31 @@ export function Hesaplar({ data, reload, user, onAccountDeleted }: {
 /* Bakiyeler elle güncellenir; toplamı projeksiyonun başlangıç noktasıdır. */
 function VadesizHesaplar({ data, reload }: { data: AllData; reload: () => void }) {
   const [acc, setAcc] = useState({ name: "", balance: "" });
+  const [shown, setShown] = useState<number | null>(null); // hareketleri açık hesap
   const nameRef = useRef<HTMLInputElement>(null);
   return (
     <div style={css.card}>
       <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Vadesiz Hesaplar (Nakit)</div>
-      <div style={{ fontSize: 12, color: T.mut, marginBottom: 8 }}>Banka, cüzdan… Bakiyeye tıklayıp güncelleyebilirsin; toplamı nakit projeksiyonunun başlangıcıdır.</div>
+      <div style={{ fontSize: 12, color: T.mut, marginBottom: 8 }}>Banka, cüzdan… Bakiyeye tıklayıp güncelleyebilirsin (fark "elle düzeltme" hareketi olarak deftere yazılır); toplamı nakit projeksiyonunun başlangıcıdır.</div>
       {data.accounts.length === 0 && <Empty>Henüz hesap yok.</Empty>}
-      {data.accounts.map((a, i) => (
-        <Row key={a.id} last={i === data.accounts.length - 1}>
-          <div style={{ flex: 1, fontSize: 14 }}>{a.name}</div>
-          <input style={{ ...css.input, width: 130, textAlign: "right" }} inputMode="decimal" defaultValue={a.balance}
-            onBlur={async (e) => { const v = num(e.target.value); if (v !== a.balance) { await api.put(`accounts/${a.id}`, { balance: v }); reload(); } }} />
-          <button style={css.del} onClick={async () => { await api.del("accounts", a.id); reload(); }}>✕</button>
-        </Row>
-      ))}
+      {data.accounts.map((a, i) => {
+        const open = shown === a.id;
+        return (
+          <React.Fragment key={a.id}>
+            <Row last={i === data.accounts.length - 1 && !open}>
+              <div style={{ flex: 1, fontSize: 14 }}>{a.name}</div>
+              <button style={{ ...css.ghost, padding: "5px 10px", fontSize: 12, ...(open ? { color: T.acc, borderColor: T.acc } : {}) }}
+                title="Hesap hareketleri" onClick={() => setShown(open ? null : a.id)}>
+                {open ? "Hareketleri gizle" : "Hareketler"}
+              </button>
+              <input style={{ ...css.input, width: 130, textAlign: "right" }} inputMode="decimal" defaultValue={a.balance} key={a.balance}
+                onBlur={async (e) => { const v = num(e.target.value); if (v !== a.balance) { await api.put(`accounts/${a.id}`, { balance: v }); reload(); } }} />
+              <button style={css.del} onClick={async () => { await api.del("accounts", a.id); reload(); }}>✕</button>
+            </Row>
+            {open && <HesapHareketleri data={data} account={a} />}
+          </React.Fragment>
+        );
+      })}
       <form onSubmit={async (e) => {
         e.preventDefault();
         if (!acc.name) return;
@@ -74,6 +86,59 @@ function VadesizHesaplar({ data, reload }: { data: AllData; reload: () => void }
           <button type="submit" style={{ ...css.btn, opacity: acc.name ? 1 : 0.4 }} disabled={!acc.name}>Hesap Ekle</button>
         </div>
       </form>
+    </div>
+  );
+}
+
+/* ————— HESAP HAREKETLERİ (Faz 15) —————
+   Hesabın bakiyesini açıklayan defter: her satır bir hareket + o hareketten sonraki bakiye.
+   Hareketler sunucuda yazılır (bakiyeyi oynatan her akış), burada yalnız gösterilir — bu yüzden
+   ekranda silme/düzenleme yok: hareket kaynağından (işlem, portföy işlemi, mevduat) düzenlenir.
+   `ledgerDrift` 0 değilse defter bakiyeyi açıklamıyordur; sessizce düzeltmek yerine görünür yapılır. */
+const KIND_LABEL: Record<AccountEntry["kind"], string> = {
+  islem: "işlem", portfoy: "portföy", mevduat: "vadeli", duzeltme: "düzeltme", acilis: "açılış",
+};
+function HesapHareketleri({ data, account }: { data: AllData; account: AllData["accounts"][number] }) {
+  const [limit, setLimit] = useState(20);
+  const rows = accountLedger(data.account_entries, account.id);
+  const drift = ledgerDrift(data.account_entries, account);
+  const sum = ledgerSummary(rows);
+  const shown = rows.slice(0, limit);
+  return (
+    <div style={{ background: T.panel2, borderRadius: 12, padding: "10px 12px", margin: "2px 0 10px" }}>
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 12, color: T.mut, marginBottom: 8 }}>
+        <span>{rows.length} hareket</span>
+        <span>giren <span style={{ ...css.mono, color: T.pos }}>{tl.format(Math.round(sum.in))}</span></span>
+        <span>çıkan <span style={{ ...css.mono, color: T.neg }}>{tl.format(Math.round(sum.out))}</span></span>
+      </div>
+      {drift !== 0 && (
+        <div style={{ fontSize: 12, color: T.warn, marginBottom: 8 }}>
+          Uyarı: defter bakiyeyi açıklamıyor — fark <span style={css.mono}>{tl.format(Math.round(drift))}</span>.
+        </div>
+      )}
+      {rows.length === 0 && <Empty>Bu hesapta hareket yok.</Empty>}
+      {shown.map((r) => (
+        <div key={r.entry.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: `1px solid ${T.line}` }}>
+          <span style={{ ...css.mono, fontSize: 11.5, color: T.mut, width: 74 }}>
+            {fmtD(new Date(r.entry.date + "T00:00:00"), { day: "2-digit", month: "short", year: "2-digit" })}
+          </span>
+          <span style={{ flex: 1, fontSize: 13 }}>
+            {r.entry.note}
+            <span style={{ fontSize: 11, color: T.mut3, marginLeft: 6 }}>{KIND_LABEL[r.entry.kind]}</span>
+          </span>
+          <span style={{ ...css.mono, fontSize: 13, color: r.entry.amount < 0 ? T.neg : T.pos }}>
+            {r.entry.amount > 0 ? "+" : ""}{tl.format(Math.round(r.entry.amount))}
+          </span>
+          <span style={{ ...css.mono, fontSize: 12, color: T.mut, width: 96, textAlign: "right" }} title="bu hareketten sonraki bakiye">
+            {tl.format(Math.round(r.balanceAfter))}
+          </span>
+        </div>
+      ))}
+      {rows.length > shown.length && (
+        <button style={{ ...css.ghost, marginTop: 8, padding: "5px 10px", fontSize: 12 }} onClick={() => setLimit((l) => l + 50)}>
+          Daha eski hareketler ({rows.length - shown.length})
+        </button>
+      )}
     </div>
   );
 }

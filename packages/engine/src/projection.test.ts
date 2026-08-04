@@ -4,7 +4,7 @@ import type { AllData } from "./types.js";
 
 const baseData = (over: Partial<AllData> = {}): AllData => ({
   accounts: [], recurring: [], loans: [], oneoffs: [], trades: [], portfolios: [], cards: [], card_txs: [], prices: [], price_history: [],
-  categories: [], transactions: [], deposits: [], recurring_realized: [], statement_payments: [], settings: {}, recurring_amounts: [],
+  categories: [], transactions: [], deposits: [], recurring_realized: [], statement_payments: [], settings: {}, recurring_amounts: [], account_entries: [],
   ...over,
 });
 

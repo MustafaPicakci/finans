@@ -17,6 +17,7 @@
 - ✅ **Faz 6–9 tamamlandı (Temmuz 2026)** — yayın sonrası ürün derinleşmesi: portföy işlemini nakit hesaba bağlama + şifre sıfırlama/aktivasyon e-postaları (6), vadeli mevduat + Hesaplar sekmesi (7), düzenli kalem & kart ekstresi gerçekleştirme (8), düzenli kalem tutar zaman çizelgesi (9). Araya iki UI işi girdi: Nakit Haritası (likit nakit + runway) ve kenar çubuğu kabuğu + gizlilik modu.
 - ✅ **Faz 10–13 tamamlandı (Temmuz–Ağustos 2026)** — çok-kullanıcı onboarding (10) + giriş sürtünmesini azaltma (10.1) + toplu içe aktarma (10.2), portföy grupları (11), hareket geçmişi (12), değer grafiği aralıkları (13). Bkz. aşağıdaki bölümler.
 - ✅ **Faz 14 tamamlandı (Ağustos 2026)** — işlem kayıtlarının düzenlenmesi (gerçekleşen gelir/gider, plan kalemi, kart harcaması, portföy işlemi); bakiye etkisi atomik olarak düzeltilir.
+- ✅ **Faz 15 tamamlandı (Ağustos 2026)** — hesap hareket defteri (`account_entries`): bakiyeyi oynatan her şey iz bırakır, `balance = Σ hareketler` değişmez kuralı, Hesaplar sekmesinde yürüyen bakiyeli hareket listesi.
 - ⏳ **Açık iş (prod engelleyici): e-posta teslim edilebilirliği** — çok-kullanıcı kayıt açık ama prod'da SMTP = Gmail, aktivasyon postaları kurumsal alan adlarına ulaşmıyor (phishing sayılıp düşüyor). Gerçek kullanıcı almadan önce transactional sağlayıcı + kendi domain (SPF/DKIM/DMARC) şart; kod değişmiyor, yalnız env. Bkz. Faz 10 bölümü.
 
 ## Context (Neden)
@@ -440,6 +441,20 @@ Kapsam kararı: **işlem kayıtları** (`transactions`, `oneoffs`, `card_txs`, `
 - **Kural**: düzenleme kaydın türünü değiştirmez — gerçekleşen kaydın tarihini ileri almak onu plan kalemine çevirmez (plan→defter geçişi "Gerçekleşti" düğmesidir).
 
 Doğrulama: izole test DB'de (finans_edit_test) uçtan uca — tutar değişimi, hesap A→B taşıma, hesabı kaldırma, gider→gelir çevirme, silme; trade'de adet/yön/para birimi değişimi (TRY→USD'de eski TRY etkisi geri alınır, yenisi uygulanmaz) — bakiye her adımda beklenen değerde. Negatifler: yok olan id 404, eksik alan/bozuk JSON/NaN tutar 400, geçersiz portföy 400, **başka kullanıcının kaydı 404 + veri değişmiyor**. Playwright ile Rapor'da ✎ → önden dolu modal → tutar değişimi → API'de doğrulandı (konsol hatası yok). `pnpm build` temiz, 125 engine testi yeşil (engine'e dokunulmadı).
+
+## Faz 15 — Hesap hareket defteri ✅
+
+Sorun: `accounts.balance` tek bir sayıydı ve **altı ayrı akış** onu yerinde değiştiriyordu (işlem ekle/düzenle/sil/toplu içe aktar, portföy işlemi, mevduat açılışı, düzenli kalem gerçekleştirme, kart ekstresi ödemesi, elle bakiye düzeltmesi). Hiçbiri iz bırakmıyordu: bakiye gerçekle tutmadığında nerede kaydın kaçtığını bulmanın yolu yoktu, elle düzeltme ise tamamen görünmezdi.
+
+Karar: **gerçek defter** (türetilmiş görünüm değil). Yeni `account_entries` tablosu; değişmez kural **balance = Σ entries** (açılış bakiyesi de bir satır).
+
+- **Tek geçit**: bakiye yalnız `applyEntry` / `revertEntries` üzerinden değişir; hiçbir uçta doğrudan `UPDATE accounts SET balance` kalmadı. `revertEntries` eski tutarı yeniden hesaplamaz, **yazılmış** hareketi okur — düzenle/sil yollarındaki kayma sınıfı böyle kapanır. Düzenleme = revert + apply.
+- **accounts artık elle CRUD**: POST açılış bakiyesini 'acilis' hareketi yazar; PUT elle bakiye düzeltmesini **fark kadar** 'duzeltme' hareketi olarak deftere geçirir (eskiden izsiz sayı değişimiydi).
+- **Geriye dönük dolum** (`initDb`, bir kez, `settings.account_entries_backfilled` ile idempotent): mevcut transactions/trades/deposits'ten hareketler üretilir, **açıklanamayan kalan** hesabın açılış satırına yazılır → hiçbir bakiye değişmez ve kural ilk günden sağlanır. Dolum olmadan eski kayıtların silinmesi bakiyeyi kaydırırdı (geri alma artık deftere bakıyor).
+- **Engine** [accounts.ts](packages/engine/src/accounts.ts): `accountLedger` (yürüyen bakiye, yeniden eskiye), `ledgerDrift`, `ledgerSummary`. Aynı tarihte **açılış önce** gelir — dolumda açılışın id'si en büyük olduğundan id sırası "açılış = son bakiye" gibi saçma bir satır üretiyordu (Playwright'ta yakalandı).
+- **Arayüz**: Hesaplar sekmesinde hesap başına "Hareketler" — tarih, açıklama, tür rozeti, tutar ve o hareketten sonraki bakiye; giren/çıkan özeti; drift varsa uyarı (gizlenmez). Liste salt okunur: hareket kaynağından düzenlenir.
+
+Doğrulama: izole test DB'sinde her akış (açılış, işlem ekle/düzenle/sil, elle düzeltme, portföy alış + silme, mevduat açılış + silme) sonrası **balance = Σ entries** doğrulandı; dolum senaryosu (defter silinip sunucu yeniden başlatıldı) bakiyeleri birebir korudu ve yeniden başlatmada satır sayısı değişmedi (idempotent); çok-kiracılıkta başka kullanıcının hesabı 404 ve hareketleri görünmüyor. Playwright ile Hesaplar ekranı doğrulandı (konsol hatası yok). 134 engine testi (9 yeni), `pnpm build` temiz.
 
 ---
 

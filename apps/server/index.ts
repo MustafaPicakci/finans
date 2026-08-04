@@ -249,7 +249,7 @@ api.use("*", async (c, next) => {
 /* ---- tek seferde tüm veri (kullanıcıya scope'lu; prices/price_history GLOBAL) ---- */
 api.get("/all", async (c) => {
   const uid = c.get("user").id;
-  const [accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, autoPrices, userPrices, price_history, globalSettings, userSettings] =
+  const [accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, account_entries, autoPrices, userPrices, price_history, globalSettings, userSettings] =
     await Promise.all([
       db.all("SELECT * FROM accounts WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM recurring WHERE user_id=? ORDER BY day, id", uid),
@@ -265,6 +265,8 @@ api.get("/all", async (c) => {
       db.all("SELECT * FROM deposits WHERE user_id=? ORDER BY open_date, id", uid),
       db.all("SELECT recurring_id, ym FROM recurring_realized WHERE user_id=?", uid),
       db.all("SELECT card_id, due FROM statement_payments WHERE user_id=?", uid),
+      // Faz 15 — hesap hareket defteri: yeniden eskiye (yürüyen bakiye istemcide bugünden geriye çözülür)
+      db.all("SELECT * FROM account_entries WHERE user_id=? ORDER BY date DESC, id DESC", uid),
       db.all<any>("SELECT symbol, asset_type, price, source, updated_at, currency FROM prices"),
       db.all<any>("SELECT symbol, asset_type, price, updated_at, currency FROM user_prices WHERE user_id=?", uid),
       db.all("SELECT * FROM price_history ORDER BY date"),
@@ -275,7 +277,7 @@ api.get("/all", async (c) => {
   const pm = new Map<string, any>(autoPrices.map((p) => [`${p.asset_type}:${p.symbol}`, { ...p, source: "auto" }]));
   for (const up of userPrices) pm.set(`${up.asset_type}:${up.symbol}`, { ...up, source: "manual" });
   return c.json({
-    accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments,
+    accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, account_entries,
     prices: [...pm.values()], price_history,
     // global (fx/tefas) + kullanıcı ayarları (horizon/cash_funds); kullanıcı çakışmada kazanır
     settings: Object.fromEntries([...globalSettings, ...userSettings].map((s) => [s.key, s.value])),
@@ -317,7 +319,72 @@ function crud(route: string, table: string, cols: Col[]) {
   });
 }
 
-crud("accounts", "accounts", [{ name: "name", required: true }, { name: "balance" }]);
+/* ---- hesap hareket defteri (Faz 15) ----
+   Bakiyeyi değiştirmenin TEK yolu bu iki yardımcıdır; hiçbir uç doğrudan `UPDATE accounts SET balance`
+   yazmaz. Değişmez kural: **balance = Σ account_entries.amount** (açılış bakiyesi de bir satırdır).
+   `applyEntry` bakiyeyi oynatır + hareketi yazar; `revertEntries` kaynağın YAZILMIŞ hareketlerini
+   okuyup tersini uygular ve satırları siler — eski tutarı yeniden hesaplamaz, bu yüzden kaynak kaydı
+   düzenlenmiş/silinmiş olsa da geri alma her zaman tutar. Düzenleme = revert + apply. */
+type EntryMeta = { date: string; kind: "islem" | "portfoy" | "mevduat" | "duzeltme" | "acilis"; note: string; source_table?: string; source_id?: number };
+async function applyEntry(t: TxClient, uid: number, accountId: number | null, amount: number, m: EntryMeta): Promise<void> {
+  if (accountId == null || !amount) return; // hesapsız kayıt bakiyeye dokunmaz; 0 tutar defteri kirletmez
+  await t.run("UPDATE accounts SET balance = balance + ? WHERE id=? AND user_id=?", amount, accountId, uid);
+  await t.run(
+    "INSERT INTO account_entries (account_id,date,amount,kind,source_table,source_id,note,created_at,user_id) VALUES (?,?,?,?,?,?,?,?,?)",
+    accountId, m.date, amount, m.kind, m.source_table ?? null, m.source_id ?? null, m.note, nowLocal(), uid,
+  );
+}
+async function revertEntries(t: TxClient, uid: number, sourceTable: string, sourceId: number | string): Promise<void> {
+  const rows = await t.all<{ id: number; account_id: number; amount: number }>(
+    "SELECT id, account_id, amount FROM account_entries WHERE source_table=? AND source_id=? AND user_id=?",
+    sourceTable, sourceId, uid,
+  );
+  for (const r of rows) {
+    await t.run("UPDATE accounts SET balance = balance - ? WHERE id=? AND user_id=?", r.amount, r.account_id, uid);
+    await t.run("DELETE FROM account_entries WHERE id=? AND user_id=?", r.id, uid);
+  }
+}
+
+/* accounts: jenerik crud yerine elle — bakiye defterle birlikte yaşıyor. POST'ta açılış bakiyesi bir
+   'acilis' hareketi olur; PUT'ta elle bakiye düzeltmesi FARK kadar 'duzeltme' hareketi yazar (eskiden
+   izsiz bir sayı değişimiydi — "bakiyem neden tutmuyor" sorusunun cevabı buradaydı). */
+api.post("/accounts", async (c) => {
+  const b = await c.req.json().catch(() => null);
+  if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
+  if (!b.name) return c.json({ error: "name zorunlu" }, 400);
+  const uid = c.get("user").id;
+  const balance = Number(b.balance ?? 0);
+  if (!Number.isFinite(balance)) return c.json({ error: "geçersiz bakiye" }, 400);
+  const id = await db.tx(async (t) => {
+    const info = await t.run("INSERT INTO accounts (name,balance,user_id) VALUES (?,?,?) RETURNING id", b.name, 0, uid);
+    await applyEntry(t, uid, info.id ?? null, balance, { date: todayLocal(), kind: "acilis", note: "Açılış bakiyesi" });
+    return info.id;
+  });
+  return c.json({ id });
+});
+api.put("/accounts/:id", async (c) => {
+  const b = await c.req.json().catch(() => null);
+  if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
+  const uid = c.get("user").id, id = c.req.param("id");
+  const found = await db.tx(async (t) => {
+    const old = await t.get<{ balance: number }>("SELECT balance FROM accounts WHERE id=? AND user_id=?", id, uid);
+    if (!old) return false;
+    if (b.name !== undefined) await t.run("UPDATE accounts SET name=? WHERE id=? AND user_id=?", b.name, id, uid);
+    if (b.balance !== undefined) {
+      const next = Number(b.balance);
+      if (!Number.isFinite(next)) return false;
+      await applyEntry(t, uid, Number(id), next - old.balance, { date: todayLocal(), kind: "duzeltme", note: "Elle bakiye düzeltmesi" });
+    }
+    return true;
+  });
+  if (!found) return c.json({ error: "kayıt yok veya geçersiz değer" }, 404);
+  return c.json({ ok: true });
+});
+api.delete("/accounts/:id", async (c) => {
+  // account_entries FK'si ON DELETE CASCADE — hesabın hareketleri onunla gider
+  await db.run("DELETE FROM accounts WHERE id=? AND user_id=?", c.req.param("id"), c.get("user").id);
+  return c.json({ ok: true });
+});
 
 /* ---- recurring: elle yazılmış CRUD (Faz 9) ----
    Kimlik (recurring) ile tutar (recurring_amounts zaman çizelgesi) ayrı tablolarda yaşadığından
@@ -447,7 +514,7 @@ async function realizeOccurrence(
       "INSERT INTO transactions (date,name,amount,category_id,account_id,user_id) VALUES (?,?,?,?,?,?) RETURNING id",
       date, r.name, signed, categoryId, accountId, uid,
     );
-    if (accountId != null) await t.run("UPDATE accounts SET balance = balance + ? WHERE id=? AND user_id=?", signed, accountId, uid);
+    await applyEntry(t, uid, accountId, signed, { date, kind: "islem", note: r.name, source_table: "transactions", source_id: info.id });
     await t.run("UPDATE recurring_realized SET tx_id=? WHERE recurring_id=? AND ym=?", info.id, r.id, ym);
   }
   return true;
@@ -477,11 +544,8 @@ api.delete("/recurring/:id/realize/:ym", async (c) => {
     );
     if (!row) return;
     if (row.tx_id != null) {
-      const tx = await t.get<{ amount: number; account_id: number | null }>(
-        "SELECT amount, account_id FROM transactions WHERE id=? AND user_id=?", row.tx_id, uid,
-      );
+      await revertEntries(t, uid, "transactions", row.tx_id);
       await t.run("DELETE FROM transactions WHERE id=? AND user_id=?", row.tx_id, uid);
-      if (tx?.account_id != null) await t.run("UPDATE accounts SET balance = balance - ? WHERE id=? AND user_id=?", tx.amount, tx.account_id, uid);
     }
     if (row.card_tx_id != null) await t.run("DELETE FROM card_txs WHERE id=? AND user_id=?", row.card_tx_id, uid);
     await t.run("DELETE FROM recurring_realized WHERE recurring_id=? AND ym=? AND user_id=?", id, ym, uid);
@@ -523,7 +587,10 @@ api.post("/trades", async (c) => {
       "INSERT INTO trades (date,asset_type,symbol,side,qty,price,fee,currency,account_id,portfolio_id,user_id) VALUES (?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
       b.date, b.asset_type, b.symbol, b.side, qty, price, fee, currency, accountId, portfolioId, uid,
     );
-    if (affects) await t.run("UPDATE accounts SET balance = balance + ? WHERE id=? AND user_id=?", tradeBalanceDelta(b.side, qty, price, fee), accountId, uid);
+    if (affects) {
+      await applyEntry(t, uid, accountId, tradeBalanceDelta(b.side, qty, price, fee),
+        { date: b.date, kind: "portfoy", note: `${b.symbol} ${b.side}`, source_table: "trades", source_id: info.id });
+    }
     return info.id;
   });
   console.log(`[audit] Borsa işlemi eklendi: ${b.symbol} ${b.side} (adet: ${qty}, fiyat: ${price}, id:${uid})`);
@@ -568,15 +635,14 @@ api.put("/trades/:id", async (c) => {
       "SELECT side, qty, price, fee, currency, account_id FROM trades WHERE id=? AND user_id=?", id, uid,
     );
     if (!old) return false;
-    if (old.currency === "TRY" && old.account_id != null) {
-      await t.run("UPDATE accounts SET balance = balance - ? WHERE id=? AND user_id=?", tradeBalanceDelta(old.side, old.qty, old.price, old.fee), old.account_id, uid);
-    }
+    await revertEntries(t, uid, "trades", id);
     await t.run(
       "UPDATE trades SET date=?, asset_type=?, symbol=?, side=?, qty=?, price=?, fee=?, currency=?, account_id=?, portfolio_id=? WHERE id=? AND user_id=?",
       b.date, b.asset_type, b.symbol, b.side, qty, price, fee, currency, accountId, portfolioId, id, uid,
     );
-    if (currency === "TRY" && accountId != null) {
-      await t.run("UPDATE accounts SET balance = balance + ? WHERE id=? AND user_id=?", tradeBalanceDelta(b.side, qty, price, fee), accountId, uid);
+    if (currency === "TRY") {
+      await applyEntry(t, uid, accountId, tradeBalanceDelta(b.side, qty, price, fee),
+        { date: b.date, kind: "portfoy", note: `${b.symbol} ${b.side}`, source_table: "trades", source_id: Number(id) });
     }
     return true;
   });
@@ -587,13 +653,8 @@ api.put("/trades/:id", async (c) => {
 api.delete("/trades/:id", async (c) => {
   const uid = c.get("user").id;
   await db.tx(async (t) => {
-    const row = await t.get<{ side: string; qty: number; price: number; fee: number; currency: string; account_id: number | null }>(
-      "SELECT side, qty, price, fee, currency, account_id FROM trades WHERE id=? AND user_id=?", c.req.param("id"), uid,
-    );
+    await revertEntries(t, uid, "trades", c.req.param("id"));
     await t.run("DELETE FROM trades WHERE id=? AND user_id=?", c.req.param("id"), uid);
-    if (row && row.currency === "TRY" && row.account_id != null) {
-      await t.run("UPDATE accounts SET balance = balance - ? WHERE id=? AND user_id=?", tradeBalanceDelta(row.side, row.qty, row.price, row.fee), row.account_id, uid);
-    }
   });
   return c.json({ ok: true });
 });
@@ -617,7 +678,8 @@ api.post("/deposits", async (c) => {
       "INSERT INTO deposits (name,principal,rate,open_date,term_days,withholding,account_id,user_id) VALUES (?,?,?,?,?,?,?,?) RETURNING id",
       b.name, principal, rate, b.open_date, termDays, withholding, accountId, uid,
     );
-    if (accountId != null) await t.run("UPDATE accounts SET balance = balance - ? WHERE id=? AND user_id=?", principal, accountId, uid);
+    await applyEntry(t, uid, accountId, -principal,
+      { date: b.open_date, kind: "mevduat", note: `${b.name} (vadeli açılış)`, source_table: "deposits", source_id: info.id });
     return info.id;
   });
   console.log(`[audit] Vadeli hesap (mevduat) açıldı: ${b.name} (anapara: ${principal}, id:${uid})`);
@@ -627,11 +689,8 @@ api.post("/deposits", async (c) => {
 api.delete("/deposits/:id", async (c) => {
   const uid = c.get("user").id;
   await db.tx(async (t) => {
-    const row = await t.get<{ principal: number; account_id: number | null }>(
-      "SELECT principal, account_id FROM deposits WHERE id=? AND user_id=?", c.req.param("id"), uid,
-    );
+    await revertEntries(t, uid, "deposits", c.req.param("id"));
     await t.run("DELETE FROM deposits WHERE id=? AND user_id=?", c.req.param("id"), uid);
-    if (row && row.account_id != null) await t.run("UPDATE accounts SET balance = balance + ? WHERE id=? AND user_id=?", row.principal, row.account_id, uid);
   });
   return c.json({ ok: true });
 });
@@ -671,7 +730,8 @@ async function payStatementTx(
     "INSERT INTO transactions (date,name,amount,category_id,account_id,user_id) VALUES (?,?,?,?,?,?) RETURNING id",
     todayLocal(), `${card.name} ekstresi`, -amount, categoryId, accountId, uid,
   );
-  if (accountId != null) await t.run("UPDATE accounts SET balance = balance - ? WHERE id=? AND user_id=?", amount, accountId, uid);
+  await applyEntry(t, uid, accountId, -amount,
+    { date: todayLocal(), kind: "islem", note: `${card.name} ekstresi`, source_table: "transactions", source_id: info.id });
   await t.run("UPDATE statement_payments SET tx_id=? WHERE card_id=? AND due=?", info.id, card.id, dueK);
   return true;
 }
@@ -702,11 +762,8 @@ api.delete("/cards/:id/pay-statement/:due", async (c) => {
     );
     if (!row) return;
     if (row.tx_id != null) {
-      const tx = await t.get<{ amount: number; account_id: number | null }>(
-        "SELECT amount, account_id FROM transactions WHERE id=? AND user_id=?", row.tx_id, uid,
-      );
+      await revertEntries(t, uid, "transactions", row.tx_id);
       await t.run("DELETE FROM transactions WHERE id=? AND user_id=?", row.tx_id, uid);
-      if (tx?.account_id != null) await t.run("UPDATE accounts SET balance = balance - ? WHERE id=? AND user_id=?", tx.amount, tx.account_id, uid);
     }
     await t.run("DELETE FROM statement_payments WHERE card_id=? AND due=? AND user_id=?", cardId, due, uid);
   });
@@ -736,9 +793,8 @@ api.post("/transactions", async (c) => {
       "INSERT INTO transactions (date,name,amount,category_id,account_id,user_id) VALUES (?,?,?,?,?,?) RETURNING id",
       b.date, b.name, b.amount, b.category_id ?? null, b.account_id ?? null, uid,
     );
-    if (b.account_id != null) {
-      await t.run("UPDATE accounts SET balance = balance + ? WHERE id=? AND user_id=?", b.amount, b.account_id, uid);
-    }
+    await applyEntry(t, uid, b.account_id ?? null, Number(b.amount),
+      { date: b.date, kind: "islem", note: b.name, source_table: "transactions", source_id: info.id });
     return info.id;
   });
   console.log(`[audit] İşlem/Transfer eklendi: ${b.name} (tutar: ${b.amount}, id:${uid})`);
@@ -774,13 +830,12 @@ api.post("/transactions/bulk", async (c) => {
   }
   await db.tx(async (t) => {
     for (const r of rows) {
-      await t.run(
-        "INSERT INTO transactions (date,name,amount,category_id,account_id,user_id) VALUES (?,?,?,?,?,?)",
+      const info = await t.run(
+        "INSERT INTO transactions (date,name,amount,category_id,account_id,user_id) VALUES (?,?,?,?,?,?) RETURNING id",
         r.date, r.name, r.amount, r.category_id ?? null, r.account_id ?? null, uid,
       );
-      if (r.account_id != null) {
-        await t.run("UPDATE accounts SET balance = balance + ? WHERE id=? AND user_id=?", r.amount, r.account_id, uid);
-      }
+      await applyEntry(t, uid, r.account_id ?? null, r.amount,
+        { date: r.date, kind: "islem", note: r.name, source_table: "transactions", source_id: info.id });
     }
   });
   console.log(`[audit] Toplu içe aktarma: ${rows.length} kayıt (id:${uid})`);
@@ -807,16 +862,13 @@ api.put("/transactions/:id", async (c) => {
       "SELECT amount, account_id FROM transactions WHERE id=? AND user_id=?", id, uid,
     );
     if (!old) return false;
-    if (old.account_id != null) {
-      await t.run("UPDATE accounts SET balance = balance - ? WHERE id=? AND user_id=?", old.amount, old.account_id, uid);
-    }
+    await revertEntries(t, uid, "transactions", id);
     await t.run(
       "UPDATE transactions SET date=?, name=?, amount=?, category_id=?, account_id=? WHERE id=? AND user_id=?",
       b.date, b.name, amount, categoryId, accountId, id, uid,
     );
-    if (accountId != null) {
-      await t.run("UPDATE accounts SET balance = balance + ? WHERE id=? AND user_id=?", amount, accountId, uid);
-    }
+    await applyEntry(t, uid, accountId, amount,
+      { date: b.date, kind: "islem", note: b.name, source_table: "transactions", source_id: Number(id) });
     return true;
   });
   if (!found) return c.json({ error: "kayıt yok" }, 404);
@@ -826,13 +878,8 @@ api.put("/transactions/:id", async (c) => {
 api.delete("/transactions/:id", async (c) => {
   const uid = c.get("user").id;
   await db.tx(async (t) => {
-    const row = await t.get<{ amount: number; account_id: number | null }>(
-      "SELECT amount, account_id FROM transactions WHERE id=? AND user_id=?", c.req.param("id"), uid,
-    );
+    await revertEntries(t, uid, "transactions", c.req.param("id"));
     await t.run("DELETE FROM transactions WHERE id=? AND user_id=?", c.req.param("id"), uid);
-    if (row?.account_id != null) {
-      await t.run("UPDATE accounts SET balance = balance - ? WHERE id=? AND user_id=?", row.amount, row.account_id, uid);
-    }
   });
   return c.json({ ok: true });
 });
@@ -889,7 +936,7 @@ api.put("/settings", async (c) => {
 /* ---- KVKK: kullanıcının tüm verisini JSON indir ---- */
 api.get("/export", async (c) => {
   const uid = c.get("user").id;
-  const [accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, userSettings] =
+  const [accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, account_entries, userSettings] =
     await Promise.all([
       db.all("SELECT * FROM accounts WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM recurring WHERE user_id=? ORDER BY id", uid),
@@ -905,13 +952,14 @@ api.get("/export", async (c) => {
       db.all("SELECT * FROM deposits WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM recurring_realized WHERE user_id=? ORDER BY recurring_id, ym", uid),
       db.all("SELECT * FROM statement_payments WHERE user_id=? ORDER BY card_id, due", uid),
+      db.all("SELECT * FROM account_entries WHERE user_id=? ORDER BY id", uid),
       db.all<{ key: string; value: string }>("SELECT key, value FROM user_settings WHERE user_id=?", uid),
     ]);
   c.header("Content-Disposition", `attachment; filename="finans-export-${todayLocal()}.json"`);
   console.log(`[audit] Veri dışa aktarma (KVKK Export): (id:${uid})`);
   return c.json({
     exported_at: nowLocal(), user: c.get("user"),
-    accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments,
+    accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, account_entries,
     settings: Object.fromEntries(userSettings.map((s) => [s.key, s.value])),
   });
 });
