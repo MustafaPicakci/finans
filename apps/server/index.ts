@@ -308,14 +308,20 @@ function crud(route: string, table: string, cols: Col[]) {
     if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
     const names = cols.map((x) => x.name).filter((n) => b[n] !== undefined);
     if (!names.length) return c.json({ error: "boş" }, 400);
-    await db.run(
+    /* Faz 18 — etkilenen satır sayısı kontrol edilir. `WHERE ... AND user_id=?` başkasının (ya da
+       silinmiş bir) kaydını zaten değiştirmiyordu, ama uç yine de {ok:true} dönüyordu: arayüz
+       "kaydedildi" der, hiçbir şey değişmezdi. Tanım kayıtları Faz 18'de düzenlenebilir olduğundan
+       bu sessiz yalan artık kullanıcının gördüğü bir hataya dönüşürdü. */
+    const upd = await db.run(
       `UPDATE ${table} SET ${names.map((n) => `${n}=?`).join(",")} WHERE id=? AND user_id=?`,
       ...names.map((n) => b[n]), c.req.param("id"), c.get("user").id,
     );
+    if (!upd.changes) return c.json({ error: "kayıt yok" }, 404);
     return c.json({ ok: true });
   });
   api.delete(`/${route}/:id`, async (c) => {
-    await db.run(`DELETE FROM ${table} WHERE id=? AND user_id=?`, c.req.param("id"), c.get("user").id);
+    const del = await db.run(`DELETE FROM ${table} WHERE id=? AND user_id=?`, c.req.param("id"), c.get("user").id);
+    if (!del.changes) return c.json({ error: "kayıt yok" }, 404);
     return c.json({ ok: true });
   });
 }
@@ -778,7 +784,7 @@ api.delete("/trades/:id", async (c) => {
 });
 /* deposits (vadeli mevduat): jenerik crud yerine elle — trades gibi opsiyonel hesap yan etkisi var.
    account_id verilmişse açılış anaparayı hesaptan düşer; DELETE geri alır (anapara iadesi). İkisi atomik.
-   Faiz/vade net varlığa engine'de (depositValueOn) accrue eder; PUT yok (sil + yeniden ekle). */
+   Faiz/vade net varlığa engine'de (depositValueOn) accrue eder. PUT Faz 18'de eklendi (aşağıda). */
 api.post("/deposits", async (c) => {
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
@@ -802,6 +808,38 @@ api.post("/deposits", async (c) => {
   });
   console.log(`[audit] Vadeli hesap (mevduat) açıldı: ${b.name} (anapara: ${principal}, id:${uid})`);
   return c.json({ id });
+});
+
+/* Faz 18 — vadeli mevduat düzenleme. trades/transactions ile aynı desen: tek db.tx içinde eski
+   bakiye etkisi geri alınır (revertEntries YAZILMIŞ satırı okur, anaparayı yeniden hesaplamaz),
+   sonra yenisi uygulanır. Hesap değişse bile doğru: iki adım da kendi satırının account_id'sini
+   hedefler. Faiz/vade net varlığa engine'de accrue ettiğinden burada ek iş yok. */
+api.put("/deposits/:id", async (c) => {
+  const b = await c.req.json().catch(() => null);
+  if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
+  for (const f of ["name", "principal", "rate", "open_date", "term_days"])
+    if (b[f] === undefined || b[f] === "") return c.json({ error: `${f} zorunlu` }, 400);
+  const uid = c.get("user").id, id = Number(c.req.param("id"));
+  const principal = Number(b.principal), rate = Number(b.rate), termDays = Math.trunc(Number(b.term_days));
+  const withholding = Number(b.withholding ?? 0);
+  if (!(principal > 0) || !(termDays >= 1) || rate < 0 || withholding < 0 || withholding > 100)
+    return c.json({ error: "geçersiz değer" }, 400);
+  const accountId = b.account_id != null && b.account_id !== "" ? Number(b.account_id) : null;
+  const found = await db.tx(async (t) => {
+    const old = await t.get<{ id: number }>("SELECT id FROM deposits WHERE id=? AND user_id=?", id, uid);
+    if (!old) return false;
+    await revertEntries(t, uid, "deposits", id);
+    await t.run(
+      "UPDATE deposits SET name=?, principal=?, rate=?, open_date=?, term_days=?, withholding=?, account_id=? WHERE id=? AND user_id=?",
+      b.name, principal, rate, b.open_date, termDays, withholding, accountId, id, uid,
+    );
+    await applyEntry(t, uid, accountId, -principal,
+      { date: b.open_date, kind: "mevduat", note: `${b.name} (vadeli açılış)`, source_table: "deposits", source_id: id });
+    return true;
+  });
+  if (!found) return c.json({ error: "kayıt yok" }, 404);
+  console.log(`[audit] Vadeli hesap düzenlendi: ${b.name} (anapara: ${principal}, id:${uid})`);
+  return c.json({ ok: true });
 });
 
 api.delete("/deposits/:id", async (c) => {

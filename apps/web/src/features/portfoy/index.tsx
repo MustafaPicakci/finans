@@ -273,10 +273,27 @@ function PortfolioManager({ data, rates, ccy, reload, groupValue }: {
       {data.portfolios.length === 0 && <Empty>Henüz portföy yok. Ekleyince işlem formunda seçilebilir olur.</Empty>}
       {data.portfolios.map((p, i, arr) => (
         <Row key={p.id} last={i === arr.length - 1}>
-          <span style={{ flex: 1, fontSize: 13 }}>
-            <b>{p.name}</b>
-            {p.note && <span style={{ color: T.mut, fontSize: 12, marginLeft: 8 }}>{p.note}</span>}
-            <span style={{ color: T.mut3, fontSize: 11, marginLeft: 8 }}>{count(p.id)} işlem</span>
+          {/* Faz 18: ad ve not satır içinde düzenlenir (sil+yeniden ekle işlemleri Gruplanmamış'a
+              düşürür, yani grubu yeniden kurmak elle yeniden atama demek olurdu). */}
+          <span style={{ flex: 1, fontSize: 13, display: "flex", gap: 6, alignItems: "center", minWidth: 0 }}>
+            <input style={{ ...css.input, fontWeight: 700, fontSize: 13, padding: "3px 6px", border: "1px solid transparent", background: "transparent", width: 130 }}
+              defaultValue={p.name} key={`n${p.name}`} title="Portföy adı (düzenlemek için tıkla)"
+              onFocus={(e) => { e.target.style.borderColor = T.line; e.target.style.background = T.panel2; }}
+              onBlur={async (e) => {
+                e.target.style.borderColor = "transparent"; e.target.style.background = "transparent";
+                const v = e.target.value.trim();
+                if (v && v !== p.name) { await api.put(`portfolios/${p.id}`, { name: v }); reload(); }
+                else e.target.value = p.name;
+              }} />
+            <input style={{ ...css.input, color: T.mut, fontSize: 12, padding: "3px 6px", border: "1px solid transparent", background: "transparent", flex: 1, minWidth: 60 }}
+              defaultValue={p.note ?? ""} key={`t${p.note ?? ""}`} placeholder="not ekle…" title="Not"
+              onFocus={(e) => { e.target.style.borderColor = T.line; e.target.style.background = T.panel2; }}
+              onBlur={async (e) => {
+                e.target.style.borderColor = "transparent"; e.target.style.background = "transparent";
+                const v = e.target.value.trim();
+                if (v !== (p.note ?? "")) { await api.put(`portfolios/${p.id}`, { note: v || null }); reload(); }
+              }} />
+            <span style={{ color: T.mut3, fontSize: 11, whiteSpace: "nowrap" }}>{count(p.id)} işlem</span>
           </span>
           <span style={{ ...css.mono, fontSize: 13 }}>{fmtMoney(Math.round(convert(groupValue(p.id), "TRY", ccy, rates)), ccy)}</span>
           <button style={css.del} title="Portföyü sil (işlemler Gruplanmamış'a döner)"

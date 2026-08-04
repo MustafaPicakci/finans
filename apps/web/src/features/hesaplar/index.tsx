@@ -44,7 +44,7 @@ export function Hesaplar({ data, reload, user, onAccountDeleted }: {
 
     <VadesizHesaplar data={data} reload={reload} />
     <Transferler data={data} reload={reload} onEdit={setEditing} />
-    <VadeliMevduat data={data} reload={reload} />
+    <VadeliMevduat data={data} reload={reload} onEdit={setEditing} />
     <HesapKvkk user={user} onDeleted={onAccountDeleted} />
     {editing && <EditSheet data={data} target={editing} reload={reload} onClose={() => setEditing(null)} />}
   </>);
@@ -133,7 +133,17 @@ function VadesizHesaplar({ data, reload }: { data: AllData; reload: () => void }
                 placeItems: "center", fontSize: 13, color: KIND_COLOR[kind], flexShrink: 0,
               }}>{KIND_ICON[kind]}</span>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 14 }}>{a.name}</div>
+                {/* Faz 18: ad satır içinde düzenlenir — sil+yeniden ekle hesabın TÜM hareketlerini
+                    (CASCADE) götürürdü, yani adı düzeltmek defteri yok etmek anlamına gelirdi. */}
+                <input style={{ ...css.input, padding: "3px 6px", fontSize: 14, border: "1px solid transparent", background: "transparent" }}
+                  defaultValue={a.name} key={a.name} title="Hesap adı (düzenlemek için tıkla)"
+                  onFocus={(e) => { e.target.style.borderColor = T.line; e.target.style.background = T.panel2; }}
+                  onBlur={async (e) => {
+                    e.target.style.borderColor = "transparent"; e.target.style.background = "transparent";
+                    const v = e.target.value.trim();
+                    if (v && v !== a.name) { await api.put(`accounts/${a.id}`, { name: v }); reload(); }
+                    else e.target.value = a.name;
+                  }} />
                 <div style={{ fontSize: 11, color: st === "bayat" ? T.warn : T.mut3 }}>
                   {ACCOUNT_KIND_LABEL[kind]} ·{" "}
                   {st === "hic" ? "henüz doğrulanmadı"
@@ -303,7 +313,7 @@ function HesapHareketleri({ data, account }: { data: AllData; account: AllData["
 /* ————— VADELİ MEVDUAT — liste + vade kapatma ————— */
 /* Ekleme global "+ Ekle"den; burada listeleme/silme + vade dolunca "Hesaba geçir".
    Değer net varlığa engine'de accrue eder (kilitli varlık); silme bağlı hesaba anaparayı iade eder. */
-function VadeliMevduat({ data, reload }: { data: AllData; reload: () => void }) {
+function VadeliMevduat({ data, reload, onEdit }: { data: AllData; reload: () => void; onEdit: (t: EditTarget) => void }) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   /* vade kapatma: bağlı hesaba net faizi gelir olarak işle, sonra mevduatı sil (anapara iadesi) → hesap += vade değeri, Rapor'a faiz girer */
   const close = async (d: AllData["deposits"][number]) => {
@@ -351,6 +361,7 @@ function VadeliMevduat({ data, reload }: { data: AllData; reload: () => void }) 
                 title="Net faizi hesaba gelir olarak işle, anaparayı iade et ve mevduatı kapat"
                 onClick={() => close(d)}>Hesaba geçir</button>
             )}
+            <button style={css.edit} title="Mevduatı düzenle" onClick={() => onEdit({ kind: "deposit", row: d })}>✎</button>
             <button style={css.del} title={d.account_id != null ? "Sil (anapara bağlı hesaba iade edilir)" : "Sil"}
               onClick={async () => { await api.del("deposits", d.id); reload(); }}>✕</button>
           </Row>

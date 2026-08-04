@@ -1,7 +1,7 @@
 import React from "react";
 import type { AllData } from "@finans/engine";
 import { Modal } from "./ui";
-import { KalemForm, CardTxForm, TradeForm, TransferForm, type EditTarget } from "./features/forms";
+import { KalemForm, CardTxForm, TradeForm, TransferForm, RecurringForm, LoanForm, DepositForm, type EditTarget } from "./features/forms";
 
 export type { EditTarget };
 
@@ -17,6 +17,9 @@ const TITLES: Record<EditTarget["kind"], string> = {
   cardtx: "Kart Harcamasını Düzenle",
   trade: "Portföy İşlemini Düzenle",
   transfer: "Transferi Düzenle",
+  recurring: "Düzenli Kalemi Düzenle",
+  loan: "Krediyi Düzenle",
+  deposit: "Vadeli Mevduatı Düzenle",
 };
 
 export function EditSheet({ data, target, onClose, reload }: {
@@ -29,6 +32,9 @@ export function EditSheet({ data, target, onClose, reload }: {
       {target.kind === "cardtx" && <CardTxForm {...props} edit={target.row} />}
       {target.kind === "trade" && <TradeForm {...props} edit={target.row} />}
       {target.kind === "transfer" && <TransferForm {...props} edit={target.row} />}
+      {target.kind === "recurring" && <RecurringForm {...props} edit={target.row} />}
+      {target.kind === "loan" && <LoanForm {...props} edit={target.row} />}
+      {target.kind === "deposit" && <DepositForm {...props} edit={target.row} />}
     </Modal>
   );
 }

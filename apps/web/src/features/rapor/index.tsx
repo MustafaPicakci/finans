@@ -161,8 +161,23 @@ export function Rapor({ data, reload }: { data: AllData; reload: () => void }) {
       {data.categories.map((c, i) => (
         <Row key={c.id} last={i === data.categories.length - 1}>
           <span style={{ color: catColor(c.id), fontSize: 12 }}>●</span>
-          <span style={{ flex: 1, fontSize: 13 }}>{c.name}</span>
-          <span style={{ fontSize: 11, color: T.mut }}>{c.kind === "income" ? "gelir" : "gider"}</span>
+          {/* Faz 18: ad ve tür satır içinde düzenlenir. Sil+yeniden ekle, kategoriye bağlı tüm
+              işlemlerin category_id'sini NULL'a düşürürdü (ON DELETE SET NULL) — yani bir yazım
+              hatasını düzeltmek geçmiş raporlamayı silmek olurdu. */}
+          <input style={{ ...css.input, flex: 1, fontSize: 13, padding: "3px 6px", border: "1px solid transparent", background: "transparent" }}
+            defaultValue={c.name} key={c.name} title="Kategori adı (düzenlemek için tıkla)"
+            onFocus={(e) => { e.target.style.borderColor = T.line; e.target.style.background = T.panel2; }}
+            onBlur={async (e) => {
+              e.target.style.borderColor = "transparent"; e.target.style.background = "transparent";
+              const v = e.target.value.trim();
+              if (v && v !== c.name) { await api.put(`categories/${c.id}`, { name: v }); reload(); }
+              else e.target.value = c.name;
+            }} />
+          <select style={{ ...css.input, width: "auto", padding: "3px 6px", fontSize: 11 }} value={c.kind}
+            title="Kategori türü"
+            onChange={async (e) => { await api.put(`categories/${c.id}`, { kind: e.target.value }); reload(); }}>
+            <option value="expense">gider</option><option value="income">gelir</option>
+          </select>
           <button style={css.del} onClick={async () => { await api.del("categories", c.id); reload(); }}>✕</button>
         </Row>
       ))}

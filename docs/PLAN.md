@@ -20,6 +20,7 @@
 - ✅ **Faz 15 tamamlandı (Ağustos 2026)** — hesap hareket defteri (`account_entries`): bakiyeyi oynatan her şey iz bırakır, `balance = Σ hareketler` değişmez kuralı, Hesaplar sekmesinde yürüyen bakiyeli hareket listesi.
 - ✅ **Faz 16 tamamlandı (Ağustos 2026)** — virman (`transfers`) + hesap türleri (banka/nakit/aracı/fon) + mutabakat: kendi hesapların arası para hareketi tek kayıtta iki bacak yazar, nakit ve aracı kurum da hesap olduğundan para sistemden çıkmaz, "Doğrula" ile gerçek bakiye deftere sabitlenir.
 - ✅ **Faz 17 tamamlandı (Ağustos 2026, kısmi kapsam)** — fon girişinde tutar modu (adet NAV'dan türetilir) + ödeme öncesi "fon boz" önerisi. Fon mutabakatı (kayma düzeltme) bilinçli olarak **ertelendi** — kayma görünür hale gelince eklenecek.
+- ✅ **Faz 18 tamamlandı (Ağustos 2026)** — tanım kayıtlarının düzenlenmesi (hesap adı, kart, kredi, kategori, portföy grubu, vadeli mevduat, düzenli kalem kimliği); `crud()` PUT/DELETE artık eşleşen satır yoksa 404 döner.
 - ⏳ **Açık iş (prod engelleyici): e-posta teslim edilebilirliği** — çok-kullanıcı kayıt açık ama prod'da SMTP = Gmail, aktivasyon postaları kurumsal alan adlarına ulaşmıyor (phishing sayılıp düşüyor). Gerçek kullanıcı almadan önce transactional sağlayıcı + kendi domain (SPF/DKIM/DMARC) şart; kod değişmiyor, yalnız env. Bkz. Faz 10 bölümü.
 
 ## Context (Neden)
@@ -492,6 +493,17 @@ Sorun: kullanıcının **en sık yaptığı** işlem (maaşı para piyasası fon
 - **Kapsam dışı bırakıldı**: fon mutabakatı. TEFAS NAV'ı T-1 olduğundan türetilen adet küçük bir hata taşır ve aylar içinde gerçek fon bakiyesinden ayrışabilir. Kayma ölçülebilir hale gelince Faz 16'daki mutabakat deseni fona uygulanacak (fark = `account_id=null` bir düzeltme işlemi → pozisyonu düzeltir, bakiyeye dokunmaz).
 
 Doğrulama: izole test DB'sinde (`finans_faz17_test`) gerçek akış — NAV 0,043210 ile 50.000 ₺ ALIŞ → hesap **tam 0**; 12.400 ₺ hedefli SATIŞ → hesap **tam 12.400**; komisyonlu (25 ₺) 5.000 ₺ hedefli satış → **tam 17.400**, `balance = Σ entries` korundu. Öneri, API'den çekilen gerçek `AllData` üzerinde `project()` ile: ilk eksi gün 7 Ağustos (−12.600) iken **en derin** 9 Ağustos (−20.600) seçildi, `sellBy` = 6 Ağustos, türetilen adet 20.600,00 ₺ getirdi, satış sonrası minimum nakit **0**. Karşılanamayan açık senaryosunda tutar fonun tamamına (32.575 ₺) sabitlendi, `covered:false`, kalan açık gizlenmedi. Kullanıcıya özel elle fiyat (`user_prices`) merge'i de bu akışta doğrulandı. `pnpm build` temiz, 158 engine testi yeşil (18 yeni).
+
+## Faz 18 — Tanım kayıtlarının düzenlenmesi ✅
+
+Faz 14 *işlem* kayıtlarını düzenlenebilir yaptı; *tanım* kayıtları (hesap, kart, kredi, kategori, portföy grubu, vadeli mevduat, düzenli kalem) hâlâ "sil + yeniden ekle" idi. Bu tanımlarda o alternatif **yıkıcıydı**: bir kartı silmek tüm harcamalarını (`card_txs`, CASCADE), bir kategoriyi silmek tüm işlemlerin kategorisini (`ON DELETE SET NULL`), bir hesabı silmek tüm hareket defterini götürüyordu. Yani bir yazım hatasını düzeltmek geçmişi silmek anlamına geliyordu.
+
+- **Sunucu**: PUT uçlarının çoğu jenerik `crud()` sayesinde zaten vardı; eksik olan tek şey `PUT /api/deposits/:id` idi (bakiye yan etkisi olduğundan elle yazıldı — trades/transactions ile aynı desen: tek `db.tx` içinde `revertEntries` + `applyEntry`, hesap değişse bile doğru).
+- **Yol ikiye ayrıldı, "nerede eklendiyse orada düzenlenir" kuralıyla**: global "+ Ekle" formu olan tanımlar (kredi, mevduat, düzenli kalem) Faz 14'ün `EditSheet` desenini kullanır — aynı form `edit` prop'uyla açılır; kendi sekmesinde tanımlananlar (hesap adı, kart, kategori, portföy grubu) **satır içinde** düzenlenir, çünkü ekleme formları da zaten orada.
+- **Düzenli kalemde tutar yoktur**: kimlik (`recurring`) ile tutar (`recurring_amounts` zaman çizelgesi) Faz 9'da bilinçli ayrılmıştı. Tutarı buradan değiştirmek geçmiş projeksiyonu geriye dönük bozardı; form bunu açıkça söyleyip Plan'daki "Değiştir" akışına yönlendirir.
+- **`crud()` artık dürüst**: PUT/DELETE etkilenen satır sayısını kontrol eder, eşleşme yoksa **404** döner. `WHERE ... AND user_id=?` başkasının kaydını zaten değiştirmiyordu (güvenlik açığı yoktu), ama uç `{ok:true}` dönüyordu — arayüz "kaydedildi" der, hiçbir şey değişmezdi. Tanımlar düzenlenebilir olunca bu sessiz yalan kullanıcının göreceği bir hataya dönüşürdü.
+
+Doğrulama: izole test DB'sinde (`finans_faz18_test`) mevduat aç → düzenle (anapara 30.000→45.000 **ve** hesap Garanti→Akbank) → sil: bakiyeler her adımda beklenen değerde (100.000/50.000 → 70.000/50.000 → 100.000/5.000 → 100.000/50.000), `balance = Σ entries` korundu. Kredi/kart/kategori/portföy/düzenli kalem PUT'ları alanları güncelledi; **düzenli kalemin tutarı (80.000) identity PUT'unda değişmedi**. Negatifler: olmayan kayıt 404, anapara 0 / vade 0 / stopaj %150 → 400, eksik alan 400, bozuk JSON 400, oturumsuz 401. Çok kiracılık: ikinci kullanıcı yedi tanım ucunun hepsinde **404** aldı ve birinci kullanıcının verisi bit bit aynı kaldı. `pnpm build` temiz, 158 engine testi yeşil (engine'e dokunulmadı).
 
 ---
 

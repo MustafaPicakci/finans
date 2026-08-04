@@ -102,6 +102,8 @@ export function Plan({ data, reload, onRealize }: { data: AllData; reload: () =>
                 onClick={() => { setChanging(changing?.id === r.id ? null : r); setChVal({ amount: String(amountNow || ""), from_month: curYm }); }}>
                 Değiştir
               </button>
+              <button style={css.edit} title="Kalemi düzenle (ad/gün/hedef/pencere — tutar “Değiştir”den)"
+                onClick={() => setEditing({ kind: "recurring", row: r })}>✎</button>
               <button style={css.del} onClick={async () => { await api.del("recurring", r.id); reload(); }}>✕</button>
             </div>
             {realizing === r.id && !hasTarget && (
@@ -191,6 +193,7 @@ export function Plan({ data, reload, onRealize }: { data: AllData; reload: () =>
               </div>
             </div>
             <span style={{ ...css.mono, color: rem ? T.neg : T.mut, fontSize: 14 }}>{tl.format(l.amount)}/ay</span>
+            <button style={css.edit} title="Krediyi düzenle" onClick={() => setEditing({ kind: "loan", row: l })}>✎</button>
             <button style={css.del} onClick={async () => { await api.del("loans", l.id); reload(); }}>✕</button>
           </Row>
         );

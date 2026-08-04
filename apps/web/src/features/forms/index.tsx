@@ -3,7 +3,7 @@ import {
   todayStr, num, fmtD, qtyFromAmount, amountFromQty,
   depositMaturity, depositGrossInterest, depositNetInterest, depositMaturityValue,
   type AllData, type AssetType, type CardTx, type Currency, type Deposit, type OneOff, type Recurring,
-  type Trade, type Transaction, type Transfer,
+  type Trade, type Transaction, type Transfer, type Loan,
 } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, fmtMoney, TYPE_HINT } from "../../theme";
@@ -41,7 +41,14 @@ export type EditTarget =
   | { kind: "oneoff"; row: OneOff }
   | { kind: "cardtx"; row: CardTx }
   | { kind: "trade"; row: Trade }
-  | { kind: "transfer"; row: Transfer };
+  | { kind: "transfer"; row: Transfer }
+  /* Faz 18 — TANIM kayıtları. İşlem kayıtlarından farkı: bunların "sil + yeniden ekle" alternatifi
+     yıkıcıydı (bağlı işlemler `ON DELETE SET NULL`/CASCADE ile kopar ya da silinir). Kredi/mevduat
+     gibi tanımlar global "+ Ekle" formlarına sahip olduğundan aynı formlar `edit` ile açılır;
+     kart/kategori/portföy/hesap gibi kendi sekmesinde tanımlananlar satır içinde düzenlenir. */
+  | { kind: "recurring"; row: Recurring }
+  | { kind: "loan"; row: Loan }
+  | { kind: "deposit"; row: Deposit };
 
 /** Kaydet (kapat) + Kaydet-yeni-ekle buton çifti; düzenlemede tek "Kaydet" kalır */
 function SaveButtons({ ok, reason, onSaveNew, editing }: { ok: boolean; reason: string | null; onSaveNew: () => void; editing?: boolean }) {
@@ -232,25 +239,39 @@ export function CardTxForm({ data, reload, onClose, prefill, edit }: FormProps &
 /** Düzenli gelir/gider → her ay tekrarlar, nakit projeksiyonuna girer.
     Opsiyonel hedef (hesap veya kart) bağlanırsa günü gelince Plan'dan "Gerçekleşti" ile (veya "otomatik"
     açıksa cron ile) gerçek kayda dönüşür: hesap → transactions (bakiye+Rapor), kart → o ayki ekstreye. */
-export function RecurringForm({ data, reload, onClose }: FormProps) {
-  const [rec, setRec] = useState({
-    kind: "income" as Recurring["kind"], name: "", amount: "", day: "", from_month: "", to_month: "",
-    target: "", category_id: "", auto: false, // target: "" | "acc:<id>" | "card:<id>"
-  });
+export function RecurringForm({ data, reload, onClose, edit }: FormProps & { edit?: Recurring }) {
+  /* Faz 18 — düzenlemede TUTAR yoktur: kimlik (`recurring`) ile tutar (`recurring_amounts` zaman
+     çizelgesi) Faz 9'da bilinçli olarak ayrıldı. Tutarı buradan değiştirmek geçmiş projeksiyonu
+     geriye dönük bozardı; doğru yol Plan'daki "Değiştir" (seçilen aydan itibaren yeni tutar satırı). */
+  const [rec, setRec] = useState(() => edit
+    ? {
+      kind: edit.kind, name: edit.name, amount: "", day: String(edit.day),
+      from_month: edit.from_month ?? "", to_month: edit.to_month ?? "",
+      target: edit.account_id != null ? `acc:${edit.account_id}` : edit.card_id != null ? `card:${edit.card_id}` : "",
+      category_id: edit.category_id != null ? String(edit.category_id) : "", auto: !!edit.auto,
+    }
+    : {
+      kind: "income" as Recurring["kind"], name: "", amount: "", day: "", from_month: "", to_month: "",
+      target: "", category_id: "", auto: false, // target: "" | "acc:<id>" | "card:<id>"
+    });
   const nameRef = useRef<HTMLInputElement>(null);
-  const ok = !!rec.name && num(rec.amount) > 0 && +rec.day >= 1 && +rec.day <= 31;
-  const reason = !rec.name ? "Ad gerekli" : !(num(rec.amount) > 0) ? "Tutar 0'dan büyük olmalı" : !(+rec.day >= 1 && +rec.day <= 31) ? "Gün 1-31 arası olmalı" : null;
+  const ok = !!rec.name && (edit ? true : num(rec.amount) > 0) && +rec.day >= 1 && +rec.day <= 31;
+  const reason = !rec.name ? "Ad gerekli"
+    : !edit && !(num(rec.amount) > 0) ? "Tutar 0'dan büyük olmalı"
+      : !(+rec.day >= 1 && +rec.day <= 31) ? "Gün 1-31 arası olmalı" : null;
   const isAcc = rec.target.startsWith("acc:");
   const cats = data.categories.filter((c) => c.kind === rec.kind);
   const save = async (andNew: boolean) => {
     if (!ok) return;
     const account_id = rec.target.startsWith("acc:") ? +rec.target.slice(4) : null;
     const card_id = rec.target.startsWith("card:") ? +rec.target.slice(5) : null;
-    await api.post("recurring", {
-      kind: rec.kind, name: rec.name, amount: num(rec.amount), day: +rec.day,
+    const idCols = {
+      kind: rec.kind, name: rec.name, day: +rec.day,
       from_month: rec.from_month || null, to_month: rec.to_month || null,
       account_id, card_id, category_id: account_id && rec.category_id ? +rec.category_id : null, auto: rec.auto,
-    });
+    };
+    if (edit) { await api.put(`recurring/${edit.id}`, idCols); reload(); onClose(); return; }
+    await api.post("recurring", { ...idCols, amount: num(rec.amount) });
     reload();
     if (andNew) { setRec({ ...rec, name: "", amount: "", day: "" }); nameRef.current?.focus(); } else onClose();
   };
@@ -264,7 +285,7 @@ export function RecurringForm({ data, reload, onClose }: FormProps) {
           </select>
         </Field>
         <Field label="Ad" flex={2}><input ref={nameRef} autoFocus style={css.input} value={rec.name} placeholder="örn. Maaş" onChange={(e) => setRec({ ...rec, name: e.target.value })} /></Field>
-        <AmountField label="Tutar (TL)" value={rec.amount} onChange={(v) => setRec({ ...rec, amount: v })} />
+        {!edit && <AmountField label="Tutar (TL)" value={rec.amount} onChange={(v) => setRec({ ...rec, amount: v })} />}
         <Field label="Gün (1-31)"><input style={css.input} inputMode="numeric" placeholder="1" value={rec.day} onChange={(e) => setRec({ ...rec, day: e.target.value })} /></Field>
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
@@ -302,20 +323,31 @@ export function RecurringForm({ data, reload, onClose }: FormProps) {
             : "Hesap hedefi: gerçekleşince seçili hesabın bakiyesine işler ve Rapor'a girer."}
         {rec.target && " Günü gelince Plan'dan “Gerçekleşti” ile, otomatik açıksa kendiliğinden işlenir."}
       </div>
-      <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} />
+      {edit && (
+        <div style={{ fontSize: 12, color: T.mut, marginTop: 8, background: T.panel2, borderRadius: 8, padding: "8px 12px" }}>
+          <b>Tutar burada değişmez.</b> Tutar bir zaman çizelgesinde yaşar; buradan değiştirmek geçmiş
+          projeksiyonu da geriye dönük bozardı. Plan'daki <b>“Değiştir”</b> ile seçtiğin aydan itibaren
+          yeni tutar geçerli olur, öncesi eski tutarla korunur.
+        </div>
+      )}
+      <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} editing={!!edit} />
     </form>
   );
 }
 
 /** Kredi/taksit → kalan taksitler nakit projeksiyonuna girer */
-export function LoanForm({ reload, onClose }: FormProps) {
-  const [f, setF] = useState({ name: "", amount: "", first_date: todayStr(), total: "" });
+export function LoanForm({ reload, onClose, edit }: FormProps & { edit?: Loan }) {
+  const [f, setF] = useState(() => edit
+    ? { name: edit.name, amount: String(edit.amount), first_date: edit.first_date, total: String(edit.total) }
+    : { name: "", amount: "", first_date: todayStr(), total: "" });
   const nameRef = useRef<HTMLInputElement>(null);
   const ok = !!f.name && num(f.amount) > 0 && !!f.first_date && +f.total >= 1;
   const reason = !f.name ? "Ad gerekli" : !(num(f.amount) > 0) ? "Aylık taksit 0'dan büyük olmalı" : !(+f.total >= 1) ? "Toplam taksit en az 1 olmalı" : null;
   const save = async (andNew: boolean) => {
     if (!ok) return;
-    await api.post("loans", { name: f.name, amount: num(f.amount), first_date: f.first_date, total: +f.total });
+    const body = { name: f.name, amount: num(f.amount), first_date: f.first_date, total: +f.total };
+    if (edit) { await api.put(`loans/${edit.id}`, body); reload(); onClose(); return; }
+    await api.post("loans", body);
     reload();
     if (andNew) { setF({ name: "", amount: "", first_date: f.first_date, total: "" }); nameRef.current?.focus(); } else onClose();
   };
@@ -327,16 +359,26 @@ export function LoanForm({ reload, onClose }: FormProps) {
         <Field label="İlk taksit tarihi"><input type="date" style={css.input} value={f.first_date} onChange={(e) => setF({ ...f, first_date: e.target.value })} /></Field>
         <Field label="Toplam taksit"><input style={css.input} inputMode="numeric" placeholder="12" value={f.total} onChange={(e) => setF({ ...f, total: e.target.value })} /></Field>
       </div>
-      <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} />
+      {edit && (
+        <div style={{ fontSize: 12, color: T.mut, marginTop: 8, background: T.panel2, borderRadius: 8, padding: "8px 12px" }}>
+          Kalan taksit sayısı ilk taksit tarihi + toplamdan hesaplanır (elle tutulmaz), bu yüzden
+          düzenleme kalan borcu ve projeksiyonu anında düzeltir.
+        </div>
+      )}
+      <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} editing={!!edit} />
     </form>
   );
 }
 
 /** Vadeli mevduat → net varlığa "kilitli varlık" olarak accrue eder; opsiyonel hesaptan anapara düşer */
-export function DepositForm({ data, reload, onClose }: FormProps) {
-  const [f, setF] = useState({
-    name: "", principal: "", rate: "", term_days: "", withholding: "", open_date: todayStr(), account_id: "",
-  });
+export function DepositForm({ data, reload, onClose, edit }: FormProps & { edit?: Deposit }) {
+  const [f, setF] = useState(() => edit
+    ? {
+      name: edit.name, principal: String(edit.principal), rate: String(edit.rate),
+      term_days: String(edit.term_days), withholding: edit.withholding ? String(edit.withholding) : "",
+      open_date: edit.open_date, account_id: edit.account_id != null ? String(edit.account_id) : "",
+    }
+    : { name: "", principal: "", rate: "", term_days: "", withholding: "", open_date: todayStr(), account_id: "" });
   const nameRef = useRef<HTMLInputElement>(null);
   const ok = !!f.name && num(f.principal) > 0 && num(f.rate) >= 0 && +f.term_days >= 1 && !!f.open_date;
   const reason = !f.name ? "Ad gerekli" : !(num(f.principal) > 0) ? "Anapara 0'dan büyük olmalı"
@@ -348,11 +390,13 @@ export function DepositForm({ data, reload, onClose }: FormProps) {
   } : null;
   const save = async (andNew: boolean) => {
     if (!ok) return;
-    await api.post("deposits", {
+    const body = {
       name: f.name, principal: num(f.principal), rate: num(f.rate), open_date: f.open_date,
       term_days: +f.term_days, withholding: num(f.withholding),
       account_id: f.account_id ? +f.account_id : null,
-    });
+    };
+    if (edit) { await api.put(`deposits/${edit.id}`, body); reload(); onClose(); return; }
+    await api.post("deposits", body);
     reload();
     if (andNew) { setF({ ...f, name: "", principal: "", rate: "", term_days: "" }); nameRef.current?.focus(); } else onClose();
   };
@@ -386,7 +430,13 @@ export function DepositForm({ data, reload, onClose }: FormProps) {
           {acc && <div><b>{acc.name}</b> bakiyesinden <span style={{ color: T.neg }}>−{fmtMoney(num(f.principal), "TRY", true)}</span> düşülür (silinirse geri döner)</div>}
         </div>
       )}
-      <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} />
+      {edit && (
+        <div style={{ fontSize: 12, color: T.mut, marginTop: 8, background: T.panel2, borderRadius: 8, padding: "8px 12px" }}>
+          Mevduat düzenleniyor: hesaba olan anapara etkisi otomatik düzeltilir (eskisi geri alınır,
+          yenisi işlenir) — hesabı değiştirsen bile doğru. Faiz ve vade değeri yeni değerlerden hesaplanır.
+        </div>
+      )}
+      <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} editing={!!edit} />
     </form>
   );
 }

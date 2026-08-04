@@ -41,6 +41,11 @@ export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => 
   const [paying, setPaying] = useState<{ cardId: number; dueK: string; amount: number } | null>(null);
   const [pp, setPp] = useState({ account_id: "", category_id: "" });
   const [editing, setEditing] = useState<EditTarget | null>(null);
+  /** Satır içi kart düzenleme (Faz 18) — açık kartın taslak alanları */
+  const [editCard, setEditCard] = useState<{ id: number; name: string; limit_amount: string; statement_day: string; due_day: string } | null>(null);
+  const editCardOk = !!editCard && !!editCard.name.trim()
+    && +editCard.statement_day >= 1 && +editCard.statement_day <= 31
+    && +editCard.due_day >= 1 && +editCard.due_day <= 31;
   const expCats = data.categories.filter((c) => c.kind === "expense");
   const doPay = async () => {
     if (!paying) return;
@@ -137,9 +142,43 @@ export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => 
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <span style={{ ...css.mono, fontSize: 14, color: ci.debt > 0 ? T.neg : T.mut }}>{tl.format(Math.round(ci.debt))}</span>
+                <button style={css.edit} title="Kartı düzenle"
+                  onClick={() => setEditCard(editCard?.id === ci.card.id
+                    ? null
+                    : { id: ci.card.id, name: ci.card.name, limit_amount: String(ci.card.limit_amount || ""), statement_day: String(ci.card.statement_day), due_day: String(ci.card.due_day) })}>✎</button>
                 <button style={css.del} onClick={async () => { await api.del("cards", ci.card.id); reload(); }}>✕</button>
               </div>
             </div>
+            {/* Faz 18: kart tanımı satır içinde düzenlenir. Sil+yeniden ekle bu kartın TÜM harcamalarını
+                (card_txs, CASCADE) götürürdü — kesim gününü düzeltmek geçmişi silmek anlamına gelemez.
+                Kesim/son ödeme günü değişince ekstreler yeniden türetilir (cards.ts saf hesaplama). */}
+            {editCard?.id === ci.card.id && (
+              <form style={{ background: T.panel2, borderRadius: 10, padding: 10, marginTop: 8 }}
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!editCardOk) return;
+                  await api.put(`cards/${editCard.id}`, {
+                    name: editCard.name, limit_amount: num(editCard.limit_amount),
+                    statement_day: +editCard.statement_day, due_day: +editCard.due_day,
+                  });
+                  setEditCard(null); reload();
+                }}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <Field label="Kart adı" flex={2}><input autoFocus style={css.input} value={editCard.name} onChange={(e) => setEditCard({ ...editCard, name: e.target.value })} /></Field>
+                  <AmountField label="Limit (TL)" value={editCard.limit_amount} onChange={(v) => setEditCard({ ...editCard, limit_amount: v })} />
+                  <Field label="Kesim günü"><input style={css.input} inputMode="numeric" value={editCard.statement_day} onChange={(e) => setEditCard({ ...editCard, statement_day: e.target.value })} /></Field>
+                  <Field label="Son ödeme günü"><input style={css.input} inputMode="numeric" value={editCard.due_day} onChange={(e) => setEditCard({ ...editCard, due_day: e.target.value })} /></Field>
+                </div>
+                <div style={{ fontSize: 11.5, color: T.mut, marginTop: 8 }}>
+                  Kesim/son ödeme günü değişirse geçmiş harcamalar yeni günlere göre yeniden ekstrelenir — harcamalar silinmez.
+                </div>
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <button type="submit" style={{ ...css.btn, padding: "7px 14px", fontSize: 13, opacity: editCardOk ? 1 : 0.4 }} disabled={!editCardOk}>Kaydet</button>
+                  <button type="button" style={{ ...css.ghost, padding: "7px 14px", fontSize: 13 }} onClick={() => setEditCard(null)}>Vazgeç</button>
+                </div>
+                {!editCardOk && <Hint>Ad gerekli; kesim ve son ödeme günü 1-31 arası olmalı</Hint>}
+              </form>
+            )}
             {ci.card.limit_amount > 0 && (
               <div style={{ marginTop: 8 }}>
                 <div style={{ height: 6, background: T.panel2, borderRadius: 3, overflow: "hidden" }}>
