@@ -28,7 +28,15 @@ export type OneOff = { id: number; date: string; name: string; amount: number };
 export type AssetType = "BIST" | "FON" | "ALTIN" | "DOVIZ" | "KRIPTO" | "ETF";
 /** Bir varlığın/işlemin doğal (native) para birimi. TRY taban birimidir; USD döviz varlıklar içindir. */
 export type Currency = "TRY" | "USD";
-export type Trade = { id: number; date: string; asset_type: AssetType; symbol: string; side: "ALIŞ" | "SATIŞ"; qty: number; price: number; fee: number; currency: Currency; account_id?: number | null; portfolio_id?: number | null };
+/** Pozisyon üzerindeki hareket türü (Faz 21'de temettü/bedelsiz eklendi).
+    `trades` artık salt alım-satım değil, **pozisyon olayları defteridir**:
+    - `ALIŞ`/`SATIŞ`  — adet ve maliyet değişir, nakit hareket eder
+    - `TEMETTÜ`       — adet DEĞİŞMEZ, maliyet değişmez; nakit girer ve gerçekleşen getiriye yazılır
+                        (`qty` = temettü ödenen hisse adedi, `price` = hisse başına NET tutar)
+    - `BEDELSİZ`      — adet ARTAR, toplam maliyet AYNI kalır (ortalama maliyet kendiliğinden düşer);
+                        nakit hareketi yoktur (`price` her zaman 0) */
+export type TradeSide = "ALIŞ" | "SATIŞ" | "TEMETTÜ" | "BEDELSİZ";
+export type Trade = { id: number; date: string; asset_type: AssetType; symbol: string; side: TradeSide; qty: number; price: number; fee: number; currency: Currency; account_id?: number | null; portfolio_id?: number | null };
 /** Portföy grubu (Faz 11): varlıkları mantıksal olarak ayıran kap ("Alfa Portföy", "Emeklilik").
     Gruplama işlem düzeyindedir — aynı sembol iki portföyde ayrı pozisyon olarak durur. */
 export type Portfolio = { id: number; name: string; note: string | null };

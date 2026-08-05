@@ -42,6 +42,32 @@ export function amountFromQty(side: Trade["side"], qty: number, price: number, f
   return side === "SATIŞ" ? qty * price - fee : qty * price + fee;
 }
 
+/* ————— POZİSYON OLAYLARI (Faz 21) —————
+   `trades` artık salt alım-satım değil; temettü ve bedelsiz de birer pozisyon olayıdır.
+   Adet toplama mantığı ÖNCEDEN dört ayrı yerde tekrarlanıyordu (positions, projection, funds,
+   recall) ve hepsi `side === "ALIŞ" ? +qty : -qty` diyordu — yani yeni bir tür eklendiğinde
+   temettü sessizce SATIŞ sayılır, pozisyon eksilirdi. Artık tek kaynak: `qtyDelta`. */
+
+/** Bir olayın pozisyon ADEDİNE etkisi. TEMETTÜ adedi değiştirmez; BEDELSİZ artırır. */
+export function qtyDelta(t: Pick<Trade, "side" | "qty">): number {
+  switch (t.side) {
+    case "ALIŞ": case "BEDELSİZ": return t.qty;
+    case "SATIŞ": return -t.qty;
+    case "TEMETTÜ": return 0;
+  }
+}
+
+/** Bir olayın NAKDE etkisi (işlemin kendi para biriminde). Sunucudaki `tradeBalanceDelta` ile
+    aynı işaret düzenini izler: pozitif = hesaba girer. BEDELSİZ'de para hareketi yoktur. */
+export function cashDelta(t: Pick<Trade, "side" | "qty" | "price" | "fee">): number {
+  const fee = t.fee || 0;
+  switch (t.side) {
+    case "ALIŞ": return -(t.qty * t.price + fee);
+    case "SATIŞ": case "TEMETTÜ": return t.qty * t.price - fee;
+    case "BEDELSİZ": return 0;
+  }
+}
+
 /** Ağırlıklı ortalama maliyetli portföy; pozisyon kapanıp yeniden açılınca maliyet sıfırlanır.
     Her pozisyon kendi doğal para biriminde (o sembolün işlemlerinin currency'si) hesaplanır. */
 export function positions(trades: Trade[], prices: AllData["prices"]): Position[] {
@@ -52,7 +78,17 @@ export function positions(trades: Trade[], prices: AllData["prices"]): Position[
     if (!by.has(k)) by.set(k, { type: t.asset_type, sym: t.symbol, qty: 0, cost: 0, realized: 0, currency: t.currency ?? "TRY" });
     const p = by.get(k)!;
     if (t.side === "ALIŞ") { p.qty += t.qty; p.cost += t.qty * t.price + (t.fee || 0); }
-    else {
+    else if (t.side === "BEDELSİZ") {
+      /* Bedelsiz: adet artar, TOPLAM MALİYET aynı kalır → ortalama maliyet kendiliğinden düşer.
+         Yeni hisseler için para ödenmediğinden cost'a dokunulmaz; bu, "bedelsiz sonrası zarardayım"
+         yanılsamasını önleyen tek doğru davranıştır. */
+      p.qty += t.qty;
+    } else if (t.side === "TEMETTÜ") {
+      /* Temettü: adet ve maliyet DEĞİŞMEZ; nakit gerçekleşen getiriye yazılır. Maliyetten düşmek
+         (bazı takip yöntemlerinin yaptığı gibi) ortalama maliyeti çarpıtır ve satışta gerçekleşen
+         K/Z'yi iki kez sayardı — burada temettü ayrı bir getiri kalemidir. */
+      p.realized += t.qty * t.price - (t.fee || 0);
+    } else {
       const avg = p.qty > 0 ? p.cost / p.qty : 0;
       p.realized += t.qty * (t.price - avg) - (t.fee || 0);
       p.cost -= Math.min(t.qty, p.qty) * avg;
@@ -115,6 +151,12 @@ export function tradeLedger(trades: Trade[]): TradeEntry[] {
         cash = t.qty * t.price + fee;
         p.qty += t.qty;
         p.cost += cash;
+      } else if (t.side === "BEDELSİZ") {
+        cash = 0;            // para ödenmez
+        p.qty += t.qty;      // maliyet sabit → ortalama düşer (avgAfter aşağıda yeniden hesaplanır)
+      } else if (t.side === "TEMETTÜ") {
+        cash = t.qty * t.price - fee;
+        realized = cash;     // adet ve maliyet değişmez; tamamı gerçekleşen getiridir
       } else {
         cash = t.qty * t.price - fee;
         realized = t.qty * (t.price - avgBefore) - fee;
@@ -129,8 +171,10 @@ export function tradeLedger(trades: Trade[]): TradeEntry[] {
     });
 }
 
-/** Bir işlem kümesinin dönem özeti — geçmiş ekranının başlık rakamları (tek para biriminde toplanır) */
-export type TradeSummary = { buy: number; sell: number; fee: number; realized: number; count: number };
+/** Bir işlem kümesinin dönem özeti — geçmiş ekranının başlık rakamları (tek para biriminde toplanır).
+    `dividend` (Faz 21) `realized`'ın İÇİNDE de sayılır; ayrı alan "bu getirinin ne kadarı temettüden
+    geldi" sorusunu cevaplar (satış kârından ayrı bir kalite göstergesidir). */
+export type TradeSummary = { buy: number; sell: number; fee: number; realized: number; dividend: number; count: number };
 
 /** `entries` tek para birimi içindir (ekran birime göre süzer); TRY/USD karışımı çağıran tarafta ayrılır. */
 export function summarizeTrades(entries: TradeEntry[]): TradeSummary {
@@ -139,8 +183,9 @@ export function summarizeTrades(entries: TradeEntry[]): TradeSummary {
     sell: s.sell + (e.trade.side === "SATIŞ" ? e.cash : 0),
     fee: s.fee + (e.trade.fee || 0),
     realized: s.realized + e.realized,
+    dividend: s.dividend + (e.trade.side === "TEMETTÜ" ? e.cash : 0),
     count: s.count + 1,
-  }), { buy: 0, sell: 0, fee: 0, realized: 0, count: 0 });
+  }), { buy: 0, sell: 0, fee: 0, realized: 0, dividend: 0, count: 0 });
 }
 
 /** Portföy grubu anahtarı: grup id'si, gruplanmamış işlemler için `null` */
@@ -248,7 +293,7 @@ export function portfolioValueHistory(trades: Trade[], priceHistory: PriceHistor
     for (const t of sortedTrades) {
       if (t.date > date) break;
       const k = `${t.asset_type}:${t.symbol}`;
-      qty.set(k, (qty.get(k) || 0) + (t.side === "ALIŞ" ? t.qty : -t.qty));
+      qty.set(k, (qty.get(k) || 0) + qtyDelta(t));
     }
     let value = 0;
     qty.forEach((q, k) => {

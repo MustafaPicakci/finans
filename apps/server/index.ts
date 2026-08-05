@@ -5,7 +5,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { logger } from "hono/logger";
 import cron from "node-cron";
-import { txShares, keyOf, REC_AMOUNT_BEGIN, type Card, type CardTx } from "@finans/engine";
+import { txShares, keyOf, cashDelta, REC_AMOUNT_BEGIN, type Card, type CardTx, type TradeSide } from "@finans/engine";
 import { db, initDb, nowLocal, todayLocal, TENANT_TABLES, GLOBAL_SETTING_KEYS, type TxClient } from "./db.js";
 import { refreshAll } from "./prices.js";
 import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, SESSION_COOKIE, type SessionUser } from "./auth.js";
@@ -684,13 +684,26 @@ crud("oneoffs", "oneoffs", [
   { name: "date", required: true }, { name: "name", required: true }, { name: "amount", required: true },
 ]);
 /* trades: jenerik crud yerine elle — transactions gibi opsiyonel yan etkisi var.
-   account_id verilmişse SATIŞ hesabın bakiyesini artırır (proceeds = qty*price − fee),
-   ALIŞ azaltır (cost = qty*price + fee); DELETE geri alır. İkisi de atomik (tx).
+   account_id verilmişse SATIŞ/TEMETTÜ hesabın bakiyesini artırır, ALIŞ azaltır, BEDELSİZ hiç
+   dokunmaz; DELETE geri alır. İkisi de atomik (tx).
    Bakiye etkisi YALNIZ TRY işlemde: hesaplar TRY, USD çevrimi güncel FX'e bağlı olurdu ve
    DELETE'te FX değişirse geri-alım tutmaz (kayma) → USD portföy akışı bilinçli olarak elle kalır.
-   qty/price/fee/side'dan deterministik türetildiği için ekle/geri-al her zaman eşitlenir. */
-const tradeBalanceDelta = (side: string, qty: number, price: number, fee: number) =>
-  side === "SATIŞ" ? qty * price - fee : -(qty * price + fee);
+   qty/price/fee/side'dan deterministik türetildiği için ekle/geri-al her zaman eşitlenir.
+   Faz 21: işaret mantığı engine'deki `cashDelta`'dan gelir — sunucuda ikinci bir kopya tutmak,
+   yeni bir olay türü eklendiğinde ikisinin ayrışması demekti (eski hâli "SATIŞ değilse alış"
+   varsaydığından TEMETTÜ'de parayı hesaptan DÜŞERDİ). */
+const tradeBalanceDelta = (side: TradeSide, qty: number, price: number, fee: number) =>
+  cashDelta({ side, qty, price, fee });
+
+const TRADE_SIDES: readonly string[] = ["ALIŞ", "SATIŞ", "TEMETTÜ", "BEDELSİZ"];
+/** Türe özgü kurallar: BEDELSİZ bedelsizdir (fiyat 0 olmalı — aksi hâli sessizce ücretsiz hisse
+    yaratıp maliyeti bozardı); diğerlerinde adet ve fiyat pozitif olmalı. */
+function validateSide(side: string, qty: number, price: number): string | null {
+  if (!Number.isFinite(qty) || qty <= 0) return "adet 0'dan büyük olmalı";
+  if (!Number.isFinite(price) || price < 0) return "geçersiz fiyat";
+  if (side === "BEDELSİZ") return price === 0 ? null : "bedelsizde birim fiyat 0 olmalı";
+  return price > 0 ? null : "birim fiyat 0'dan büyük olmalı";
+}
 
 api.post("/trades", async (c) => {
   const b = await c.req.json().catch(() => null);
@@ -700,6 +713,9 @@ api.post("/trades", async (c) => {
   const uid = c.get("user").id;
   const currency = b.currency ?? "TRY";
   const qty = Number(b.qty), price = Number(b.price), fee = Number(b.fee ?? 0);
+  if (!TRADE_SIDES.includes(b.side)) return c.json({ error: "geçersiz işlem türü" }, 400);
+  const sideErr = validateSide(b.side, qty, price);
+  if (sideErr) return c.json({ error: sideErr }, 400);
   const accountId = b.account_id != null && b.account_id !== "" ? Number(b.account_id) : null;
   const portfolioId = b.portfolio_id != null && b.portfolio_id !== "" ? Number(b.portfolio_id) : null; // null = "Gruplanmamış"
   const affects = currency === "TRY" && accountId != null; // bakiye etkisi yalnız TRY işlemde
@@ -749,6 +765,9 @@ api.put("/trades/:id", async (c) => {
   const currency = b.currency ?? "TRY";
   const qty = Number(b.qty), price = Number(b.price), fee = Number(b.fee ?? 0);
   if (![qty, price, fee].every(Number.isFinite)) return c.json({ error: "geçersiz sayı" }, 400);
+  if (!TRADE_SIDES.includes(b.side)) return c.json({ error: "geçersiz işlem türü" }, 400);
+  const sideErr = validateSide(b.side, qty, price);
+  if (sideErr) return c.json({ error: sideErr }, 400);
   const accountId = b.account_id != null && b.account_id !== "" ? Number(b.account_id) : null;
   const portfolioId = b.portfolio_id != null && b.portfolio_id !== "" ? Number(b.portfolio_id) : null;
   if (portfolioId != null && !(await db.get("SELECT id FROM portfolios WHERE id=? AND user_id=?", portfolioId, uid))) {

@@ -16,6 +16,13 @@ import { EditSheet, type EditTarget } from "../../EditSheet";
    süzmek geçmişin matematiğini değiştirmez, sadece görünen satırları kısar. */
 
 type Side = "hepsi" | Trade["side"];
+/** Pozisyon olaylarının rozet renkleri (Faz 21) — temettü/bedelsiz alış-satıştan görsel olarak ayrılır */
+const SIDE_SOFT: Record<Trade["side"], string> = {
+  "ALIŞ": T.posSoft, "SATIŞ": T.negSoft, "TEMETTÜ": "var(--cat-5-soft, " + T.panel2 + ")", "BEDELSİZ": T.panel2,
+};
+const SIDE_INK: Record<Trade["side"], string> = {
+  "ALIŞ": T.pos, "SATIŞ": T.neg, "TEMETTÜ": "var(--cat-5)", "BEDELSİZ": "var(--cat-3)",
+};
 type Range = 3 | 6 | 12 | 0; // 0 = tümü
 
 const RANGES: { v: Range; label: string }[] = [
@@ -91,11 +98,11 @@ export function Hareketler({ data, trades, scopeLabel, reload, symbol, onSymbol 
           {(["BIST", "FON", "ALTIN", "DOVIZ", "KRIPTO", "ETF"] as AssetType[]).map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
         <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: `1px solid ${T.line}` }}>
-          {(["hepsi", "ALIŞ", "SATIŞ"] as Side[]).map((s) => (
+          {(["hepsi", "ALIŞ", "SATIŞ", "TEMETTÜ", "BEDELSİZ"] as Side[]).map((s) => (
             <button key={s} type="button" onClick={() => setSide(s)} style={{
-              padding: "6px 10px", border: "none", cursor: "pointer", fontSize: 12, fontFamily: T.disp, fontWeight: side === s ? 700 : 500,
-              background: side === s ? (s === "ALIŞ" ? T.posSoft : s === "SATIŞ" ? T.negSoft : T.panel) : T.panel2,
-              color: side === s ? (s === "ALIŞ" ? T.pos : s === "SATIŞ" ? T.neg : T.text) : T.mut,
+              padding: "6px 9px", border: "none", cursor: "pointer", fontSize: 11.5, fontFamily: T.disp, fontWeight: side === s ? 700 : 500,
+              background: side === s ? (s === "hepsi" ? T.panel : SIDE_SOFT[s]) : T.panel2,
+              color: side === s ? (s === "hepsi" ? T.text : SIDE_INK[s]) : T.mut,
             }}>{s === "hepsi" ? "Hepsi" : s}</button>
           ))}
         </div>
@@ -121,6 +128,9 @@ export function Hareketler({ data, trades, scopeLabel, reload, symbol, onSymbol 
           <span>alış <span style={{ ...css.mono, color: T.text }}>{fmtMoney(Math.round(s.buy), ccy)}</span></span>
           <span>satış <span style={{ ...css.mono, color: T.text }}>{fmtMoney(Math.round(s.sell), ccy)}</span></span>
           {s.fee > 0 && <span>komisyon <span style={{ ...css.mono, color: T.text }}>{fmtMoney(s.fee, ccy, true)}</span></span>}
+          {/* Temettü gerçekleşen K/Z'nin İÇİNDE sayılır; ayrıca gösterilir çünkü satış kârından
+              farklı bir getiri kalitesidir (pozisyonu küçültmeden gelen nakit). */}
+          {s.dividend > 0 && <span>temettü <span style={{ ...css.mono, color: "var(--cat-5)" }}>{fmtMoney(Math.round(s.dividend), ccy)}</span></span>}
           <span>gerçekleşen K/Z <span style={{ ...css.mono, color: s.realized > 0 ? T.pos : s.realized < 0 ? T.neg : T.text }}>
             {s.realized > 0 ? "+" : ""}{fmtMoney(Math.round(s.realized), ccy)}
           </span></span>
@@ -158,6 +168,7 @@ function HareketRow({ e, data, reload, onSymbol, onEdit }: {
   const t = e.trade;
   const ccy = (t.currency ?? "TRY") as Currency;
   const buy = t.side === "ALIŞ";
+  const bonus = t.side === "BEDELSİZ", div = t.side === "TEMETTÜ";
   const num = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(4).replace(/0+$/, "").replace(/\.$/, ""));
   return (
     <div style={{ padding: "9px 0", borderBottom: `1px solid ${T.line}` }}>
@@ -167,7 +178,7 @@ function HareketRow({ e, data, reload, onSymbol, onEdit }: {
         </span>
         <span style={{
           fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 10,
-          background: buy ? T.posSoft : T.negSoft, color: buy ? T.pos : T.neg,
+          background: SIDE_SOFT[t.side], color: SIDE_INK[t.side],
         }}>{t.side}</span>
         <button type="button" onClick={() => onSymbol(t.symbol.toUpperCase())} title="Bu sembolün hareketlerini süz"
           style={{ background: "none", border: "none", padding: 0, cursor: "pointer", ...css.mono, fontWeight: 600, fontSize: 14, color: T.acc }}>
@@ -175,15 +186,18 @@ function HareketRow({ e, data, reload, onSymbol, onEdit }: {
         </button>
         <span style={{ fontSize: 10, fontWeight: 700, color: TYPE_COLORS[t.asset_type] || T.mut }}>{t.asset_type}</span>
         <span style={{ flex: 1, fontSize: 12.5, color: T.mut }}>
-          {num(t.qty)} × <span style={css.mono}>{fmtMoney(t.price, ccy, true)}</span>
-          {t.fee > 0 && <span style={{ color: T.mut3 }}> · kom. {fmtMoney(t.fee, ccy, true)}</span>}
+          {bonus
+            ? <>{num(t.qty)} adet bedelsiz · <span style={{ color: T.mut3 }}>ort. {fmtMoney(e.avgBefore, ccy, true)} → {fmtMoney(e.avgAfter, ccy, true)}</span></>
+            : <>{num(t.qty)} × <span style={css.mono}>{fmtMoney(t.price, ccy, true)}</span>
+              {t.fee > 0 && <span style={{ color: T.mut3 }}> · {div ? "stopaj" : "kom."} {fmtMoney(t.fee, ccy, true)}</span>}</>}
         </span>
         {/* İşlem büyüklüğü — nötr ve işaretsiz. Yönü ALIŞ/SATIŞ rozeti söyler; kırmızı/yeşil bu
             ekranda yalnız gerçekleşen K/Z'ye ayrılmıştır (işaretli tutar "zarar" gibi okunuyordu).
             Ayrıca portföy işlemi hesaba bağlı değilse hiçbir bakiyeyi oynatmaz — eksi işareti bunu da
             yanlış ima ediyordu. */}
-        <span style={{ ...css.mono, fontSize: 13.5, color: T.text }} title={buy ? "ödenen (komisyon dahil)" : "ele geçen (komisyon düşülmüş)"}>
-          {fmtMoney(Math.round(Math.abs(e.cash)), ccy)}
+        <span style={{ ...css.mono, fontSize: 13.5, color: bonus ? T.mut3 : T.text }}
+          title={bonus ? "bedelsizde para hareketi yoktur" : buy ? "ödenen (komisyon dahil)" : div ? "hesaba giren temettü" : "ele geçen (komisyon düşülmüş)"}>
+          {bonus ? "—" : fmtMoney(Math.round(Math.abs(e.cash)), ccy)}
         </span>
         {data.portfolios.length > 0 && (
           <select

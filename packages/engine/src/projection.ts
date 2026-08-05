@@ -3,7 +3,7 @@ import { keyOf, hits, ymOf } from "./date.js";
 import { recActiveOn, recurringAmountIndex, recAmountOn } from "./recurring.js";
 import { loanPayDay, loanRemaining, loanActiveOn } from "./loans.js";
 import { cardInfos } from "./cards.js";
-import { convert, type Rates } from "./portfolio.js";
+import { convert, qtyDelta, type Rates } from "./portfolio.js";
 import { depositValueOn } from "./deposits.js";
 
 /** `cashFunds` = o gün elde tutulan para piyasası fonlarının TRY değeri (assets'in bir alt kümesi);
@@ -41,7 +41,7 @@ export function project(data: AllData, months: number, rates: Rates = { usdTry: 
     for (const t of sortedTrades) {
       if (t.date > dayKey) break;
       const k = `${t.asset_type}:${t.symbol}`;
-      qty.set(k, (qty.get(k) || 0) + (t.side === "ALIŞ" ? t.qty : -t.qty));
+      qty.set(k, (qty.get(k) || 0) + qtyDelta(t)); // TEMETTÜ adedi değiştirmez, BEDELSİZ artırır
     }
     let assets = 0, cashFunds = 0;
     qty.forEach((q, k) => {

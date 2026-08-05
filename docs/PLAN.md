@@ -22,6 +22,7 @@
 - ✅ **Faz 17 tamamlandı (Ağustos 2026, kısmi kapsam)** — fon girişinde tutar modu (adet NAV'dan türetilir) + ödeme öncesi "fon boz" önerisi. Fon mutabakatı (kayma düzeltme) bilinçli olarak **ertelendi** — kayma görünür hale gelince eklenecek.
 - ✅ **Faz 18 tamamlandı (Ağustos 2026)** — tanım kayıtlarının düzenlenmesi (hesap adı, kart, kredi, kategori, portföy grubu, vadeli mevduat, düzenli kalem kimliği); `crud()` PUT/DELETE artık eşleşen satır yoksa 404 döner.
 - ✅ **Faz 19 tamamlandı (Ağustos 2026)** — e-posta teslim edilebilirliği (kod tarafı): multipart düz metin alternatifi, açılışta SMTP doğrulaması, MAIL_FROM tuzak kontrolü, SMTP zaman aşımları, görünür gönderim hatası. **Sağlayıcı + DNS hâlâ senin işin** (aşağıdaki açık iş).
+- ✅ **Faz 21 tamamlandı (Ağustos 2026)** — temettü ve bedelsiz sermaye artırımı: `trades` pozisyon olayları defterine dönüştü (`TEMETTÜ`/`BEDELSİZ`), adet/nakit etkisi tek kaynağa (`qtyDelta`/`cashDelta`) indirildi.
 - ⏳ **Açık iş (prod engelleyici): e-posta teslim edilebilirliği** — çok-kullanıcı kayıt açık ama prod'da SMTP = Gmail, aktivasyon postaları kurumsal alan adlarına ulaşmıyor (phishing sayılıp düşüyor). Gerçek kullanıcı almadan önce transactional sağlayıcı + kendi domain (SPF/DKIM/DMARC) şart; kod değişmiyor, yalnız env. Bkz. Faz 10 bölümü.
 
 ## Context (Neden)
@@ -519,6 +520,26 @@ Doğrulama: izole test DB'sinde (`finans_faz18_test`) mevduat aç → düzenle (
 Doğrulama: yerel sahte SMTP sunucusuna karşı uçtan uca. MAIL_FROM'suz açılış → `Finans <resend>` uyarısı çıktı. Yanıtsız sunucu → 10 sn'de `Timeout` hatası loglandı (zaman aşımı öncesi sonsuza dek sessizdi). Doğru yapılandırmada açılışta `SMTP doğrulandı` + gerçek kayıtta yakalanan posta `multipart/alternative`, `text/plain` + `text/html` bölümlü, From `Finans <no-reply@phexum.com>`, düz metin bölümü Türkçe karakterler ve tek satırlık bağlantıyla doğru. SMTP ölüyken kayıt **0,24 sn**'de döndü (bloklanmadı) ve hata net loglandı. `pnpm build` temiz, 158 engine testi yeşil (engine'e dokunulmadı).
 
 **Hâlâ senin yapman gereken** (kod değil): Resend/Brevo hesabı → domain ekle → verilen SPF/DKIM (+DMARC) kayıtlarını DNS'e yayınla → `SMTP_*` ve `MAIL_FROM`'u Render env'ine gir. Doğrulanmış domain olmadan teslim zayıf kalır.
+
+## Faz 21 — Temettü ve bedelsiz sermaye artırımı ✅
+
+Faz 3'te ertelenmişti. Portföyde BIST hisseleri ve ETF'ler varken **temettü hiçbir yere yazılamıyordu**: jenerik bir gelir kaydı olarak girilince portföy tarafında görünmüyor, pozisyonun gerçek getirisi eksik çıkıyordu. Bedelsiz sermaye artırımında ise adet elle düzeltiliyor, ortalama maliyet bozuluyordu.
+
+**Karar: ayrı tablo değil, `trades`'i pozisyon OLAYLARI defterine genişletmek.** Temettü ve bedelsiz pozisyonun geçmişinin parçasıdır; ayrı bir tabloya koymak hikâyeyi bölerdi (Hareketler ekranı, portföy grupları, bakiye yan etkisi, düzenle/sil revert mantığı — hepsi ikinci kez yazılacaktı).
+
+- `TradeSide = "ALIŞ" | "SATIŞ" | "TEMETTÜ" | "BEDELSİZ"`.
+- **TEMETTÜ**: adet ve ortalama maliyet **değişmez**; tutar `realized`'a (gerçekleşen getiri) yazılır. Maliyetten düşmek — bazı takip yöntemlerinin yaptığı gibi — ortalama maliyeti çarpıtır ve satışta K/Z'yi **iki kez** saydırırdı. `qty` = temettü ödenen hisse adedi, `price` = hisse başına net, `fee` = stopaj.
+- **BEDELSİZ**: adet artar, **toplam maliyet sabit kalır** → ortalama maliyet kendiliğinden düşer; `price` her zaman 0, nakit hareketi yok. Pozisyonun değeri değişmez (`qty × avg` sabit) — arayüz bunu açıkça söyler, çünkü "ortalamam düştü, kâra geçtim" en yaygın yanlış okumadır.
+- **Tek kaynak**: adet toplama ÖNCEDEN dört ayrı yerde (`positions`, `projection`, `funds`, `recall`) `side === "ALIŞ" ? +qty : -qty` diye tekrarlanıyordu — yeni bir tür eklenince temettü sessizce SATIŞ sayılıp pozisyonu **eksiltirdi**. Hepsi `qtyDelta(t)`'ye indirildi; nakit tarafı `cashDelta(t)`. Sunucudaki `tradeBalanceDelta` de artık `cashDelta`'yı çağırır: eski hâli "SATIŞ değilse alış" varsaydığından **temettüde parayı hesaptan düşerdi**.
+- **Doğrulama kuralları** (sunucu): tür beyaz listesi (400), BEDELSİZ'de fiyat 0 olmak zorunda (aksi hâli sessizce bedava hisse yaratıp maliyeti bozardı), diğerlerinde adet ve fiyat pozitif.
+- **Arayüz**: dört olay düğmesi + her birinin tek cümlelik etkisi; temettüde **"toplam tutar" girişi** (hisse başına türetilir — banka ekstresinde toplam yazar, hisse başınayı kimse bilmez) ve "elimdeki adet" kısayolu; bedelsizde %50/%100/%200 kısayolları + "adet ve ortalama şu olacak" önizlemesi. Hareketler ekranında yeni filtreler, rozetler ve dönem özetinde ayrı **temettü** satırı.
+- Şema: `trades_side_check` kısıtı drop+add ile idempotent güncellenir.
+
+Doğrulama: 171 engine testi yeşil (**13 yeni**) — temettünün maliyeti bozmadığı, satış K/Z'sinin temettüden etkilenmediği (çift sayım yok), bedelsizde `qty × avg`'nin sabit kaldığı, bedelsiz sonrası satışın düşmüş ortalamadan hesaplandığı, `tradeLedger` sonunun `positions` ile aynı yeri gösterdiği ayrı ayrı test edildi.
+
+Sunucu tarafı izole test DB'sinde uçtan uca: ALIŞ 100×50 → bakiye 95.000, TEMETTÜ 100×3 → **95.300** (doğru yön), BEDELSİZ 100 → **95.300 değişmedi**, pozisyon adedi 200. Düzenleme: temettü 300→500 (95.500), stopaj 50 eklenince (95.450), bedelsiz adedi 100→300 iken **bakiye sabit**, tür değişimi TEMETTÜ→SATIŞ bakiye yönünü doğru çevirdi (95.600); tüm işlemler silinince başlangıca (100.000) birebir döndü. Her adımda `balance = Σ entries`. Negatifler: bedelsizde fiyat>0 400, geçersiz tür 400, adet 0 400, negatif fiyat 400.
+
+Göç: gerçek yerel DB'nin **veri dâhil kopyası** üzerinde `trades_side_check` drop+add ile güncellendi; sunucu **iki kez** başlatıldı (idempotent, hata yok), mevcut 22 işlem (21 ALIŞ + 1 SATIŞ) el değmeden kaldı ve üç hesabın defter farkı 0. `pnpm build` üç pakette de temiz.
 
 ---
 

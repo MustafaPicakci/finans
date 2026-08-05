@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { positions, portfolioValueHistory, portfolioValueTry, convert, groupTradesByPortfolio, portfolioGroupValueTry, tradeLedger, summarizeTrades, sliceValueHistory, bucketValueHistory, historyChange } from "./portfolio.js";
+import { positions, portfolioValueHistory, portfolioValueTry, convert, groupTradesByPortfolio, portfolioGroupValueTry, tradeLedger, summarizeTrades, sliceValueHistory, bucketValueHistory, historyChange, qtyDelta, cashDelta } from "./portfolio.js";
 import type { Trade, Price, PriceHistoryEntry } from "./types.js";
 
 const trade = (over: Partial<Trade>): Trade => ({
@@ -326,5 +326,134 @@ describe("değer grafiği aralıkları (Faz 13)", () => {
   it("tek nokta veya sıfır başlangıçta yüzde null döner", () => {
     expect(historyChange([{ date: "2026-01-01", value: 100 }])).toEqual({ abs: 0, pct: null });
     expect(historyChange([{ date: "2026-01-01", value: 0 }, { date: "2026-02-01", value: 50 }]).pct).toBeNull();
+  });
+});
+
+/* ————— TEMETTÜ / BEDELSİZ (Faz 21) ————— */
+describe("qtyDelta / cashDelta", () => {
+  it("adet etkisi: ALIŞ +, SATIŞ −, BEDELSİZ +, TEMETTÜ 0", () => {
+    expect(qtyDelta(trade({ side: "ALIŞ", qty: 10 }))).toBe(10);
+    expect(qtyDelta(trade({ side: "SATIŞ", qty: 10 }))).toBe(-10);
+    expect(qtyDelta(trade({ side: "BEDELSİZ", qty: 10 }))).toBe(10);
+    expect(qtyDelta(trade({ side: "TEMETTÜ", qty: 10 }))).toBe(0);
+  });
+
+  it("nakit etkisi: ALIŞ çıkar, SATIŞ/TEMETTÜ girer, BEDELSİZ hiç", () => {
+    expect(cashDelta(trade({ side: "ALIŞ", qty: 10, price: 100, fee: 5 }))).toBe(-1005);
+    expect(cashDelta(trade({ side: "SATIŞ", qty: 10, price: 100, fee: 5 }))).toBe(995);
+    expect(cashDelta(trade({ side: "TEMETTÜ", qty: 100, price: 2, fee: 0 }))).toBe(200);
+    expect(cashDelta(trade({ side: "BEDELSİZ", qty: 50, price: 0, fee: 0 }))).toBe(0);
+  });
+});
+
+describe("positions — temettü", () => {
+  const buy = trade({ id: 1, side: "ALIŞ", qty: 100, price: 50 }); // maliyet 5000, ort. 50
+
+  it("adedi ve ortalama maliyeti DEĞİŞTİRMEZ, gerçekleşen getiriye yazılır", () => {
+    const div = trade({ id: 2, date: "2026-02-01", side: "TEMETTÜ", qty: 100, price: 3 }); // 300 ₺
+    const [p] = positions([buy, div], []);
+    expect(p.qty).toBe(100);
+    expect(p.avg).toBe(50);      // maliyetten DÜŞÜLMEZ
+    expect(p.realized).toBe(300);
+  });
+
+  it("stopaj/komisyon fee olarak düşülür", () => {
+    const div = trade({ id: 2, date: "2026-02-01", side: "TEMETTÜ", qty: 100, price: 3, fee: 30 });
+    expect(positions([buy, div], [])[0].realized).toBe(270);
+  });
+
+  it("satış K/Z'si temettüden etkilenmez (çift sayım yok)", () => {
+    const div = trade({ id: 2, date: "2026-02-01", side: "TEMETTÜ", qty: 100, price: 3 });
+    const sell = trade({ id: 3, date: "2026-03-01", side: "SATIŞ", qty: 100, price: 60 });
+    const withDiv = positions([buy, div, sell], [])[0];
+    const noDiv = positions([buy, sell], [])[0];
+    expect(noDiv.realized).toBe(1000);                 // 100 × (60−50)
+    expect(withDiv.realized).toBe(1300);               // satış kârı + temettü, ayrı ayrı
+    expect(withDiv.realized - noDiv.realized).toBe(300);
+  });
+});
+
+describe("positions — bedelsiz", () => {
+  const buy = trade({ id: 1, side: "ALIŞ", qty: 100, price: 50 }); // maliyet 5000
+
+  it("adet artar, TOPLAM maliyet sabit kalır → ortalama düşer", () => {
+    const bonus = trade({ id: 2, date: "2026-02-01", side: "BEDELSİZ", qty: 100, price: 0 }); // %100
+    const [p] = positions([buy, bonus], []);
+    expect(p.qty).toBe(200);
+    expect(p.avg).toBe(25);        // 5000 / 200
+    expect(p.realized).toBe(0);    // kâr/zarar doğurmaz
+  });
+
+  it("bedelsiz sonrası satışta K/Z düşmüş ortalamadan hesaplanır", () => {
+    const bonus = trade({ id: 2, date: "2026-02-01", side: "BEDELSİZ", qty: 100, price: 0 });
+    const sell = trade({ id: 3, date: "2026-03-01", side: "SATIŞ", qty: 200, price: 30 });
+    const [p] = positions([buy, bonus, sell], []);
+    expect(p.qty).toBe(0);
+    expect(p.realized).toBe(1000); // 200 × (30 − 25); toplam 6000 ele geçti, 5000 ödenmişti
+  });
+
+  it("bedelsiz tek başına net varlığı değiştirmez (adet × ortalama sabit)", () => {
+    const bonus = trade({ id: 2, date: "2026-02-01", side: "BEDELSİZ", qty: 400, price: 0 });
+    const [p] = positions([buy, bonus], []);
+    expect(p.qty * p.avg).toBeCloseTo(5000, 10);
+  });
+});
+
+describe("tradeLedger — temettü/bedelsiz satırları", () => {
+  const buy = trade({ id: 1, side: "ALIŞ", qty: 100, price: 50 });
+
+  it("temettü satırı: adet ve ortalama aynı kalır, nakit = gerçekleşen", () => {
+    const div = trade({ id: 2, date: "2026-02-01", side: "TEMETTÜ", qty: 100, price: 3, fee: 30 });
+    const e = tradeLedger([buy, div])[1];
+    expect([e.qtyBefore, e.qtyAfter]).toEqual([100, 100]);
+    expect([e.avgBefore, e.avgAfter]).toEqual([50, 50]);
+    expect(e.cash).toBe(270);
+    expect(e.realized).toBe(270);
+    expect(e.closed).toBe(false);
+  });
+
+  it("bedelsiz satırı: adet artar, ortalama düşer, nakit 0", () => {
+    const bonus = trade({ id: 2, date: "2026-02-01", side: "BEDELSİZ", qty: 100, price: 0 });
+    const e = tradeLedger([buy, bonus])[1];
+    expect([e.qtyBefore, e.qtyAfter]).toEqual([100, 200]);
+    expect([e.avgBefore, e.avgAfter]).toEqual([50, 25]);
+    expect(e.cash).toBe(0);
+    expect(e.realized).toBe(0);
+  });
+
+  it("tradeLedger sonu positions ile aynı yeri gösterir (aynı matematik)", () => {
+    const all = [buy,
+      trade({ id: 2, date: "2026-02-01", side: "TEMETTÜ", qty: 100, price: 3 }),
+      trade({ id: 3, date: "2026-03-01", side: "BEDELSİZ", qty: 100, price: 0 }),
+      trade({ id: 4, date: "2026-04-01", side: "SATIŞ", qty: 50, price: 40 })];
+    const last = tradeLedger(all).at(-1)!;
+    const [p] = positions(all, []);
+    expect(last.qtyAfter).toBe(p.qty);
+    expect(last.avgAfter).toBeCloseTo(p.avg, 10);
+  });
+});
+
+describe("summarizeTrades — temettü ayrı gösterilir", () => {
+  it("dividend realized'ın içinde ama ayrıca raporlanır", () => {
+    const s = summarizeTrades(tradeLedger([
+      trade({ id: 1, side: "ALIŞ", qty: 100, price: 50 }),
+      trade({ id: 2, date: "2026-02-01", side: "TEMETTÜ", qty: 100, price: 3 }),
+      trade({ id: 3, date: "2026-03-01", side: "SATIŞ", qty: 100, price: 60 }),
+    ]));
+    expect(s.buy).toBe(5000);
+    expect(s.sell).toBe(6000);
+    expect(s.dividend).toBe(300);
+    expect(s.realized).toBe(1300); // temettü dahil
+    expect(s.count).toBe(3);
+  });
+
+  it("bedelsiz alış/satış toplamlarını kirletmez", () => {
+    const s = summarizeTrades(tradeLedger([
+      trade({ id: 1, side: "ALIŞ", qty: 100, price: 50 }),
+      trade({ id: 2, date: "2026-02-01", side: "BEDELSİZ", qty: 100, price: 0 }),
+    ]));
+    expect(s.buy).toBe(5000);
+    expect(s.sell).toBe(0);
+    expect(s.dividend).toBe(0);
   });
 });

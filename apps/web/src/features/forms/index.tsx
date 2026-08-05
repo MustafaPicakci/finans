@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  todayStr, num, fmtD, qtyFromAmount, amountFromQty,
+  todayStr, num, fmtD, qtyFromAmount, amountFromQty, cashDelta, positions,
   depositMaturity, depositGrossInterest, depositNetInterest, depositMaturityValue,
   type AllData, type AssetType, type CardTx, type Currency, type Deposit, type OneOff, type Recurring,
   type Trade, type Transaction, type Transfer, type Loan,
@@ -522,6 +522,17 @@ export function TransferForm({ data, reload, onClose, edit }: FormProps & { edit
 type TradeMode = "adet" | "tutar";
 const defaultMode = (t: AssetType): TradeMode => (t === "FON" ? "tutar" : "adet");
 
+/** Pozisyon olaylarının rengi ve tek cümlelik açıklaması (Faz 21) */
+const SIDE_COLOR: Record<Trade["side"], string> = {
+  "ALIŞ": T.pos, "SATIŞ": T.neg, "TEMETTÜ": "var(--cat-5)", "BEDELSİZ": "var(--cat-3)",
+};
+const SIDE_HINT: Record<Trade["side"], string> = {
+  "ALIŞ": "Adet ve maliyet artar; hesap seçiliyse bakiyeden düşer.",
+  "SATIŞ": "Adet azalır; kâr/zarar gerçekleşir, hesap seçiliyse bakiyeye girer.",
+  "TEMETTÜ": "Adedin ve ortalama maliyetin DEĞİŞMEZ; nakit girer ve gerçekleşen getiriye yazılır.",
+  "BEDELSİZ": "Adet artar, toplam maliyet aynı kalır → ortalama maliyet düşer. Para hareketi yoktur.",
+};
+
 /** Özet'teki "fon boz" önerisinden gelen önden doldurma (Faz 17) */
 export type TradePrefill = {
   asset_type: AssetType; symbol: string; side: Trade["side"]; amount: number;
@@ -565,20 +576,36 @@ export function TradeForm({ data, reload, onClose, edit, prefill }: FormProps & 
     portfolio_id: s.portfolio_id != null ? String(s.portfolio_id) : x.portfolio_id,
     price: s.price != null && priceCcyOf(data, s.symbol, s.asset_type) === s.currency ? String(s.price) : x.price,
   }));
-  /* Kaydedilen her zaman adettir; tutar modunda fiyat ve komisyondan türetilir. */
-  const price = num(f.price), fee = num(f.fee);
-  const qty = mode === "tutar" ? qtyFromAmount(f.side, num(f.amount), price, fee) : num(f.qty);
+  /* ————— Türe göre adet/fiyat çözümü (Faz 21) —————
+     Üç ayrı ilişki var, hepsi `qty × price` üzerinden ama bilinmeyen farklı:
+     - ALIŞ/SATIŞ + tutar modu → ADET türetilir (tutar ve birim fiyat biliniyor)
+     - TEMETTÜ    + tutar modu → HİSSE BAŞINA türetilir; adet zaten elindeki hisse sayısıdır
+                                 ("hesabıma 45,30 ₺ temettü girdi" — hisse başınayı kimse bilmez)
+     - BEDELSİZ                → fiyat her zaman 0, para hareketi yok; yalnız adet girilir */
+  const isDividend = f.side === "TEMETTÜ", isBonus = f.side === "BEDELSİZ";
+  const fee = isBonus ? 0 : num(f.fee);
+  const qty = (!isBonus && !isDividend && mode === "tutar")
+    ? qtyFromAmount(f.side, num(f.amount), num(f.price), fee)
+    : num(f.qty);
+  const price = isBonus ? 0
+    : (isDividend && mode === "tutar")
+      ? (qty > 0 ? (num(f.amount) + fee) / qty : 0)
+      : num(f.price);
+  /** Toplam tutar (hesaba giren/çıkan) — önizleme ve mod geçişinde kullanılır */
+  const total = isBonus ? 0 : Math.abs(cashDelta({ side: f.side, qty, price, fee }));
   /** Mod değişiminde girilen değer korunur (aynı işlemin iki farklı ifadesi) */
   const switchMode = (m: TradeMode) => {
     if (m === mode) return;
-    if (m === "tutar") setF((x) => ({ ...x, amount: qty > 0 && price > 0 ? String(+amountFromQty(x.side, qty, price, fee).toFixed(2)) : "" }));
-    else setF((x) => ({ ...x, qty: qty > 0 ? String(qty) : "" }));
+    if (m === "tutar") setF((x) => ({ ...x, amount: total > 0 ? String(+total.toFixed(2)) : "", qty: qty > 0 ? String(qty) : x.qty }));
+    else setF((x) => ({ ...x, qty: qty > 0 ? String(qty) : "", price: price > 0 ? String(+price.toFixed(6)) : x.price }));
     setMode(m);
   };
-  const ok = !!f.symbol && qty > 0 && price > 0 && !!f.date;
+  const ok = !!f.symbol && qty > 0 && (isBonus || price > 0) && !!f.date;
   const reason = !f.symbol ? "Sembol gerekli"
-    : !(price > 0) ? "Birim fiyat 0'dan büyük olmalı"
-      : !(qty > 0) ? (mode === "tutar" ? "Tutar 0'dan büyük olmalı (komisyonu aşmalı)" : "Adet/miktar 0'dan büyük olmalı")
+    : !(qty > 0) ? (isDividend ? "Temettü ödenen hisse adedi gerekli"
+      : isBonus ? "Gelen bedelsiz hisse adedi gerekli"
+        : mode === "tutar" ? "Tutar 0'dan büyük olmalı (komisyonu aşmalı)" : "Adet/miktar 0'dan büyük olmalı")
+      : !isBonus && !(price > 0) ? (isDividend && mode === "tutar" ? "Temettü tutarı 0'dan büyük olmalı" : "Birim fiyat 0'dan büyük olmalı")
         : null;
   const save = async (andNew: boolean) => {
     if (!ok) return;
@@ -617,47 +644,74 @@ export function TradeForm({ data, reload, onClose, edit, prefill }: FormProps & 
             onPick={pickSymbol} options={sugs} labelOf={(s) => s.symbol}
             subOf={(s) => s.price != null ? `${s.asset_type} · ${fmtMoney(s.price, s.currency, true)}` : s.asset_type} />
         </Field>
-        <Field label="İşlem">
+        {/* Dört pozisyon olayı (Faz 21). Temettü/bedelsiz de bu deftere yazılır: ikisi de
+            pozisyonun geçmişinin parçasıdır, ayrı bir yerde tutmak hikâyeyi bölerdi. */}
+        <Field label="İşlem" flex={2}>
           <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: `1px solid ${T.line}` }}>
-            {(["ALIŞ", "SATIŞ"] as const).map((s) => (
-              <button key={s} type="button" onClick={() => setF({ ...f, side: s })} style={{
-                flex: 1, padding: "9px 0", border: "none", cursor: "pointer", fontWeight: 700, fontSize: 12, fontFamily: T.disp,
-                background: f.side === s ? (s === "ALIŞ" ? T.pos : T.neg) : T.panel2,
-                color: f.side === s ? T.accInk : T.mut,
-              }}>{s}</button>
+            {(["ALIŞ", "SATIŞ", "TEMETTÜ", "BEDELSİZ"] as const).map((s) => (
+              <button key={s} type="button" title={SIDE_HINT[s]}
+                onClick={() => { setF({ ...f, side: s }); if (s === "BEDELSİZ") setMode("adet"); }} style={{
+                  flex: 1, padding: "9px 2px", border: "none", cursor: "pointer", fontWeight: 700,
+                  fontSize: 10.5, fontFamily: T.disp, letterSpacing: "-0.01em",
+                  background: f.side === s ? SIDE_COLOR[s] : T.panel2,
+                  color: f.side === s ? T.accInk : T.mut,
+                }}>{s}</button>
             ))}
           </div>
         </Field>
       </div>
-      {/* Giriş modu: fonda tutar ("50 bin lira attım"), hissede adet ("50 lot aldım") */}
-      <div style={{ display: "flex", gap: 6, marginTop: 10, alignItems: "center" }}>
-        <span style={{ ...css.label, marginBottom: 0 }}>Giriş</span>
-        {(["adet", "tutar"] as TradeMode[]).map((m) => (
-          <button key={m} type="button" onClick={() => switchMode(m)} style={{
-            ...css.chip, fontWeight: 600,
-            ...(mode === m ? { background: T.acc, color: T.accInk, borderColor: T.acc } : {}),
-          }}>{m === "adet" ? "Adet gir" : "Tutar gir"}</button>
-        ))}
-      </div>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
-        {mode === "tutar"
-          ? <AmountField label={f.side === "SATIŞ" ? `Hesaba girecek (${f.currency === "USD" ? "$" : "TL"})` : `Hesaptan çıkacak (${f.currency === "USD" ? "$" : "TL"})`}
-            value={f.amount} onChange={(v) => setF({ ...f, amount: v })} ccy={f.currency} />
-          : <Field label="Adet / Miktar"><input style={css.input} inputMode="decimal" placeholder="0" value={f.qty} onChange={(e) => setF({ ...f, qty: e.target.value })} /></Field>}
-        <AmountField label={`Birim fiyat (${f.currency === "USD" ? "$" : "TL"})`} value={f.price} onChange={(v) => setF({ ...f, price: v })} ccy={f.currency} />
-        <AmountField label={`Komisyon (${f.currency === "USD" ? "$" : "TL"})`} value={f.fee} onChange={(v) => setF({ ...f, fee: v })} ccy={f.currency} />
-      </div>
-      {/* Tutar modunda türetilen adet görünür olmalı: kaydedilen sayı bu */}
-      {mode === "tutar" && qty > 0 && (
-        <div style={{ fontSize: 12, color: T.mut, marginTop: 6 }}>
-          Kaydedilecek adet: <span style={{ ...css.mono, color: T.text }}>{qty.toLocaleString("tr-TR", { maximumFractionDigits: 6 })}</span>
-          {" "}<span style={{ color: T.mut3 }}>({fmtMoney(num(f.amount), f.currency, true)} ÷ {fmtMoney(price, f.currency, true)})</span>
+      <div style={{ fontSize: 11.5, color: T.mut, marginTop: 6 }}>{SIDE_HINT[f.side]}</div>
+      {/* Giriş modu: fonda tutar ("50 bin lira attım"), hissede adet ("50 lot aldım").
+          Bedelsizde para hareketi olmadığından mod seçimi anlamsız — gizlenir. */}
+      {!isBonus && (
+        <div style={{ display: "flex", gap: 6, marginTop: 10, alignItems: "center" }}>
+          <span style={{ ...css.label, marginBottom: 0 }}>Giriş</span>
+          {(["adet", "tutar"] as TradeMode[]).map((m) => (
+            <button key={m} type="button" onClick={() => switchMode(m)} style={{
+              ...css.chip, fontWeight: 600,
+              ...(mode === m ? { background: T.acc, color: T.accInk, borderColor: T.acc } : {}),
+            }}>{m === "adet"
+              ? (isDividend ? "Hisse başına gir" : "Adet gir")
+              : (isDividend ? "Toplam tutar gir" : "Tutar gir")}</button>
+          ))}
         </div>
       )}
-      {/* tek tık doldurmalar: güncel piyasa fiyatı ve (satışta) elde tutulan miktar */}
-      {(livePrice != null || (f.side === "SATIŞ" && held > 0)) && (
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
+        {/* Temettü ve bedelsizde adet HER ZAMAN elle girilir (elindeki hisse sayısı) */}
+        {(isDividend || isBonus || mode === "adet") && (
+          <Field label={isDividend ? "Temettü ödenen adet" : isBonus ? "Gelen bedelsiz adet" : "Adet / Miktar"}>
+            <input style={css.input} inputMode="decimal" placeholder="0" value={f.qty} onChange={(e) => setF({ ...f, qty: e.target.value })} />
+          </Field>
+        )}
+        {mode === "tutar" && !isBonus && (
+          <AmountField ccy={f.currency} value={f.amount} onChange={(v) => setF({ ...f, amount: v })}
+            label={isDividend ? `Hesaba giren toplam (${f.currency === "USD" ? "$" : "TL"})`
+              : f.side === "SATIŞ" ? `Hesaba girecek (${f.currency === "USD" ? "$" : "TL"})`
+                : `Hesaptan çıkacak (${f.currency === "USD" ? "$" : "TL"})`} />
+        )}
+        {!isBonus && !(isDividend && mode === "tutar") && (
+          <AmountField label={isDividend ? `Hisse başına net (${f.currency === "USD" ? "$" : "TL"})` : `Birim fiyat (${f.currency === "USD" ? "$" : "TL"})`}
+            value={f.price} onChange={(v) => setF({ ...f, price: v })} ccy={f.currency} />
+        )}
+        {!isBonus && (
+          <AmountField label={isDividend ? `Stopaj / kesinti (${f.currency === "USD" ? "$" : "TL"})` : `Komisyon (${f.currency === "USD" ? "$" : "TL"})`}
+            value={f.fee} onChange={(v) => setF({ ...f, fee: v })} ccy={f.currency} />
+        )}
+      </div>
+      {/* Türetilen değer görünür olmalı: kaydedilen sayı bu */}
+      {mode === "tutar" && !isBonus && qty > 0 && price > 0 && (
+        <div style={{ fontSize: 12, color: T.mut, marginTop: 6 }}>
+          {isDividend
+            ? <>Hisse başına: <span style={{ ...css.mono, color: T.text }}>{fmtMoney(price, f.currency, true)}</span>{" "}
+              <span style={{ color: T.mut3 }}>({fmtMoney(num(f.amount) + fee, f.currency, true)} ÷ {qty.toLocaleString("tr-TR")} adet)</span></>
+            : <>Kaydedilecek adet: <span style={{ ...css.mono, color: T.text }}>{qty.toLocaleString("tr-TR", { maximumFractionDigits: 6 })}</span>{" "}
+              <span style={{ color: T.mut3 }}>({fmtMoney(num(f.amount), f.currency, true)} ÷ {fmtMoney(price, f.currency, true)})</span></>}
+        </div>
+      )}
+      {/* tek tık doldurmalar: güncel piyasa fiyatı, elde tutulan miktar (satış/temettü/bedelsizde) */}
+      {((livePrice != null && !isBonus && !isDividend) || (held > 0 && (f.side === "SATIŞ" || isDividend || isBonus))) && (
         <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-          {livePrice != null && String(livePrice) !== f.price && (
+          {livePrice != null && !isBonus && !isDividend && String(livePrice) !== f.price && (
             <button type="button" style={css.chip} onClick={() => setF({ ...f, price: String(livePrice) })}>
               Güncel fiyat: {fmtMoney(livePrice, f.currency, true)}
             </button>
@@ -669,10 +723,23 @@ export function TradeForm({ data, reload, onClose, edit, prefill }: FormProps & 
               Tümünü sat: {mode === "tutar" && price > 0 ? fmtMoney(amountFromQty("SATIŞ", held, price, fee), f.currency, true) : held}
             </button>
           )}
+          {/* Temettü neredeyse her zaman elindeki TÜM hisselere ödenir; bedelsizde oran hesabı için lazım */}
+          {(isDividend || isBonus) && held > 0 && String(held) !== f.qty && (
+            <button type="button" style={css.chip} onClick={() => setF({ ...f, qty: String(held) })}>
+              Elimdeki adet: {held.toLocaleString("tr-TR")}
+            </button>
+          )}
+          {isBonus && held > 0 && [50, 100, 200].map((pct) => (
+            <button key={pct} type="button" style={css.chip}
+              onClick={() => setF({ ...f, qty: String(+(held * pct / 100).toFixed(6)) })}>
+              %{pct} bedelsiz
+            </button>
+          ))}
         </div>
       )}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-        {f.currency === "TRY" && (
+        {/* Bedelsizde para hareketi yok → hesap alanı gizlenir (seçilse de sunucu 0 uygular) */}
+        {f.currency === "TRY" && !isBonus && (
           <Field label="Nakit hesap (opsiyonel)" flex={2}>
             <select style={css.input} value={f.account_id} onChange={(e) => setF({ ...f, account_id: e.target.value })}>
               <option value="">— (bakiyeye işleme)</option>
@@ -690,20 +757,36 @@ export function TradeForm({ data, reload, onClose, edit, prefill }: FormProps & 
       </div>
       {ok && (
         <div style={{ fontSize: 12, color: T.mut, marginTop: 8 }}>
-          İşlem tutarı: <span style={{ ...css.mono, color: T.text }}>{fmtMoney(qty * price, f.currency, true)}</span>
-          {f.currency === "TRY" && f.account_id && (() => {
-            const acc = data.accounts.find((a) => a.id === +f.account_id);
-            if (!acc) return null;
-            const proceeds = qty * price - fee;
-            const cost = qty * price + fee;
-            return (
-              <div style={{ marginTop: 4 }}>
-                {f.side === "SATIŞ"
-                  ? <><b>{acc.name}</b> bakiyesine <span style={{ color: T.pos }}>+{fmtMoney(proceeds, "TRY", true)}</span> işlenir</>
-                  : <><b>{acc.name}</b> bakiyesinden <span style={{ color: T.neg }}>−{fmtMoney(cost, "TRY", true)}</span> düşülür</>}
-              </div>
-            );
-          })()}
+          {isBonus ? (() => {
+            /* Bedelsizde asıl merak edilen: adet ne olur, ortalama maliyet kaça düşer.
+               Toplam maliyet sabit kaldığından pozisyonun DEĞERİ değişmez — bunu açıkça söylüyoruz,
+               çünkü "ortalamam düştü, kâra geçtim" en yaygın yanlış okumadır. */
+            const pos = positions(data.trades.filter((t) => t.symbol.toUpperCase() === f.symbol.trim().toUpperCase() && t.asset_type === f.asset_type), []);
+            const cur = pos[0];
+            if (!cur || cur.qty <= 0) return <>Bedelsiz kaydedilecek: <span style={{ ...css.mono, color: T.text }}>{qty.toLocaleString("tr-TR")} adet</span></>;
+            const newQty = cur.qty + qty, newAvg = (cur.avg * cur.qty) / newQty;
+            return (<>
+              Adet <span style={css.mono}>{cur.qty.toLocaleString("tr-TR")}</span> → <span style={{ ...css.mono, color: T.text }}>{newQty.toLocaleString("tr-TR")}</span>
+              {" · "}ort. maliyet <span style={css.mono}>{fmtMoney(cur.avg, f.currency, true)}</span> → <span style={{ ...css.mono, color: T.acc }}>{fmtMoney(newAvg, f.currency, true)}</span>
+              <div style={{ marginTop: 4, color: T.mut3 }}>Toplam maliyet ve pozisyon değeri değişmez — yalnız aynı para daha çok hisseye dağılır.</div>
+            </>);
+          })() : (<>
+            {isDividend ? "Toplam temettü: " : "İşlem tutarı: "}
+            <span style={{ ...css.mono, color: T.text }}>{fmtMoney(qty * price, f.currency, true)}</span>
+            {isDividend && <div style={{ marginTop: 4, color: T.mut3 }}>Adedin ve ortalama maliyetin değişmez; tutar gerçekleşen getiriye yazılır.</div>}
+            {f.currency === "TRY" && f.account_id && (() => {
+              const acc = data.accounts.find((a) => a.id === +f.account_id);
+              if (!acc) return null;
+              const delta = cashDelta({ side: f.side, qty, price, fee });
+              return (
+                <div style={{ marginTop: 4 }}>
+                  {delta >= 0
+                    ? <><b>{acc.name}</b> bakiyesine <span style={{ color: T.pos }}>+{fmtMoney(delta, "TRY", true)}</span> işlenir</>
+                    : <><b>{acc.name}</b> bakiyesinden <span style={{ color: T.neg }}>−{fmtMoney(-delta, "TRY", true)}</span> düşülür</>}
+                </div>
+              );
+            })()}
+          </>)}
         </div>
       )}
       {edit && (

@@ -1,6 +1,6 @@
 import type { AllData, Currency } from "./types.js";
 import type { Day } from "./projection.js";
-import { convert, type Rates } from "./portfolio.js";
+import { convert, qtyDelta, type Rates } from "./portfolio.js";
 
 /* ————— PARA PİYASASI FONU: "ÖDEME ÖNCESİ BOZ" ÖNERİSİ (Faz 17) —————
    Kullanıcının gerçek ritüeli: maaşı fona park et, her ödemeden bir gün önce ihtiyacı kadarını boz.
@@ -32,7 +32,7 @@ export function cashFundHoldings(data: AllData, rates: Rates = { usdTry: 0 }): C
     if (t.asset_type !== "FON") continue;
     const sym = t.symbol.toUpperCase();
     if (!wanted.has(sym)) continue;
-    qty.set(sym, (qty.get(sym) || 0) + (t.side === "ALIŞ" ? t.qty : -t.qty));
+    qty.set(sym, (qty.get(sym) || 0) + qtyDelta(t)); // TEMETTÜ adedi değiştirmez, BEDELSİZ artırır
   }
   const out: CashFundHolding[] = [];
   qty.forEach((q, symbol) => {

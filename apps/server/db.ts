@@ -152,7 +152,7 @@ CREATE TABLE IF NOT EXISTS trades (
   date text NOT NULL,
   asset_type text NOT NULL CHECK (asset_type IN ('BIST','FON','ALTIN','DOVIZ','KRIPTO','ETF')),
   symbol text NOT NULL,
-  side text NOT NULL CHECK (side IN ('ALIŞ','SATIŞ')),
+  side text NOT NULL CHECK (side IN ('ALIŞ','SATIŞ','TEMETTÜ','BEDELSİZ')),
   qty double precision NOT NULL,
   price double precision NOT NULL,
   fee double precision NOT NULL DEFAULT 0,
@@ -308,6 +308,11 @@ ALTER TABLE recurring ADD COLUMN IF NOT EXISTS category_id integer REFERENCES ca
 ALTER TABLE recurring ADD COLUMN IF NOT EXISTS auto boolean NOT NULL DEFAULT false;
 -- Faz 8.2: kart otomatik ödeme talimatı — doluysa vadesi gelen ekstre cron ile bu hesaptan ödenir
 ALTER TABLE cards ADD COLUMN IF NOT EXISTS pay_account_id integer REFERENCES accounts(id) ON DELETE SET NULL;
+-- Faz 21: trades artık pozisyon OLAYLARI defteri — temettü ve bedelsiz de birer satır.
+-- Inline CHECK'in adı Postgres'te trades_side_check olur; drop+add ile idempotent güncellenir
+-- (ADD CONSTRAINT tek başına ikinci açılışta "already exists" hatası verirdi).
+ALTER TABLE trades DROP CONSTRAINT IF EXISTS trades_side_check;
+ALTER TABLE trades ADD CONSTRAINT trades_side_check CHECK (side IN ('ALIŞ','SATIŞ','TEMETTÜ','BEDELSİZ'));
 -- Faz 16: hesap türü (mevcut hesapların hepsi 'banka' sayılır) + son mutabakat damgası
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'banka';
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS last_recon_date text;

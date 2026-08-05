@@ -1,4 +1,4 @@
-import type { AllData, AssetType, Currency, Trade } from "@finans/engine";
+import { qtyDelta, type AllData, type AssetType, type Currency, type Trade } from "@finans/engine";
 
 /* ————— AKILLI HATIRLAMA —————
    Formlar geçmiş kayıtlardan öğrenir: aynı adı ikinci kez girerken tutar/kategori/hesap
@@ -123,7 +123,7 @@ export function heldQty(trades: Trade[], symbol: string, asset_type: AssetType):
   const key = symbol.trim().toUpperCase();
   return trades
     .filter((t) => t.asset_type === asset_type && t.symbol.toUpperCase() === key)
-    .reduce((q, t) => q + (t.side === "ALIŞ" ? t.qty : -t.qty), 0);
+    .reduce((q, t) => q + qtyDelta(t), 0);
 }
 
 /** "+ Ekle" ekranındaki tek-tık şablon çipleri: en sık girilen kalemler + kart harcamaları */
