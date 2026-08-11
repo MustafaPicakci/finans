@@ -77,6 +77,39 @@ Kaynaklardan biri format değiştirirse sadece `apps/server/prices.ts` içindeki
 
 > Not: Fiyat geçmişi tutulmadığından takvimdeki geçmiş günlerin portföy değeri de bugünkü fiyatla değerlenir. Gerçek tarihsel değer grafiği için `prices` tablosuna gün gün kayıt eklemek gerekir (yol haritasında).
 
+## AI Asistan (Faz 22)
+
+**Asistan** sekmesinde işlemlerini cümleyle anlatırsın, asistan bunları senin adına kayda çevirir:
+
+> "11 temmuzda 12,71 TL'den 20 adet ASELS aldım"
+> "TP2 fonundan 2 TL'den 20.000 TL'lik sattım, para Garanti hesabıma geçti ve Akbank ekstresini ödedim"
+
+İkinci cümlede olduğu gibi bir mesajda birden fazla olay olabilir; her biri ayrı bir işleme çevrilir.
+
+**Hiçbir şey onayın olmadan yazılmaz.** Asistan yalnız *plan* üretir: ne oluşturulacağı insan-okur satırlar hâlinde önüne gelir ("`ASELS ALIŞ · 20 adet × 12,71 TRY · 2026-07-11 · Garanti`"), istemediğin satırı ✕ ile çıkarırsın, **Onayla ve uygula** dedikten sonra kayıt oluşur. Yanlış anlaşılan bir cümle böylece deftere değil ekrana düşer.
+
+Tutarı senin değil **sistemin** hesapladığı işlemlerde (kart ekstresi ödemesi, düzenli kalemin gerçekleştirilmesi, hesap mutabakatı) onay satırı o tutarı da önizler — "`Ekstre ödemesi: Akbank · vade 2026-08-14 · Garanti · tutar: 3.200,00 ₺`" — ve ekstre zaten ödenmişse ya da o vadede ekstre yoksa bunu söyler. Uygulama anında tutar yine sunucuda hesaplanır (arada yeni bir harcama girmişse güncel tutar yazılır); onaydaki sayı önizlemedir.
+
+**Yetkisi = senin yetkin.** Onaylanan her işlem, senin kendi oturumunla, arayüzün kullandığı **aynı API uçlarına** iç istek olarak gider: aynı doğrulama, aynı çok-kiracılık izolasyonu, aynı bakiye/defter kuralları. Asistana özel bir yazma yolu yoktur, başka kullanıcının verisine erişemez; hesap silme, toplu içe aktarma, ayar değiştirme gibi uçlar ise bilinçli olarak asistana kapalıdır (tam liste ve gerekçeleri [ai/tools.ts](apps/server/ai/tools.ts) içindeki `SKIPPED`).
+
+**API değişince asistan da bilir.** Asistanın araç kaydı ([ai/tools.ts](apps/server/ai/tools.ts)) uçların tarifidir; iş mantığı orada tekrarlanmaz. `pnpm build` bir kapı çalıştırır ([check-ai-routes.ts](apps/server/scripts/check-ai-routes.ts)): her `/api` yazma ucunun ya bir aracı ya da gerekçeli bir atlama kaydı olmalıdır — yeni bir uç eklendiğinde ya da var olan biri silindiğinde build "karar ver" diyerek durur. Prompt'a elle yazılmış bir API dokümanı güncel kalmazdı; bu kalır.
+
+**Model bağımsızdır (ve ücretsiz olabilir).** Sağlayıcı [ai/provider.ts](apps/server/ai/provider.ts) arkasında soyutlanmıştır; model değiştirmek = env değiştirmek:
+
+| Sağlayıcı | Env | Not |
+|---|---|---|
+| Google Gemini (varsayılan) | `AI_PROVIDER=gemini`, `AI_MODEL=gemini-3.6-flash`, `AI_API_KEY=<AI Studio anahtarı>` | Ücretsiz kotalı, Türkçesi iyi. Google eski sürümleri yeni anahtarlara kapatabiliyor; açık modelleri `curl -H "x-goog-api-key: $AI_API_KEY" https://generativelanguage.googleapis.com/v1beta/models` ile listele |
+| Groq | `AI_PROVIDER=openai`, `AI_BASE_URL=https://api.groq.com/openai/v1`, `AI_MODEL=llama-3.3-70b-versatile` | Ücretsiz kotalı, çok hızlı |
+| OpenRouter / Together / yerel Ollama / OpenAI | `AI_PROVIDER=openai` + kendi `AI_BASE_URL`'i | `/chat/completions` uyumlu her servis |
+
+Seçilen model **function calling** desteklemek zorundadır (asistanın tek işi araç çağırmak). Anahtar tanımlı değilse sekme "kapalı" görünür, uygulamanın geri kalanı etkilenmez. Kullanıcı başına 5 dakikada 30 istek sınırı vardır.
+
+**Dürüst kısıtlar:**
+- Dil modeli tarih ve tutar çıkarımında hata yapabilir — onay ekranı tam da bunun için var, uygulamadan önce satırları oku.
+- **Verin sağlayıcıya gider:** her mesajda hesap/kart/kategori/portföy adların, hesap bakiyelerin ve portföydeki sembollerin (id'lere çevirebilmesi için) seçtiğin model sağlayıcısına gönderilir. İşlem geçmişin ancak asistan `kayit_ara` ile bakma ihtiyacı duyarsa gider. Bu veriyi dışarı hiç çıkarmak istemiyorsan `AI_API_KEY`'i boş bırak (sekme kapalı kalır) ya da yerel bir model kullan (`AI_PROVIDER=openai` + Ollama'nın `AI_BASE_URL`'i).
+- Konuşma geçmişi sunucuda tutulmaz; her istekte istemciden gider ve sohbet sayfayı yenileyince sıfırlanır.
+- Bir plan yalnız **bir kez** uygulanabilir (plan kimliği tek kullanımlıktır) — ağ hatasından sonraki tekrar denemesi çift kayıt yazmaz.
+
 ## Yedekleme
 
 ```bash

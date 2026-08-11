@@ -13,6 +13,7 @@ import { Plan } from "./features/plan";
 import { Kartlar } from "./features/kart";
 import { Portfoy } from "./features/portfoy";
 import { Rapor } from "./features/rapor";
+import { Asistan } from "./features/asistan";
 import { AddSheet, type AddState, type KalemPrefill, type TradePrefill } from "./AddSheet";
 
 /* ————— ana uygulama ————— */
@@ -250,6 +251,7 @@ export default function App() {
             {tab === "kart" && <Kartlar data={data} reload={reload} onAdd={(k) => openAdd(k)} />}
             {tab === "portfoy" && <Portfoy data={data} pos={pos} rates={rates} ccy={ccy} reload={reload} onAdd={(k) => openAdd(k)} />}
             {tab === "rapor" && <Rapor data={data} reload={reload} />}
+            {tab === "asistan" && <Asistan reload={reload} />}
           </div>
         </div>
       </main>

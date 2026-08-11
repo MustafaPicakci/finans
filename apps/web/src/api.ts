@@ -11,6 +11,9 @@ async function j<T>(r: Response): Promise<T> {
   return r.json();
 }
 export type SessionUser = { id: number; email: string };
+/** Asistanın onay bekleyen tek işlemi: hangi araç, hangi argümanlar, kullanıcıya gösterilen özet */
+export type AiAction = { tool: string; args: Record<string, unknown>; summary: string };
+export type AiResult = { summary: string; ok: boolean; detail: string };
 export const api = {
   all: () => fetch("/api/all").then((r) => j<AllData>(r)),
   post: (route: string, body: unknown) =>
@@ -42,6 +45,17 @@ export const api = {
     fetch(`/api/cards/${cardId}/pay-statement`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ due, ...body }) }).then(j),
   unpayStatement: (cardId: number, due: string) =>
     fetch(`/api/cards/${cardId}/pay-statement/${due}`, { method: "DELETE" }).then(j),
+  /* ---- AI asistan (Faz 22) ----
+     chat yalnız PLAN üretir (hiçbir kayıt oluşmaz); execute kullanıcının onayladığı
+     planı uygular. Sunucu durumu tutmaz: konuşma geçmişi her istekte istemciden gider. */
+  aiStatus: () => fetch("/api/ai/status").then((r) => j<{ enabled: boolean; model: string | null }>(r)),
+  aiChat: (messages: { role: "user" | "assistant"; content: string }[]) =>
+    fetch("/api/ai/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages }) })
+      .then((r) => j<{ reply: string; pending: AiAction[]; model: string; planId: string }>(r)),
+  /* planId tek kullanımlıktır: aynı planı ikinci kez göndermek 409 döner (çift kayıt koruması) */
+  aiExecute: (planId: string, actions: AiAction[]) =>
+    fetch("/api/ai/execute", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ planId, actions }) })
+      .then((r) => j<{ results: AiResult[] }>(r)),
   /* ---- auth (Faz 5.1) ---- */
   me: () => fetch("/api/auth/me").then((r) => j<{ user: SessionUser | null }>(r)),
   login: (email: string, password: string) =>

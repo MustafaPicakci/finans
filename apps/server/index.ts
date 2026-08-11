@@ -5,11 +5,13 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { logger } from "hono/logger";
 import cron from "node-cron";
-import { txShares, keyOf, cashDelta, REC_AMOUNT_BEGIN, type Card, type CardTx, type TradeSide } from "@finans/engine";
+import { txShares, keyOf, cashDelta, statementAmount, REC_AMOUNT_BEGIN, type Card, type CardTx, type TradeSide } from "@finans/engine";
 import { db, initDb, nowLocal, todayLocal, TENANT_TABLES, GLOBAL_SETTING_KEYS, type TxClient } from "./db.js";
 import { refreshAll } from "./prices.js";
 import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, SESSION_COOKIE, type SessionUser } from "./auth.js";
 import { sendMail, resetEmail, verifyEmail, mailConfigured, verifyMailConfig, mailFromWarning } from "./mail.js";
+import { mountAi, type Invoke } from "./ai/index.js";
+import { getProvider } from "./ai/provider.js";
 
 const app = new Hono();
 app.use("*", logger());
@@ -887,8 +889,6 @@ crud("cardtxs", "card_txs", [
    txShares — istemciden gelen tutara güvenilmez). Geçmiş vadeli ekstre de ödenebilir (kayıt altına almak
    için); o zaten borçta/projeksiyonda olmadığından yalnız defter kaydı üretir. */
 const DUE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const statementAmount = (card: Card, txs: CardTx[], dueK: string): number =>
-  txs.reduce((s, t) => s + txShares(t, card).filter((sh) => keyOf(sh.due) === dueK).reduce((a, x) => a + x.amount, 0), 0);
 
 /** Tek tx içinde idempotent ekstre ödemesi (elle "Ödedim" + otomatik talimat ortak yazıcısı).
     Yeni ödendiyse true; (card, due) zaten işaretliyse false döner. */
@@ -1152,6 +1152,26 @@ api.post("/account/delete", async (c) => {
   return c.json({ ok: true });
 });
 
+/* ---- AI asistan (Faz 22) ----
+   Asistanın onayladığın işlemleri "iç istek" olarak aynı uygulamaya gönderilir:
+   kullanıcının kendi oturum çerezi taşınır (guard yeniden doğrular → tenant-scope,
+   doğrulama ve bakiye/defter yan etkileri ucun kendi kodundan gelir; asistana özel
+   bir yazma yolu YOKTUR). İstemcinin IP'si de taşınır ki iç istekler kullanıcının
+   kendi rate-limit bütçesinden düşsün, ortak "local" kovasından değil. */
+const invoke: Invoke = async (c, method, path, body) => {
+  const res = await app.request(`/api${path}`, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      cookie: c.req.header("cookie") ?? "",
+      "x-forwarded-for": clientIp(c),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  return { status: res.status, data: await res.json().catch(() => ({})) };
+};
+mountAi(api, { invoke, rateLimited });
+
 app.route("/api", api);
 
 /* prod: derlenmiş arayüzü sun (apps/web/dist) — pnpm bu paketi kendi dizininden
@@ -1231,6 +1251,8 @@ if (mailConfigured) {
   if (warn) console.warn(`[mail] UYARI: ${warn}`);
   verifyMailConfig().catch(() => { /* verifyMailConfig kendi hatasını loglar */ });
 }
+if (!getProvider()) console.warn("[ai] Asistan kapalı — AI_API_KEY (ve gerekiyorsa AI_PROVIDER/AI_MODEL) ayarlanmadı.");
+else console.log(`[ai] Asistan hazır: ${getProvider()!.label}`);
 if (isProd && !process.env.APP_URL) console.warn("[auth] UYARI: prod'da APP_URL ayarlanmadı — aktivasyon/şifre-sıfırlama linkleri istek host'undan türetilir; güvenilir sabit URL için APP_URL env'ini ayarla.");
 serve({ fetch: app.fetch, port }, () => console.log(`finans → http://localhost:${port}`));
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { clampDay, firstCutoff, dueOf, txShares, cardInfos, stmtKey } from "./cards.js";
+import { clampDay, firstCutoff, dueOf, txShares, cardInfos, stmtKey, statementAmount } from "./cards.js";
 import type { Card, CardTx } from "./types.js";
 
 const card: Card = { id: 1, name: "Test Kart", limit_amount: 50000, statement_day: 15, due_day: 5 };
@@ -107,5 +107,20 @@ describe("cardInfos", () => {
     expect(info.debt).toBeCloseTo(150);           // yalnız ödenmemiş pay
     expect(info.nextDue).toEqual(new Date(2026, 7, 5)); // sıradaki = ilk ÖDENMEMİŞ ekstre
     expect(info.nextAmount).toBeCloseTo(150);
+  });
+});
+
+describe("statementAmount", () => {
+  const txs: CardTx[] = [
+    { id: 1, card_id: 1, date: "2026-06-10", name: "A", amount: 300, installments: 2 }, // 5 Tem + 5 Ağu
+    { id: 2, card_id: 1, date: "2026-06-12", name: "B", amount: 200, installments: 1 }, // 5 Tem
+    { id: 3, card_id: 2, date: "2026-06-12", name: "Başka kart", amount: 999, installments: 1 },
+  ];
+  it("o vadeye düşen tüm taksit paylarını toplar", () => {
+    expect(statementAmount(card, txs, "2026-07-05")).toBeCloseTo(350); // 150 + 200
+    expect(statementAmount(card, txs, "2026-08-05")).toBeCloseTo(150); // ikinci taksit
+  });
+  it("başka kartın harcamasını saymaz, ekstresi olmayan vadede 0 döner", () => {
+    expect(statementAmount(card, txs, "2026-09-05")).toBe(0);
   });
 });

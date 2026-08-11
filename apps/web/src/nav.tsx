@@ -1,7 +1,7 @@
 import React from "react";
 
 /* Kenar çubuğu / alt menü sekmeleri — Finans.dc.html tasarımındaki sıra, başlık, alt başlık ve ikonlar. */
-export type TabKey = "ozet" | "nakit" | "plan" | "kart" | "portfoy" | "rapor" | "hesaplar";
+export type TabKey = "ozet" | "nakit" | "plan" | "kart" | "portfoy" | "rapor" | "hesaplar" | "asistan";
 
 export const NAV: { key: TabKey; label: string; short: string; title: string; sub: string }[] = [
   { key: "ozet", label: "Özet", short: "Özet", title: "Özet", sub: "genel finansal durumun" },
@@ -11,6 +11,7 @@ export const NAV: { key: TabKey; label: string; short: string; title: string; su
   { key: "portfoy", label: "Portföy", short: "Portföy", title: "Portföy", sub: "çok varlıklı yatırım pozisyonların" },
   { key: "rapor", label: "Rapor", short: "Rapor", title: "Rapor", sub: "gerçekleşen gelir & giderler" },
   { key: "hesaplar", label: "Hesaplar", short: "Hesap", title: "Hesaplar", sub: "banka hesapları & vadeli mevduat" },
+  { key: "asistan", label: "Asistan", short: "Asistan", title: "Asistan", sub: "işlemlerini anlat, kayda o çevirsin" },
 ];
 
 const PATHS: Record<TabKey, React.ReactNode> = {
@@ -21,6 +22,7 @@ const PATHS: Record<TabKey, React.ReactNode> = {
   portfoy: <><path d="M2 11.5l3.5-4 3 2.5L14 4" /><path d="M10.5 4H14v3.5" /></>,
   rapor: <path d="M2.5 14.5v-5M6.5 14.5V3.5M10.5 14.5v-7M14.5 14.5V6" />,
   hesaplar: <><path d="M2 6l6.5-3.5L15 6" /><path d="M3.5 6.5v6M13.5 6.5v6M6.8 6.5v6M10.2 6.5v6M2 14.5h13" /></>,
+  asistan: <><path d="M2.5 3.5h12a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H7l-3.5 3v-3H2.5a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1Z" /><path d="M5.5 7.5h6" /></>,
 };
 
 export const NavIcon = ({ tab, size = 17 }: { tab: TabKey; size?: number }) => (

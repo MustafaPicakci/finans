@@ -32,6 +32,13 @@ export function txShares(tx: CardTx, card: Card): Share[] {
   return out;
 }
 
+/** Belirli bir ekstrenin (son ödeme tarihi `dueKey`, 'YYYY-MM-DD') toplam tutarı: o vadeye düşen
+    tüm taksit paylarının toplamı. Ekstre ödemesinin tutarı İSTEMCİDEN alınmaz — hem sunucu
+    (`POST /cards/:id/pay-statement`) hem asistanın onay ekranı aynı hesabı buradan çağırır. */
+export const statementAmount = (card: Card, txs: CardTx[], dueKey: string): number =>
+  txs.filter((t) => t.card_id === card.id)
+    .reduce((s, t) => s + txShares(t, card).filter((sh) => keyOf(sh.due) === dueKey).reduce((a, x) => a + x.amount, 0), 0);
+
 export type CardInfo = {
   card: Card; debt: number; nextDue: Date | null; nextAmount: number;
   statements: { due: Date; amount: number; paid: boolean }[];

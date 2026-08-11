@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch index.ts",
     "start": "cross-env NODE_ENV=production tsx index.ts",
-    "build": "tsc --noEmit",
+    "build": "tsx scripts/check-ai-routes.ts && tsc --noEmit",
     "migrate": "cross-env NODE_OPTIONS=--experimental-sqlite tsx scripts/migrate-sqlite-to-pg.mjs"
   },
   "dependencies": {
