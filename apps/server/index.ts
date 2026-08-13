@@ -297,8 +297,15 @@ function crud(route: string, table: string, cols: Col[]) {
       return c.json({ error: `${col.name} zorunlu` }, 400);
     }
     const uid = c.get("user").id;
-    const names = [...cols.map((x) => x.name), "user_id"]; // Faz 5.2: her kayıt sahibine bağlı
-    const values = [...cols.map((col) => b[col.name] ?? col.default ?? null), uid];
+    /* Gövdede HİÇ GEÇMEYEN (undefined) ve kod tarafında varsayılanı olmayan kolon INSERT'e
+       yazılmaz — böylece tablonun kendi DEFAULT'u devreye girer. Eskiden açıkça NULL
+       yazılıyordu; `installments integer NOT NULL DEFAULT 1` gibi bir kolonda bu, DEFAULT'u
+       ezip NOT NULL ihlali (500) demekti. Arayüz formları alanı hep gönderdiği için gizli
+       kalmıştı, asistan opsiyonel alanı atlayınca ortaya çıktı.
+       Not: istemcinin AÇIKÇA gönderdiği null hâlâ NULL yazar (anlamlı bir "boşalt" isteği). */
+    const used = cols.filter((col) => b[col.name] !== undefined || col.default !== undefined);
+    const names = [...used.map((x) => x.name), "user_id"]; // Faz 5.2: her kayıt sahibine bağlı
+    const values = [...used.map((col) => b[col.name] ?? col.default ?? null), uid];
     const info = await db.run(
       `INSERT INTO ${table} (${names.join(",")}) VALUES (${names.map(() => "?").join(",")}) RETURNING id`,
       ...values,
