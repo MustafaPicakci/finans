@@ -118,6 +118,28 @@ Seçilen model **function calling** desteklemek zorundadır (asistanın tek işi
 - Konuşma geçmişi sunucuda tutulmaz; her istekte istemciden gider ve sohbet sayfayı yenileyince sıfırlanır.
 - Bir plan yalnız **bir kez** uygulanabilir (plan kimliği tek kullanımlıktır) — ağ hatasından sonraki tekrar denemesi çift kayıt yazmaz.
 
+## Soğuk başlangıç ve uptime izleme
+
+Render'ın ücretsiz katmanı **15 dakika gelen istek olmazsa** süreci uyutur; sonraki ilk istek 30-60 saniye bekler. Panel için katlanılır, ama "harcama SMS'ini paylaş → kaydet" akışını kullanılamaz hâle getirir. İki katmanlı çözüm:
+
+**1. Uygulamanın kendini uyanık tutması (kodda, hazır).** `KEEPALIVE_URL` (ya da `APP_URL`) tanımlıysa ve `NODE_ENV=production` ise, uygulama 10 dakikada bir kendi genel adresindeki `/api/health` ucunu yoklar. Bu Render'ın saydığı türden gelen trafiktir, yani süreç uyumaz. **Ama yalnız uyanık tutar, uyandırmaz:** deploy, çökme ya da kota bitimiyle süreç bir kez uyursa kendi cron'u da durmuş olur.
+
+**2. Dışarıdan uptime monitörü (asıl güvence, 2 dakikalık kurulum).** Ücretsiz seçenekler: [cron-job.org](https://cron-job.org), [UptimeRobot](https://uptimerobot.com), [Better Stack](https://betterstack.com). Kurulum aynı:
+
+- URL: `https://<uygulama-adresin>/api/health` — `GET`
+- Aralık: **5 veya 10 dakika**
+- Beklenen: HTTP `200`
+
+`/api/health` kimlik istemez ve veri sızdırmaz; yalnız süreç ve veritabanı canlı mı onu söyler:
+
+```json
+{ "ok": true, "db": true, "ms": 12 }
+```
+
+Veritabanına erişilemiyorsa **503** döner — yani monitör "uygulama ayakta ama kullanılamaz" durumunu da yakalar. (Bu ayrım pratikte lazım oldu: uygulama çalışırken Postgres kapalıydı ve hata arayüzde yalnız "Sunucu hatası" olarak görünüyordu.)
+
+> Not: Render ücretsiz planı ayda 750 örnek-saati verir; tek bir servisi sürekli ayakta tutmak ~730 saattir, yani sığar. İkinci bir ücretsiz servis daha çalıştırıyorsan kota bölünür.
+
 ## Yedekleme
 
 ```bash

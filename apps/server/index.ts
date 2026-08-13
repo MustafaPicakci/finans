@@ -240,6 +240,17 @@ api.post("/auth/resend-verify", async (c) => {
   return c.json({ ok: true });
 });
 
+/* ---- sağlık ucu (Faz 23) — GUARD'TAN ÖNCE, bilinçli olarak herkese açık ----
+   İki iş görür: (1) dış uptime monitörünün yokladığı adres, (2) uygulamanın kendini
+   uyanık tutmak için attığı ping'in hedefi. Veri sızdırmaz: yalnız süreç ve DB canlı mı.
+   DB'ye erişilemiyorsa 503 döner — monitör "ayakta ama kullanılamaz" durumunu da yakalasın
+   (yaşandı: uygulama çalışıyordu, Postgres kapalıydı, hata 'Sunucu hatası' diye görünüyordu). */
+api.get("/health", async (c) => {
+  const t0 = Date.now();
+  try { await db.get("SELECT 1 AS ok"); } catch { return c.json({ ok: false, db: false }, 503); }
+  return c.json({ ok: true, db: true, ms: Date.now() - t0 });
+});
+
 /* ---- guard: bundan sonraki tüm /api rotaları geçerli oturum ister ---- */
 api.use("*", async (c, next) => {
   const user = await getSessionUser(getCookie(c, SESSION_COOKIE));
@@ -1245,6 +1256,25 @@ const runScheduledJobs = () => {
   materializeDueStatements().catch(() => {});
 };
 cron.schedule("*/15 * * * *", runScheduledJobs);
+
+/* ---- uyanık tutma (Faz 23) ----
+   Render ücretsiz katmanı 15 dk GELEN İSTEK olmazsa süreci uyutur; sonraki ilk istek 30-60 sn
+   bekler. Telefondan "SMS paylaş → kaydet" akışı bu beklemeyle kullanılamaz hâle geliyordu.
+   Kendi genel adresimize 10 dakikada bir istek atmak bunu önler (istek internetten döndüğü için
+   Render'ın saydığı türden gelen trafiktir).
+   DÜRÜST KISIT: bu yalnız UYANIK TUTAR, uyandırmaz — süreç bir kez uykuya dalarsa (deploy, çökme,
+   kotanın bitmesi) kendi cron'u da durmuş olur ve onu ancak DIŞARIDAN bir istek uyandırır. Asıl
+   güvence bu yüzden dış bir uptime monitörüdür (bkz. README); bu ping onun tamamlayıcısı.
+   Yerelde ve KEEPALIVE_URL/APP_URL tanımlı değilken çalışmaz. */
+const keepaliveUrl = (process.env.KEEPALIVE_URL || process.env.APP_URL || "").replace(/\/+$/, "");
+if (isProd && keepaliveUrl) {
+  cron.schedule("*/10 * * * *", () => {
+    fetch(`${keepaliveUrl}/api/health`, { signal: AbortSignal.timeout(20_000) })
+      .then((r) => { if (!r.ok) console.warn(`[keepalive] sağlık ucu ${r.status} döndü`); })
+      .catch((e: Error) => console.warn(`[keepalive] ping başarısız: ${e.message}`));
+  });
+  console.log(`[keepalive] 10 dk'da bir ${keepaliveUrl}/api/health yoklanacak`);
+}
 
 const port = Number(process.env.PORT || 8787);
 /* şema hazır olsun, sonra sun */
