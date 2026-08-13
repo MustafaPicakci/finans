@@ -179,6 +179,24 @@ export default function App() {
           .topbar{padding:14px 16px!important}
           .btn-label{display:none}
           input,select,button{min-height:40px}
+          /* Liste satırları dar ekranda alt alta insin (sabit genişlikli çocuklar sıkışıp
+             hizaları kaydırıyordu). Kural üçlü:
+               row-title  → satırın kimliği (hesap adı, işlem açıklaması) KENDİ satırını alır;
+                            yoksa 110px'e sıkışıp "Garanti V…" diye kırpılıyordu,
+               row-amount → tutar hangi satıra düşerse düşsün sağa yaslanır (ragged hizayı
+                            önler: aynı listede tutarlar farklı yerlerden başlıyordu),
+               input/select → ekran genişliğini aşamaz.
+             !important gerekli: bu bileşenler stillerini inline veriyor (flex:1 vb.) ve
+             inline stil sınıf kuralını yener. */
+          .ui-row{flex-wrap:wrap}
+          /* 100% değil "100% − ikon": satır başındaki küçük ikon/rozet başlıkla AYNI satırda
+             kalsın (tam genişlik verince ikon tek başına bir satırda asılı kalıyordu). */
+          .row-title{flex-basis:calc(100% - 40px)!important;min-width:0!important}
+          .row-amount{margin-left:auto!important}
+          input,select{max-width:100%}
+          /* Üst çubuk: sekme alt başlığı dar ekranda üç satıra sarıp başlığı ikonlardan
+             koparıyordu; başlık tek başına yeterli. */
+          .topbar-sub{display:none}
         }
       `}</style>
 
@@ -239,7 +257,7 @@ export default function App() {
         }}>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: "-0.02em" }}>{meta.title}</div>
-            <div style={{ fontSize: 12.5, color: T.mut3, marginTop: 1 }}>{meta.sub}</div>
+            <div className="topbar-sub" style={{ fontSize: 12.5, color: T.mut3, marginTop: 1 }}>{meta.sub}</div>
           </div>
           <div style={{ flex: 1 }} />
           <button className="icon-btn" onClick={refresh} disabled={refreshing} title="Fiyatları yenile" style={{

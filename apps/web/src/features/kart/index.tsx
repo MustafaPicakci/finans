@@ -280,7 +280,7 @@ export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => 
                   </span>
                 )}
               </span>
-              <span style={{ ...css.mono, fontSize: 13 }}>{tl.format(Math.round(t.amount))}</span>
+              <span className="row-amount" style={{ ...css.mono, fontSize: 13 }}>{tl.format(Math.round(t.amount))}</span>
               <button style={css.edit} title="Düzenle" onClick={() => setEditing({ kind: "cardtx", row: t })}>✎</button>
               <button style={css.del} onClick={async () => { await api.del("cardtxs", t.id); reload(); }}>✕</button>
             </Row>

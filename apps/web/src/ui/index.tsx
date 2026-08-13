@@ -110,8 +110,12 @@ export const Empty = ({ children }: { children: React.ReactNode }) => (
   <div style={{ color: T.mut, fontSize: 13, padding: "18px 0", textAlign: "center" }}>{children}</div>
 );
 
+/* Liste satırı. `ui-row` sınıfı mobilde satırı SARMALANIR kılar (App.tsx'teki medya sorgusu):
+   hesap satırı gibi yerlerde sabit genişlikli çocuklar (tür seçici, tutar, düğmeler) toplamda
+   ~500px yer ister; telefonun ~330px'inde sarmalama olmadan hepsi birbirine geçiyor, yazılar
+   kırpılıyor ve hizalar kayıyordu. Sarmalama, gizlemeden çözer: içerik alt satıra iner. */
 export const Row = ({ children, last }: { children: React.ReactNode; last?: boolean }) => (
-  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 0", borderBottom: last ? "none" : `1px solid ${T.line}` }}>
+  <div className="ui-row" style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 0", borderBottom: last ? "none" : `1px solid ${T.line}` }}>
     {children}
   </div>
 );

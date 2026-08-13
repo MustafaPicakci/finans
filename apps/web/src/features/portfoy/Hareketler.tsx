@@ -185,7 +185,7 @@ function HareketRow({ e, data, reload, onSymbol, onEdit }: {
           {t.symbol}
         </button>
         <span style={{ fontSize: 10, fontWeight: 700, color: TYPE_COLORS[t.asset_type] || T.mut }}>{t.asset_type}</span>
-        <span style={{ flex: 1, fontSize: 12.5, color: T.mut }}>
+        <span className="row-title" style={{ flex: 1, fontSize: 12.5, color: T.mut }}>
           {bonus
             ? <>{num(t.qty)} adet bedelsiz · <span style={{ color: T.mut3 }}>ort. {fmtMoney(e.avgBefore, ccy, true)} → {fmtMoney(e.avgAfter, ccy, true)}</span></>
             : <>{num(t.qty)} × <span style={css.mono}>{fmtMoney(t.price, ccy, true)}</span>
@@ -195,7 +195,7 @@ function HareketRow({ e, data, reload, onSymbol, onEdit }: {
             ekranda yalnız gerçekleşen K/Z'ye ayrılmıştır (işaretli tutar "zarar" gibi okunuyordu).
             Ayrıca portföy işlemi hesaba bağlı değilse hiçbir bakiyeyi oynatmaz — eksi işareti bunu da
             yanlış ima ediyordu. */}
-        <span style={{ ...css.mono, fontSize: 13.5, color: bonus ? T.mut3 : T.text }}
+        <span className="row-amount" style={{ ...css.mono, fontSize: 13.5, color: bonus ? T.mut3 : T.text }}
           title={bonus ? "bedelsizde para hareketi yoktur" : buy ? "ödenen (komisyon dahil)" : div ? "hesaba giren temettü" : "ele geçen (komisyon düşülmüş)"}>
           {bonus ? "—" : fmtMoney(Math.round(Math.abs(e.cash)), ccy)}
         </span>

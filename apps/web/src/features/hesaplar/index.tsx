@@ -73,11 +73,11 @@ function Transferler({ data, reload, onEdit }: {
           <span style={{ ...css.mono, fontSize: 11.5, color: T.mut, width: 74 }}>
             {fmtD(new Date(t.date + "T00:00:00"), { day: "2-digit", month: "short", year: "2-digit" })}
           </span>
-          <div style={{ flex: 1, fontSize: 13.5 }}>
+          <div className="row-title" style={{ flex: 1, fontSize: 13.5 }}>
             {name(t.from_account_id)} <span style={{ color: T.mut3 }}>→</span> {name(t.to_account_id)}
             {t.note && <span style={{ fontSize: 11.5, color: T.mut3, marginLeft: 6 }}>{t.note}</span>}
           </div>
-          <span style={{ ...css.mono, fontSize: 13.5 }}>{tl.format(Math.round(t.amount))}</span>
+          <span className="row-amount" style={{ ...css.mono, fontSize: 13.5 }}>{tl.format(Math.round(t.amount))}</span>
           <button style={{ ...css.ghost, padding: "5px 10px", fontSize: 12 }}
             onClick={() => onEdit({ kind: "transfer", row: t })}>Düzenle</button>
           <button style={css.del} title="Sil (iki bacağı birden geri alır)"
@@ -132,7 +132,7 @@ function VadesizHesaplar({ data, reload }: { data: AllData; reload: () => void }
                 width: 28, height: 28, borderRadius: 9, background: T.panel2, display: "grid",
                 placeItems: "center", fontSize: 13, color: KIND_COLOR[kind], flexShrink: 0,
               }}>{KIND_ICON[kind]}</span>
-              <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="row-title" style={{ flex: 1, minWidth: 0 }}>
                 {/* Faz 18: ad satır içinde düzenlenir — sil+yeniden ekle hesabın TÜM hareketlerini
                     (CASCADE) götürürdü, yani adı düzeltmek defteri yok etmek anlamına gelirdi. */}
                 <input style={{ ...css.input, padding: "3px 6px", fontSize: 14, border: "1px solid transparent", background: "transparent" }}
@@ -165,7 +165,8 @@ function VadesizHesaplar({ data, reload }: { data: AllData; reload: () => void }
                 title="Hesap hareketleri" onClick={() => { setShown(open ? null : a.id); setRecon(null); }}>
                 {open ? "Hareketleri gizle" : "Hareketler"}
               </button>
-              <span style={{ ...css.mono, width: 120, textAlign: "right", fontSize: 14 }}>{tl.format(Math.round(a.balance))}</span>
+              {/* row-amount: satır mobilde sarmalanınca tutar hangi satıra düşerse sağa yaslanır */}
+              <span className="row-amount" style={{ ...css.mono, minWidth: 100, textAlign: "right", fontSize: 14 }}>{tl.format(Math.round(a.balance))}</span>
               <button style={css.del} onClick={async () => { await api.del("accounts", a.id); reload(); }}>✕</button>
             </Row>
             {reconOpen && <Mutabakat data={data} account={a} reload={reload} onDone={() => setRecon(null)} />}
