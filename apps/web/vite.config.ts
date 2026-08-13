@@ -14,6 +14,20 @@ export default defineConfig({
         lang: "tr",
         start_url: "/",
         display: "standalone",
+        /* Faz 23 — paylaşım hedefi: Android'de herhangi bir metnin (özellikle banka harcama
+           SMS'inin) "Paylaş" menüsünde Finans çıkar. Paylaşılan metin `?ekle=` ile açılışta
+           Asistan'a gider, orada çözümlenip onaya sunulur. GET seçildi: yan etkisi olmayan
+           bir gezinme (POST share_target servis çalışanında istek yakalamayı gerektirirdi ve
+           uygulama zaten hiçbir şeyi onaysız yazmıyor).
+           iOS Safari share_target desteklemez; orada aynı URL'e Kısayollar'dan gidilir. */
+        share_target: {
+          /* action'da sorgu dizesi YOK: paylaşım parametreleri buna eklenecek, iki sorgu
+             dizesinin birleşmesi tarayıcıya göre değişir. Paylaşımı `ekle` parametresinin
+             varlığından anlıyoruz zaten. */
+          action: "/",
+          method: "GET",
+          params: { title: "title", text: "ekle", url: "url" },
+        },
         background_color: "#0D0D11",
         theme_color: "#0D0D11",
         icons: [

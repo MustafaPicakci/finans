@@ -17,7 +17,12 @@ const ORNEKLER = [
   "Dün markete 850 TL harcadım, kartla",
 ];
 
-export function Asistan({ reload }: { reload: () => void }) {
+export function Asistan({ reload, initialText, onConsumed }: {
+  reload: () => void;
+  /** Paylaşımdan gelen metin (Faz 23) — bir kez otomatik gönderilir; kayıt yine onayla oluşur */
+  initialText?: string | null;
+  onConsumed?: () => void;
+}) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [pending, setPending] = useState<AiAction[]>([]);
   const [planId, setPlanId] = useState(""); // tek kullanımlık: uygulanan plan tekrar gönderilemez
@@ -76,6 +81,16 @@ export function Asistan({ reload }: { reload: () => void }) {
       setErr(String((e as Error).message));
     } finally { setBusy(false); }
   }, [busy, reload, loadHistory]);
+
+  /* Paylaşılan metni asistan hazır olur olmaz TEK KEZ gönder (ref, StrictMode'un çift
+     effect'ine ve yeniden render'lara karşı). Kullanıcı hiçbir şey yazmadan onay kartını görür. */
+  const sharedSent = useRef(false);
+  useEffect(() => {
+    if (!initialText || sharedSent.current || !status?.enabled) return;
+    sharedSent.current = true;
+    onConsumed?.();
+    send(initialText);
+  }, [initialText, status, send, onConsumed]);
 
   if (status && !status.enabled) {
     return (

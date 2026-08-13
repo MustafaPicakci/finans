@@ -27,6 +27,15 @@ export default function App() {
   const [ccy, setCcy] = useState<Currency>(() => (localStorage.getItem(CCY_KEY) as Currency) || "TRY");
   const [add, setAdd] = useState<AddState | null>(null); // global "+ Ekle" akışı
   const [user, setUser] = useState<SessionUser | null | undefined>(undefined); // undefined = oturum kontrol ediliyor
+  /* Faz 23 — paylaşılan metin (Android "Paylaş → Finans", ya da elle `?ekle=…`):
+     harcama SMS'ini uygulamaya atmanın yolu. Açılışta Asistan sekmesine gider ve orada
+     otomatik gönderilir; kayıt yine ancak onayla oluşur. URL bir kez okunup temizlenir ki
+     sayfa yenilendiğinde aynı metin ikinci kez gönderilmesin. */
+  const [shared, setShared] = useState<string | null>(() => {
+    const p = new URLSearchParams(window.location.search);
+    const text = [p.get("ekle"), p.get("title"), p.get("url")].filter(Boolean).join(" ").trim();
+    return text || null;
+  });
   const [urlAuth, setUrlAuth] = useState<UrlAuth>(() => { // e-posta bağlantısındaki reset/verify token'ı
     const p = new URLSearchParams(window.location.search);
     const reset = p.get("reset"), verify = p.get("verify");
@@ -45,6 +54,11 @@ export default function App() {
     setRefreshing(true);
     try { await api.refreshPrices(); await reload(); } catch { /* best-effort */ } finally { setRefreshing(false); }
   }, [reload]);
+  useEffect(() => {
+    if (!shared) return;
+    setTab("asistan");
+    window.history.replaceState({}, "", window.location.pathname); // metin tüketildi; yenilemede tekrarlanmasın
+  }, [shared]);
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem(THEME_KEY, theme);
@@ -252,7 +266,7 @@ export default function App() {
             {tab === "kart" && <Kartlar data={data} reload={reload} onAdd={(k) => openAdd(k)} />}
             {tab === "portfoy" && <Portfoy data={data} pos={pos} rates={rates} ccy={ccy} reload={reload} onAdd={(k) => openAdd(k)} />}
             {tab === "rapor" && <Rapor data={data} reload={reload} />}
-            {tab === "asistan" && <Asistan reload={reload} />}
+            {tab === "asistan" && <Asistan reload={reload} initialText={shared} onConsumed={() => setShared(null)} />}
           </div>
         </div>
       </main>
