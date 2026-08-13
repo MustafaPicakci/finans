@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { agentLoop, executeActions, consumePlan, type AgentDeps, type PendingAction } from "./index.js";
-import type { AiProvider, ChatRequest, ChatResult, ToolCall } from "./provider.js";
+import { AiError, withKeyFallback, type AiProvider, type ChatRequest, type ChatResult, type ToolCall } from "./provider.js";
 import { ROUTE_TOOLS } from "./tools.js";
 
 /* Ajan döngüsünün sözleşmesi: OKUMA araçları çalışır, YAZMA araçları YALNIZ PLANLANIR.
@@ -189,6 +189,56 @@ describe("plan kimliği tek kullanımlıktır", () => {
     expect(consumePlan("9:plan-abc")).toBe(true);
     expect(consumePlan("9:plan-abc")).toBe(false);
     expect(consumePlan("9:plan-xyz")).toBe(true); // farklı plan etkilenmez
+  });
+});
+
+/* Çoklu anahtar: ücretsiz kotalar dar, tek anahtarla asistan gün ortasında susuyor.
+   Sessizce bozulabilecek bir davranış — hangi hatanın anahtar değiştirmeyi hak ettiği
+   ve kota dolan anahtara geri dönülmemesi burada sabitleniyor. */
+describe("withKeyFallback", () => {
+  /** kota/anahtar hatası → anahtar değiştirmeye DEĞER (retryable) */
+  const quota = () => new AiError("AI kotası doldu, biraz sonra tekrar dene", true);
+
+  it("çalışan tek anahtarda sonucu döndürür", async () => {
+    await expect(withKeyFallback(["k1"], async (k) => `ok:${k}`)).resolves.toBe("ok:k1");
+  });
+
+  /* NOT: imleç (son çalışan anahtar) modül düzeyinde kalıcıdır — bu bilinçli, çünkü kota
+     dolan anahtara her istekte yeniden çarpmak istemiyoruz. Testler bu yüzden "hangi
+     anahtar" yerine "kaç anahtar denendi" üzerinden yazıldı; sırayla çalışmaları gerekmesin. */
+  it("kota dolan anahtardan sıradakine geçer", async () => {
+    const tried: string[] = [];
+    let ilk = "";
+    const out = await withKeyFallback(["k1", "k2"], async (k) => {
+      tried.push(k);
+      if (!ilk) { ilk = k; throw quota(); } // hangisiyle başlarsa başlasın, ilki kotada
+      return "ok";
+    }, () => {});
+    expect(out).toBe("ok");
+    expect(tried).toHaveLength(2);
+  });
+
+  it("çalışan anahtarda kalır — sonraki istek kota dolan anahtara geri dönmez", async () => {
+    let calisan = "";
+    await withKeyFallback(["k1", "k2"], async (k) => {
+      if (!calisan) { calisan = k === "k1" ? "k2" : "k1"; throw quota(); }
+      return "ok";
+    }, () => {});
+    const tried: string[] = [];
+    await withKeyFallback(["k1", "k2"], async (k) => { tried.push(k); return "ok"; }, () => {});
+    expect(tried).toEqual([calisan]); // doğrudan çalışan anahtardan başladı
+  });
+
+  it("anahtarla ilgisi olmayan hatada anahtar harcamaz (aynı istek diğerinde de patlar)", async () => {
+    const tried: string[] = [];
+    await expect(withKeyFallback(["k1", "k2"], async (k) => { tried.push(k); throw new AiError("model yok"); }, () => {}))
+      .rejects.toThrow("model yok");
+    expect(tried).toHaveLength(1);
+  });
+
+  it("tüm anahtarlar tükenirse son hatayı fırlatır", async () => {
+    await expect(withKeyFallback(["k1", "k2"], async () => { throw quota(); }, () => {}))
+      .rejects.toThrow("kotası doldu");
   });
 });
 

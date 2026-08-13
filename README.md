@@ -112,6 +112,8 @@ Asistan bu metinleri şöyle ayırır: banka/kart adı kartlarınla eşleşiyors
 
 Seçilen model **function calling** desteklemek zorundadır (asistanın tek işi araç çağırmak). Anahtar tanımlı değilse sekme "kapalı" görünür, uygulamanın geri kalanı etkilenmez. Kullanıcı başına 5 dakikada 30 istek sınırı vardır.
 
+**Birden fazla anahtar (kota dayanıklılığı).** Ücretsiz katmanların günlük kotası dar; tek anahtarla asistan gün ortasında susar. `AI_API_KEY_2`, `AI_API_KEY_3`… tanımlarsan (ya da `AI_API_KEY=anahtar1,anahtar2` yazarsan) kota dolduğunda (429) veya anahtar geçersizse sıradaki denenir ve **çalışan anahtarda kalınır** — dolmuş anahtara her istekte yeniden çarpılmaz. Yalnız anahtara bağlı hatalar geçişe yol açar: ağ hatası ya da hatalı model adı ikinci anahtarla da patlayacağı için boşuna kota harcanmaz. Sekmedeki model rozetinde kaç anahtar yüklü olduğu yazar.
+
 **Dürüst kısıtlar:**
 - Dil modeli tarih ve tutar çıkarımında hata yapabilir — onay ekranı tam da bunun için var, uygulamadan önce satırları oku.
 - **Verin sağlayıcıya gider:** her mesajda hesap/kart/kategori/portföy adların, hesap bakiyelerin ve portföydeki sembollerin (id'lere çevirebilmesi için) seçtiğin model sağlayıcısına gönderilir. İşlem geçmişin ancak asistan `kayit_ara` ile bakma ihtiyacı duyarsa gider. Bu veriyi dışarı hiç çıkarmak istemiyorsan `AI_API_KEY`'i boş bırak (sekme kapalı kalır) ya da yerel bir model kullan (`AI_PROVIDER=openai` + Ollama'nın `AI_BASE_URL`'i).

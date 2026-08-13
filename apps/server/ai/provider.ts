@@ -16,6 +16,8 @@
      AI_PROVIDER = gemini | openai        (varsayılan: gemini)
      AI_MODEL    = model kimliği          (varsayılan: sağlayıcıya göre)
      AI_API_KEY  = anahtar                (yoksa asistan kapalıdır — uç 503 döner)
+     AI_API_KEY_2..5 = yedek anahtarlar   (kota dolunca sırayla denenir; virgülle
+                                           ayırarak tek değişkende de verilebilir)
      AI_BASE_URL = openai modunda taban URL (örn. https://api.groq.com/openai/v1)
 
    Araç çağrısı (function calling) ZORUNLU bir yetenektir: asistanın tek işi
@@ -48,12 +50,18 @@ export interface AiProvider {
 
 const TIMEOUT_MS = 60_000; // yanıtsız sağlayıcıda istek sonsuza dek asılı kalmasın (mail.ts'teki aynı ders)
 
-class AiError extends Error {}
-/** Sağlayıcı hata metni istemciye de loga da gidiyor; anahtarın oraya sızmadığından
+/** `retryable`: bu hata ANAHTARA bağlıdır (kota dolu / anahtar geçersiz) → başka anahtar denenebilir.
+    Ağ hatası ve model/istek hataları retryable DEĞİLDİR: aynı istek ikinci anahtarla da patlar,
+    boşuna kota yakmanın anlamı yok. */
+export class AiError extends Error {
+  constructor(message: string, readonly retryable = false) { super(message); }
+}
+/** Sağlayıcı hata metni istemciye de loga da gidiyor; anahtarların oraya sızmadığından
     emin ol (bazı servisler isteği/URL'i hata gövdesinde aynen geri yansıtır). */
 const redactKey = (s: string): string => {
-  const key = process.env.AI_API_KEY;
-  return key && key.length > 8 ? s.split(key).join("***") : s;
+  let out = s;
+  for (const key of apiKeys()) if (key.length > 8) out = out.split(key).join("***");
+  return out;
 };
 /** Sağlayıcı hatalarını tek biçime indirger; anahtar/kota hatası kullanıcıya anlaşılır dönsün. */
 async function fetchJson(url: string, init: RequestInit): Promise<any> {
@@ -66,19 +74,58 @@ async function fetchJson(url: string, init: RequestInit): Promise<any> {
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
     const msg = body?.error?.message || body?.message || res.statusText;
-    if (res.status === 429) throw new AiError("AI kotası doldu, biraz sonra tekrar dene");
-    if (res.status === 401 || res.status === 403) throw new AiError("AI anahtarı geçersiz (AI_API_KEY)");
+    if (res.status === 429) throw new AiError("AI kotası doldu, biraz sonra tekrar dene", true);
+    if (res.status === 401 || res.status === 403) throw new AiError("AI anahtarı geçersiz (AI_API_KEY)", true);
     throw new AiError(`AI hatası: ${redactKey(String(msg)).slice(0, 200)}`);
   }
   return body;
 }
 
+/* ---------------- çoklu anahtar (kota dayanıklılığı) ----------------
+   Ücretsiz katmanların günlük kotası dar; tek anahtarla asistan gün ortasında susar.
+   `AI_API_KEY`, `AI_API_KEY_2`, `AI_API_KEY_3`… (ya da virgülle ayrık tek değişken) sırayla
+   denenir — prices.ts'teki RAPIDAPI_KEY/RAPIDAPI_KEY_2 deseninin aynısı. */
+export function apiKeys(): string[] {
+  const raw = [
+    process.env.AI_API_KEY, process.env.AI_API_KEY_2, process.env.AI_API_KEY_3,
+    process.env.AI_API_KEY_4, process.env.AI_API_KEY_5,
+  ];
+  return [...new Set(raw.flatMap((k) => (k ?? "").split(",")).map((s) => s.trim()).filter(Boolean))];
+}
+
+/** Son BAŞARILI anahtarın indeksi. Kota dolan anahtara her istekte yeniden çarpmamak için
+    imleç kalıcıdır; sıradaki istekler doğrudan çalışan anahtardan başlar (gün dönüp kota
+    yenilendiğinde de sorun olmaz — o anahtar çalıştığı sürece kullanılmaya devam eder). */
+let keyCursor = 0;
+/** Anahtarları imleçten başlayarak sırayla dener; yalnız ANAHTARA bağlı hatalarda geçiş yapar. */
+export async function withKeyFallback<T>(
+  keys: string[], fn: (key: string) => Promise<T>,
+  log: (msg: string) => void = (m) => console.warn(m),
+): Promise<T> {
+  if (!keys.length) throw new AiError("AI anahtarı tanımlı değil");
+  let last: unknown;
+  for (let i = 0; i < keys.length; i++) {
+    const idx = (keyCursor + i) % keys.length;
+    try {
+      const out = await fn(keys[idx]);
+      keyCursor = idx; // çalışan anahtarda kal
+      return out;
+    } catch (e) {
+      if (!(e instanceof AiError) || !e.retryable) throw e;
+      last = e;
+      log(`[ai] ${idx + 1}. anahtar kullanılamadı (${e.message})` +
+        (i + 1 < keys.length ? " → sıradaki anahtar deneniyor" : " → başka anahtar kalmadı"));
+    }
+  }
+  throw last;
+}
+
 /* ---------------- Google Gemini (generativelanguage REST) ----------------
    Roller: "user" | "model". Araç sonucu da "user" rolünde `functionResponse`
    parçası olarak döner (Gemini'de ayrı bir "tool" rolü yoktur). */
-function geminiProvider(model: string, key: string): AiProvider {
+function geminiProvider(model: string, keys: string[]): AiProvider {
   return {
-    label: `gemini/${model}`,
+    label: `gemini/${model}${keys.length > 1 ? ` (${keys.length} anahtar)` : ""}`,
     async chat({ system, messages, tools }) {
       const contents: any[] = [];
       for (const m of messages) {
@@ -100,10 +147,10 @@ function geminiProvider(model: string, key: string): AiProvider {
         tools: tools.length ? [{ functionDeclarations: tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })) }] : undefined,
         generationConfig: { temperature: 0 }, // finans: yaratıcılık istemiyoruz
       };
-      const json = await fetchJson(
+      const json = await withKeyFallback(keys, (key) => fetchJson(
         `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
         { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key }, body: JSON.stringify(body) },
-      );
+      ));
       const parts: any[] = json?.candidates?.[0]?.content?.parts ?? [];
       const toolCalls: ToolCall[] = [];
       let text = "";
@@ -124,9 +171,9 @@ function geminiProvider(model: string, key: string): AiProvider {
 
 /* ---------------- OpenAI uyumlu /chat/completions ----------------
    Groq, OpenRouter, Together, Ollama, LM Studio… hepsi bu şemayı konuşur. */
-function openaiProvider(model: string, key: string, baseUrl: string): AiProvider {
+function openaiProvider(model: string, keys: string[], baseUrl: string): AiProvider {
   return {
-    label: `openai:${new URL(baseUrl).host}/${model}`,
+    label: `openai:${new URL(baseUrl).host}/${model}${keys.length > 1 ? ` (${keys.length} anahtar)` : ""}`,
     async chat({ system, messages, tools }) {
       const msgs: any[] = [{ role: "system", content: system }];
       for (const m of messages) {
@@ -143,14 +190,14 @@ function openaiProvider(model: string, key: string, baseUrl: string): AiProvider
           msgs.push({ role: "tool", tool_call_id: m.callId, content: JSON.stringify(m.result) });
         }
       }
-      const json = await fetchJson(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
+      const json = await withKeyFallback(keys, (key) => fetchJson(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
         body: JSON.stringify({
           model, temperature: 0, messages: msgs,
           tools: tools.length ? tools.map((t) => ({ type: "function", function: t })) : undefined,
         }),
-      });
+      }));
       const msg = json?.choices?.[0]?.message ?? {};
       const toolCalls: ToolCall[] = (msg.tool_calls ?? []).map((t: any, i: number) => ({
         id: t.id ?? `call-${i}`,
@@ -179,11 +226,11 @@ let cached: AiProvider | null | undefined;
 export function getProvider(): AiProvider | null {
   if (cached !== undefined) return cached;
   const kind = (process.env.AI_PROVIDER || "gemini").toLowerCase();
-  const key = process.env.AI_API_KEY || "";
+  const keys = apiKeys();
   const model = process.env.AI_MODEL || DEFAULT_MODEL[kind] || "";
-  if (!key || !model) return (cached = null);
-  if (kind === "gemini") return (cached = geminiProvider(model, key));
-  if (kind === "openai") return (cached = openaiProvider(model, key, process.env.AI_BASE_URL || "https://api.openai.com/v1"));
+  if (!keys.length || !model) return (cached = null);
+  if (kind === "gemini") return (cached = geminiProvider(model, keys));
+  if (kind === "openai") return (cached = openaiProvider(model, keys, process.env.AI_BASE_URL || "https://api.openai.com/v1"));
   console.warn(`[ai] bilinmeyen AI_PROVIDER: ${kind} — asistan kapalı`);
   return (cached = null);
 }
