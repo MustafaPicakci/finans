@@ -7,19 +7,28 @@ export const Field = ({ label, children, flex }: { label: string; children: Reac
 );
 
 /** Tutar girişi + canlı "₺1.234,56" (veya seçili para birimi) önizlemesi — sessiz yanlış-ayrıştırmayı önler */
-export const AmountField = ({ label, value, onChange, placeholder, flex, inputRef, ccy = "TRY" }: {
+/** `sign`: alanın kabul ettiği değer aralığı. Varsayılan "pozitif" — bir gelir/gider/işlem
+    tutarı sıfır ya da eksi olamaz. Ama her tutar alanı böyle DEĞİL: mutabakatta girilen
+    "gerçek bakiye" 0 olabilir (boşalmış nakit cüzdanı) ve eksi olabilir (KMH'li hesap).
+    Bu ayrım prop'a bağlı, yoksa alan geçerli girdiyi "geçersiz tutar" diye reddeder gibi
+    görünür ve kullanıcı denemekten vazgeçer. */
+export const AmountField = ({ label, value, onChange, placeholder, flex, inputRef, ccy = "TRY", sign = "pozitif" }: {
   label: string; value: string; onChange: (v: string) => void; placeholder?: string; flex?: number;
-  inputRef?: React.Ref<HTMLInputElement>; ccy?: Currency;
+  inputRef?: React.Ref<HTMLInputElement>; ccy?: Currency; sign?: "pozitif" | "serbest";
 }) => {
   const parsed = num(value);
+  /* `num` çözemediğinde 0 döner → "abc" ile "0"ı ayırt edemez; serbest modda 0 geçerli
+     olduğundan girdinin biçimine de bakılır. */
+  const sayisal = /^-?\s*[\d.,]+$/.test(value.trim());
+  const ok = sign === "serbest" ? sayisal : parsed > 0;
   return (
     <Field label={label} flex={flex}>
       <input ref={inputRef} style={css.input} inputMode="decimal" placeholder={placeholder ?? "0"} value={value}
         onChange={(e) => onChange(e.target.value)} />
       {value.trim() !== "" && (
-        <div style={{ fontSize: 11, color: parsed > 0 ? T.mut3 : T.neg, marginTop: 4 }}>
+        <div style={{ fontSize: 11, color: ok ? T.mut3 : T.neg, marginTop: 4 }}>
           {/* raw: girdi alanı zaten rakamları gösterdiğinden önizleme gizlilik modunda maskelenmez */}
-          {parsed > 0 ? fmtMoney(parsed, ccy, true, true) : "geçersiz tutar"}
+          {ok ? fmtMoney(parsed, ccy, true, true) : "geçersiz tutar"}
         </div>
       )}
     </Field>

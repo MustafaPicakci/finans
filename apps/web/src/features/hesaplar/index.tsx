@@ -186,7 +186,8 @@ function VadesizHesaplar({ data, reload }: { data: AllData; reload: () => void }
             </select>
           </Field>
           <Field label="Hesap adı" flex={2}><input ref={nameRef} style={css.input} value={acc.name} placeholder={KIND_HINT[acc.kind]} onChange={(e) => setAcc({ ...acc, name: e.target.value })} /></Field>
-          <AmountField label="Bakiye (TL)" value={acc.balance} onChange={(v) => setAcc({ ...acc, balance: v })} />
+          {/* açılış bakiyesi de 0 (yeni/boş hesap) ya da eksi (KMH) olabilir */}
+          <AmountField label="Bakiye (TL)" value={acc.balance} onChange={(v) => setAcc({ ...acc, balance: v })} sign="serbest" />
           <button type="submit" style={{ ...css.btn, opacity: acc.name ? 1 : 0.4 }} disabled={!acc.name}>Hesap Ekle</button>
         </div>
       </form>
@@ -205,7 +206,9 @@ function Mutabakat({ data, account, reload, onDone }: {
   const [real, setReal] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
-  const entered = real.trim() !== "";
+  /* 0 ve eksi geçerli olduğundan `num`'ın "çözemedim → 0" davranışına güvenilemez:
+     "abc" yazılıp onaylanırsa bakiye sessizce 0'a çekilirdi. Girdi sayısal görünmeli. */
+  const entered = /^-?\s*[\d.,]+$/.test(real.trim());
   const diff = entered ? reconcileDiff(account, num(real)) : 0;
   const since = entriesSinceRecon(data.account_entries, account).slice(0, 8);
   const save = async () => {
@@ -221,7 +224,8 @@ function Mutabakat({ data, account, reload, onDone }: {
         <span style={css.mono}>{tl.format(Math.round(account.balance))}</span>
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
-        <AmountField label="Gerçek bakiye (TL)" value={real} onChange={setReal} />
+        {/* serbest: gerçek bakiye 0 olabilir (boşalmış cüzdan) ve eksi olabilir (KMH) */}
+        <AmountField label="Gerçek bakiye (TL)" value={real} onChange={setReal} sign="serbest" />
         <Field label="Not (opsiyonel)" flex={2}>
           <input style={css.input} value={note} placeholder="örn. banka masrafı, unutulan market harcaması"
             onChange={(e) => setNote(e.target.value)} />
