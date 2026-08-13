@@ -14,6 +14,8 @@ export type SessionUser = { id: number; email: string };
 /** Asistanın onay bekleyen tek işlemi: hangi araç, hangi argümanlar, kullanıcıya gösterilen özet */
 export type AiAction = { tool: string; args: Record<string, unknown>; summary: string };
 export type AiResult = { summary: string; ok: boolean; detail: string };
+/** Asistanın uyguladığı bir plan: `undoable` = henüz geri alınmamış kayıt sayısı (0 → geri alınmış) */
+export type AiPlan = { planId: string; at: string; total: number; undoable: number; summary: string };
 export const api = {
   all: () => fetch("/api/all").then((r) => j<AllData>(r)),
   post: (route: string, body: unknown) =>
@@ -56,6 +58,8 @@ export const api = {
   aiExecute: (planId: string, actions: AiAction[]) =>
     fetch("/api/ai/execute", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ planId, actions }) })
       .then((r) => j<{ results: AiResult[]; undoable: number }>(r)),
+  /* asistanın uyguladığı son planlar + geri alınabilirlik (sekme belleğinde değil sunucuda durur) */
+  aiHistory: () => fetch("/api/ai/history").then((r) => j<{ plans: AiPlan[] }>(r)),
   /* uygulanan planı geri alır (kayıtları ters sırada siler); yalnız geri alınabilir işlemler için */
   aiUndo: (planId: string) =>
     fetch("/api/ai/undo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ planId }) })

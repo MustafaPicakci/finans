@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { api, type AiAction, type AiResult } from "../../api";
+import { api, type AiAction, type AiPlan, type AiResult } from "../../api";
 import { T, css } from "../../theme";
 
 /* ————— Asistan (Faz 22) —————
@@ -21,21 +21,25 @@ export function Asistan({ reload }: { reload: () => void }) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [pending, setPending] = useState<AiAction[]>([]);
   const [planId, setPlanId] = useState(""); // tek kullanımlık: uygulanan plan tekrar gönderilemez
-  const [undo, setUndo] = useState<{ planId: string; count: number } | null>(null); // son uygulanan plan geri alınabilir mi
+  const [history, setHistory] = useState<AiPlan[]>([]); // sunucudaki uygulama geçmişi (geri alma buradan)
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [status, setStatus] = useState<{ enabled: boolean; model: string | null } | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { api.aiStatus().then(setStatus).catch(() => setStatus({ enabled: false, model: null })); }, []);
+  const loadHistory = useCallback(() => api.aiHistory().then((r) => setHistory(r.plans)).catch(() => {}), []);
+  useEffect(() => {
+    api.aiStatus().then((s) => { setStatus(s); if (s.enabled) loadHistory(); })
+      .catch(() => setStatus({ enabled: false, model: null }));
+  }, [loadHistory]);
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, pending, busy]);
 
   const send = useCallback(async (text: string) => {
     const t = text.trim();
     if (!t || busy) return;
     const next: Msg[] = [...msgs, { role: "user", content: t }];
-    setMsgs(next); setInput(""); setPending([]); setUndo(null); setErr(""); setBusy(true);
+    setMsgs(next); setInput(""); setPending([]); setErr(""); setBusy(true);
     try {
       const res = await api.aiChat(next);
       setMsgs([...next, { role: "assistant", content: res.reply }]);
@@ -49,30 +53,29 @@ export function Asistan({ reload }: { reload: () => void }) {
     if (!pending.length || busy) return;
     setBusy(true); setErr("");
     try {
-      const { results, undoable } = await api.aiExecute(planId, pending);
+      const { results } = await api.aiExecute(planId, pending);
       setPending([]); setPlanId("");
       setMsgs((m) => [...m, { role: "assistant", content: formatResults(results) }]);
-      setUndo(undoable > 0 ? { planId, count: undoable } : null);
-      reload(); // defter değişti → tüm veriyi tazele
+      reload();        // defter değişti → tüm veriyi tazele
+      loadHistory();   // geri alınabilirlik sunucudan gelir, bellekten değil
     } catch (e) {
       setErr(String((e as Error).message));
     } finally { setBusy(false); }
-  }, [pending, planId, busy, reload]);
+  }, [pending, planId, busy, reload, loadHistory]);
 
   /* Geri al: yalnız asistanın YARATTIĞI kayıtlar için (düzenleme/silme/mutabakat geri alınamaz —
      eski hâl saklanmıyor). Sunucu ters sırada siler ve günlüğü işaretler. */
-  const undoLast = useCallback(async () => {
-    if (!undo || busy) return;
+  const undoPlan = useCallback(async (planIdToUndo: string) => {
+    if (busy) return;
     setBusy(true); setErr("");
     try {
-      const { results } = await api.aiUndo(undo.planId);
-      setUndo(null);
+      const { results } = await api.aiUndo(planIdToUndo);
       setMsgs((m) => [...m, { role: "assistant", content: formatResults(results) }]);
-      reload();
+      reload(); loadHistory();
     } catch (e) {
       setErr(String((e as Error).message));
     } finally { setBusy(false); }
-  }, [undo, busy, reload]);
+  }, [busy, reload, loadHistory]);
 
   if (status && !status.enabled) {
     return (
@@ -123,13 +126,6 @@ export function Asistan({ reload }: { reload: () => void }) {
         ))}
         {busy && <div style={{ fontSize: 12.5, color: T.mut3 }}>düşünüyor…</div>}
 
-        {undo && pending.length === 0 && (
-          <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12.5, color: T.mut }}>
-            <span>Son uygulanan {undo.count} kayıt geri alınabilir.</span>
-            <button onClick={undoLast} disabled={busy} style={{ ...css.ghost, padding: "6px 11px", fontSize: 12.5 }}>↩ Geri al</button>
-          </div>
-        )}
-
         {pending.length > 0 && (
           <div style={{ border: `1px solid ${T.acc}`, borderRadius: 14, padding: 14, background: T.panel2 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: T.acc, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 10 }}>
@@ -156,6 +152,30 @@ export function Asistan({ reload }: { reload: () => void }) {
 
       {err && <div style={{ color: T.neg, fontSize: 13 }}>{err}</div>}
 
+      {/* Uygulama geçmişi — SUNUCUDAN gelir (ai_actions), sekmenin belleğinden değil:
+          sayfayı yenilesen de başka cihazdan baksan da geri alma imkânı kaybolmaz. */}
+      {history.length > 0 && (
+        <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 12, display: "flex", flexDirection: "column", gap: 7 }}>
+          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", color: T.mut3 }}>
+            Asistanın uyguladıkları
+          </div>
+          {history.map((p) => (
+            <div key={p.planId} style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 12.5, color: T.mut }}>
+              <span style={{ fontFamily: T.mono, fontSize: 11, color: T.mut3, flexShrink: 0 }}>{shortTime(p.at)}</span>
+              <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {p.summary}{p.total > 1 ? ` (+${p.total - 1} işlem)` : ""}
+              </span>
+              {p.undoable > 0 ? (
+                <button onClick={() => undoPlan(p.planId)} disabled={busy}
+                  style={{ ...css.ghost, padding: "5px 10px", fontSize: 12, flexShrink: 0 }}>↩ Geri al</button>
+              ) : (
+                <span style={{ fontSize: 11.5, color: T.mut3, flexShrink: 0 }}>geri alındı</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       <form onSubmit={(e) => { e.preventDefault(); send(input); }} style={{ display: "flex", gap: 8 }}>
         <input value={input} onChange={(e) => setInput(e.target.value)} disabled={busy}
           placeholder="Örn: bugün 5.000 TL maaş yattı, Garanti'ye"
@@ -168,6 +188,18 @@ export function Asistan({ reload }: { reload: () => void }) {
       </div>
     </div>
   );
+}
+
+/** "2026-08-12 19:40:12" → "12 Ağu 19:40" (bugünse yalnız saat) */
+function shortTime(at: string): string {
+  const [d, t] = at.split(" ");
+  const hhmm = (t ?? "").slice(0, 5);
+  const today = new Date();
+  const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  if (d === iso) return hhmm;
+  const AY = ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"];
+  const [, m, day] = (d ?? "").split("-");
+  return `${Number(day)} ${AY[Number(m) - 1] ?? ""} ${hhmm}`;
 }
 
 const formatResults = (rs: AiResult[]) =>

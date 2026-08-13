@@ -260,6 +260,22 @@ export function mountAi(api: any, deps: { invoke: Invoke; rateLimited: RateLimit
     return c.json({ results, undoable: undoable.length });
   });
 
+  /* Uygulama geçmişi. Geri alınabilirlik sunucuda (ai_actions) kalıcıdır ama düğme yalnız
+     sekmenin belleğinde yaşasaydı sayfa yenilenince ya da başka cihazdan bakılınca kaybolurdu:
+     "geri alabilirdin ama göremedin" durumu. Bu uç, asistan her açıldığında son planları
+     geri alınabilirlik durumuyla verir — tek gerçek kaynak sunucudur. */
+  api.get("/ai/history", async (c: any) => {
+    const rows = await db.all<{ plan_id: string; at: string; total: number; undoable: number; summary: string }>(
+      `SELECT plan_id, MIN(created_at) AS at, COUNT(*)::int AS total,
+              COUNT(*) FILTER (WHERE undone_at IS NULL)::int AS undoable,
+              (array_agg(summary ORDER BY id))[1] AS summary
+         FROM ai_actions WHERE user_id=?
+        GROUP BY plan_id ORDER BY MIN(id) DESC LIMIT 10`,
+      c.get("user").id,
+    );
+    return c.json({ plans: rows.map((r) => ({ planId: r.plan_id, at: r.at, total: r.total, undoable: r.undoable, summary: r.summary })) });
+  });
+
   /* Geri al: o planın günlükteki işlemlerini TERS SIRADA geri alır. Ters sıra önemli —
      "hesap aç + o hesaba işlem yaz" planında önce işlem silinmeli, yoksa hesap silinemez
      (ya da işlemi de cascade götürür). Zaten geri alınmış satır atlanır (idempotent). */
