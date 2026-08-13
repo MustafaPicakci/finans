@@ -125,8 +125,10 @@ Geri yükleme: `psql "$DATABASE_URL" < yedek/finans-YYYY-AA-GG.sql`. Sunucuda cr
 
 ## Yol haritası (henüz yok, bilinçli olarak)
 
-- Temettü ve bedelli/bedelsiz sermaye artırımı kayıtları
-- Tanım kayıtlarının (hesap/kart/kredi/kategori/mevduat) düzenlenmesi — işlem kayıtları düzenlenebiliyor, bunlar hâlâ sil + yeniden ekle
+> Yapılanlar listeden düşer: temettü/bedelsiz kayıtları (Faz 21), tanım kayıtlarının düzenlenmesi (Faz 18) ve doğal dil asistanı (Faz 22) artık var.
+
 - Dışa aktarma (içe aktarma var; dışa aktarım şimdilik yalnız KVKK veri indirme ucundan)
+- **Bedelli** sermaye artırımı için ayrı kayıt türü — şimdilik normal ALIŞ olarak girilir (rüçhan bedeli maliyete eklenir), ayrı bir olay türü değildir
+- Asistanın düzenleme/silme işlemlerini geri alabilmesi — şu an yalnız *yarattığı* kayıtlar geri alınabiliyor (eski hâl saklanmadığı için düzenleme geri alınamaz)
 - Portföy işlemlerinin hesap bakiyesini **otomatik** düşürmesi (şu an isteğe bağlı: işlemi bir nakit hesaba bağlarsan işler, bağlamazsan bakiyeyi sen güncellersin)
 - Gün içi (intraday) fiyat geçmişi — şu an günde bir anlık görüntü alınır, grafiğin çözünürlüğü gündür
