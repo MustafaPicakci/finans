@@ -244,6 +244,7 @@ export default function App() {
         <div className="content-pad" style={{ flex: 1, padding: "26px 32px 56px", maxWidth: 1180, width: "100%", margin: "0 auto" }}>
           <div key={tab} className="tab-grid" style={{ animation: "fadeUp .4s ease both", display: "grid", gap: 16 }}>
             {tab === "ozet" && <Ozet data={data} days={days} pos={pos} cash={cash} rates={rates} reload={reload} summary={summary} m={m} ccy={ccy} onGoAccounts={() => setTab("hesaplar")}
+              onGoPortfolio={() => setTab("portfoy")}
               onSellFund={(p: TradePrefill) => setAdd({ kind: "trade", tradePrefill: p })} />}
             {tab === "hesaplar" && <Hesaplar data={data} reload={reload} user={user} onAccountDeleted={() => { setUser(null); setData(null); }} />}
             {tab === "nakit" && <Nakit days={days} data={data} />}

@@ -4,7 +4,7 @@ import {
   PieChart, Pie, Cell,
 } from "recharts";
 import {
-  fmtD, parseD, keyOf, convert, depositValueOn, fundSellSuggestion,
+  fmtD, parseD, keyOf, convert, depositValueOn, fundSellSuggestion, setupGaps,
   type AllData, type Day, type Position, type Rates, type Currency,
 } from "@finans/engine";
 import { api } from "../../api";
@@ -12,6 +12,8 @@ import { T, css, tl, TYPE_COLORS } from "../../theme";
 import { Money, Empty } from "../../ui";
 import { DegerGrafigi } from "../portfoy/DegerGrafigi";
 import type { TradePrefill } from "../../AddSheet";
+
+const SETUP_DISMISS_KEY = "finans-setup-dismissed";
 
 export type OzetSummary = {
   netWorthTry: number; cash: number; portValueTry: number; depositsValueTry: number;
@@ -33,10 +35,10 @@ function sparkPath(vals: number[], W: number, H: number, pad = 6): { line: strin
 /* Özet grafikleri TRY canonical'dır (nakit projeksiyonu + portföy değeri geçmişi hep TRY).
    Hero net varlık + KPI kartları buradadır (değerler App.tsx'te TRY hesaplanıp görüntü birimine çevrilerek gelir).
    Hesap/mevduat yönetimi Hesaplar sekmesindedir; burada yalnız özet + "Yönet" kısayolu. */
-export function Ozet({ data, days, pos, cash, rates, reload, summary, m, ccy, onGoAccounts, onSellFund }: {
+export function Ozet({ data, days, pos, cash, rates, reload, summary, m, ccy, onGoAccounts, onGoPortfolio, onSellFund }: {
   data: AllData; days: Day[]; pos: Position[]; cash: number; rates: Rates; reload: () => void;
   summary: OzetSummary; m: (v: number, dec?: boolean) => string; ccy: Currency; onGoAccounts: () => void;
-  onSellFund: (p: TradePrefill) => void;
+  onSellFund: (p: TradePrefill) => void; onGoPortfolio: () => void;
 }) {
   /* "Ödeme öncesi fon boz" önerisi (Faz 17): saf nakit önümüzdeki hafta eksiye düşüyorsa,
      nakit sayılan fondan ne kadar bozulacağını hesaplar. Bkz. funds.ts — tutar pencerenin
@@ -82,7 +84,39 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, ccy, on
     { name: "Kredi Borcu", color: T.neg, neg: summary.loanDebt > 0, val: (summary.loanDebt > 0 ? "−" : "") + m(summary.loanDebt), sub: summary.loansActive > 0 ? `${summary.loansActive} aktif kredi` : "borç yok" },
   ];
 
+  /* Kurulum eksikleri (Faz 16/17 opt-in yetenekleri): kullanıcı kurmadıysa özellikler atıl
+     kalıyor ve uygulama bunu hiç söylemiyordu. Kural engine'de (setupGaps), burası yalnız
+     gösterir; kapatılan uyarı localStorage'da saklanır (kendi kararı kalıcı olsun). */
+  const [dismissed, setDismissed] = React.useState<string[]>(
+    () => (localStorage.getItem(SETUP_DISMISS_KEY) || "").split(",").filter(Boolean),
+  );
+  const gaps = setupGaps(data, keyOf(new Date())).filter((g) => !dismissed.includes(g.key));
+  const dismiss = (key: string) => {
+    const next = [...dismissed, key];
+    setDismissed(next);
+    localStorage.setItem(SETUP_DISMISS_KEY, next.join(","));
+  };
+
   return (<>
+    {gaps.length > 0 && (
+      <div style={{ ...css.card, padding: 18, display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: T.mut3 }}>
+          Kurulumunu tamamla
+        </div>
+        {gaps.map((g) => (
+          <div key={g.key} style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ flex: 1, minWidth: 240 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 600 }}>{g.title}</div>
+              <div style={{ fontSize: 12.5, color: T.mut, marginTop: 2, lineHeight: 1.5 }}>{g.detail}</div>
+            </div>
+            <button style={{ ...css.btn, padding: "8px 14px", fontSize: 12.5 }}
+              onClick={() => (g.tab === "hesaplar" ? onGoAccounts() : onGoPortfolio())}>{g.action}</button>
+            <button title="Bu uyarıyı bir daha gösterme" onClick={() => dismiss(g.key)}
+              style={{ background: "none", border: "none", color: T.mut3, cursor: "pointer", fontSize: 15, lineHeight: 1, padding: "8px 2px" }}>×</button>
+          </div>
+        ))}
+      </div>
+    )}
     <div className="hero-grid">
       <div style={{ ...css.card, display: "flex", flexDirection: "column", padding: "24px 26px" }}>
         <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase", color: T.mut3 }}>Net Varlık</div>

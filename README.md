@@ -77,6 +77,8 @@ Kaynaklardan biri format değiştirirse sadece `apps/server/prices.ts` içindeki
 
 > Not: Fiyat geçmişi tutulmadığından takvimdeki geçmiş günlerin portföy değeri de bugünkü fiyatla değerlenir. Gerçek tarihsel değer grafiği için `prices` tablosuna gün gün kayıt eklemek gerekir (yol haritasında).
 
+**Kurulumunu tamamla:** Bazı yetenekler opt-in'dir (nakit/aracı hesap türleri, mutabakat, "nakit sayılan fon") — kurmazsan sessizce çalışmazlar. Özet'in en üstündeki kart, **verinin ihtiyaç duyduğu** eksikleri gösterir ve ilgili sekmeye götürür: nakit hesabın yoksa ATM çekiminin neden gider göründüğünü, hiç mutabakat yapmadıysan "bakiyem tutuyor mu"nun neden cevapsız kaldığını yazar. İlgilenmiyorsan × ile kalıcı kapatırsın. Portföy işlemi olmayana aracı kurum hesabı, fon tutmayana "nakit say" önerilmez.
+
 ## AI Asistan (Faz 22)
 
 **Asistan** sekmesinde işlemlerini cümleyle anlatırsın, asistan bunları senin adına kayda çevirir:

@@ -10,3 +10,4 @@ export * from "./funds.js";
 export * from "./ledger.js";
 export * from "./accounts.js";
 export * from "./statement.js";
+export * from "./setup.js";
