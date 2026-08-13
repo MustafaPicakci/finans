@@ -55,6 +55,10 @@ export const api = {
   /* planId tek kullanımlıktır: aynı planı ikinci kez göndermek 409 döner (çift kayıt koruması) */
   aiExecute: (planId: string, actions: AiAction[]) =>
     fetch("/api/ai/execute", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ planId, actions }) })
+      .then((r) => j<{ results: AiResult[]; undoable: number }>(r)),
+  /* uygulanan planı geri alır (kayıtları ters sırada siler); yalnız geri alınabilir işlemler için */
+  aiUndo: (planId: string) =>
+    fetch("/api/ai/undo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ planId }) })
       .then((r) => j<{ results: AiResult[] }>(r)),
   /* ---- auth (Faz 5.1) ---- */
   me: () => fetch("/api/auth/me").then((r) => j<{ user: SessionUser | null }>(r)),

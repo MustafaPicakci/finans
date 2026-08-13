@@ -37,7 +37,18 @@ export type RouteTool = {
   pathParams?: string[];
   /** Kullanıcının onay ekranında göreceği tek satır */
   summary: (a: ArgVals, n: NameLookup) => string;
+  /** "Geri al" tarifi: uygulandıktan sonra bu isteği göndermek işlemi geri alır.
+      `created` = ucun döndürdüğü gövde (yeni kaydın id'si oradadır). null/tanımsız =
+      geri alınamaz (düzenleme ve silme araçlarında eski hâl saklanmıyor; mutabakat ise
+      zaten defterde izli bir düzeltme hareketidir, sessizce silinmemeli).
+      NOT: bu yollar `SKIPPED` listesindedir — yani MODEL onları çağıramaz. Geri alma
+      modelin seçtiği bir eylem değil, sistemin uyguladığı deterministik tersidir. */
+  undo?: (a: ArgVals, created: { id?: number }) => { method: "DELETE"; path: string } | null;
 };
+
+/** id ile silinen kayıtların ortak geri-alma tarifi */
+const undoById = (route: string) => (_a: ArgVals, created: { id?: number }) =>
+  created.id != null ? ({ method: "DELETE" as const, path: `/${route}/${created.id}` }) : null;
 
 /* ---- şema kısayolları (Gemini + OpenAI ortak alt kümesi: type/description/enum) ---- */
 const S = {
@@ -71,6 +82,7 @@ export const ROUTE_TOOLS: RouteTool[] = [
       category_id: S.int("Kategori id (opsiyonel)"), account_id: S.int("Hesap id (opsiyonel)"),
     }, ["date", "name", "amount"]),
     summary: (a, n) => `${Number(a.amount) < 0 ? "Gider" : "Gelir"}: ${a.name} · ${money(a.amount)} · ${a.date}${at(a, n)}${a.category_id ? ` · ${n.category(a.category_id)}` : ""}`,
+    undo: undoById("transactions"),
   },
   {
     name: "islem_duzenle", method: "PUT", path: "/transactions/:id", pathParams: ["id"],
@@ -112,6 +124,7 @@ export const ROUTE_TOOLS: RouteTool[] = [
     summary: (a, n) =>
       `${a.symbol} ${a.side} · ${a.qty} adet × ${a.price} ${a.currency ?? "TRY"}${Number(a.fee) ? ` (+${a.fee} komisyon)` : ""} · ${a.date}${at(a, n)}` +
       `${a.portfolio_id ? ` · ${n.portfolio(a.portfolio_id)}` : ""}`,
+    undo: undoById("trades"),
   },
   {
     name: "portfoy_islemi_duzenle", method: "PUT", path: "/trades/:id", pathParams: ["id"],
@@ -143,6 +156,7 @@ export const ROUTE_TOOLS: RouteTool[] = [
       amount: S.num("Tutar (pozitif, TRY)"), note: S.str("Not (opsiyonel)"),
     }, ["date", "from_account_id", "to_account_id", "amount"]),
     summary: (a, n) => `Virman: ${n.account(a.from_account_id)} → ${n.account(a.to_account_id)} · ${money(a.amount)} · ${a.date}`,
+    undo: undoById("transfers"),
   },
 
   /* ---------------- kredi kartı ---------------- */
@@ -156,6 +170,7 @@ export const ROUTE_TOOLS: RouteTool[] = [
       amount: S.num("Toplam tutar (pozitif, TRY)"), installments: S.int("Taksit sayısı (varsayılan 1)"),
     }, ["card_id", "date", "name", "amount"]),
     summary: (a, n) => `Kart harcaması: ${n.card(a.card_id)} · ${a.name} · ${money(a.amount)}${Number(a.installments) > 1 ? ` · ${a.installments} taksit` : ""} · ${a.date}`,
+    undo: undoById("cardtxs"),
   },
   {
     name: "ekstre_ode", method: "POST", path: "/cards/:id/pay-statement", pathParams: ["id"],
@@ -170,6 +185,7 @@ export const ROUTE_TOOLS: RouteTool[] = [
     /* Tutar burada yok çünkü modelden gelmiyor; onay kartına ekstre matematiğinden
        hesaplanıp eklenir (enrich.ts) — kullanıcı ne ödediğini görmeden onaylamamalı. */
     summary: (a, n) => `Ekstre ödemesi: ${n.card(a.id)} · vade ${a.due}${at(a, n)}`,
+    undo: (a) => ({ method: "DELETE", path: `/cards/${a.id}/pay-statement/${a.due}` }),
   },
 
   /* ---------------- plan (projeksiyon) ---------------- */
@@ -180,6 +196,7 @@ export const ROUTE_TOOLS: RouteTool[] = [
       "Tutar işaretlidir: gider negatif, gelir pozitif.",
     parameters: obj({ date: S.str(DATE), name: S.str("Açıklama"), amount: S.num("İşaretli tutar (gider negatif)") }, ["date", "name", "amount"]),
     summary: (a) => `Plan kalemi: ${a.name} · ${money(a.amount)} · ${a.date}`,
+    undo: undoById("oneoffs"),
   },
   {
     name: "plan_kalemi_sil", method: "DELETE", path: "/oneoffs/:id", pathParams: ["id"],
@@ -199,6 +216,7 @@ export const ROUTE_TOOLS: RouteTool[] = [
       card_id: S.int("Kart id (opsiyonel)"), category_id: S.int("Kategori id (opsiyonel)"), auto: S.bool("Otomatik gerçekleşsin mi"),
     }, ["kind", "name", "day", "amount"]),
     summary: (a) => `Düzenli ${a.kind === "income" ? "gelir" : "gider"}: ${a.name} · ${money(a.amount)} · her ayın ${a.day}. günü`,
+    undo: undoById("recurring"),
   },
   {
     name: "duzenli_kalem_tutar_degistir", method: "POST", path: "/recurring/:id/amount", pathParams: ["id"],
@@ -221,6 +239,7 @@ export const ROUTE_TOOLS: RouteTool[] = [
       account_id: S.int("Hesap id (opsiyonel, kalemin hedefini geçersiz kılar)"), category_id: S.int("Kategori id (opsiyonel)"),
     }, ["id", "ym"]),
     summary: (a, n) => `${n.recurring(a.id)} → ${a.ym} ayı gerçekleşti olarak işaretlenecek`,
+    undo: (a) => ({ method: "DELETE", path: `/recurring/${a.id}/realize/${a.ym}` }),
   },
 
   /* ---------------- borç & birikim ---------------- */
@@ -232,6 +251,7 @@ export const ROUTE_TOOLS: RouteTool[] = [
       first_date: S.str("İlk taksit tarihi 'YYYY-MM-DD'"), total: S.int("Toplam taksit sayısı"),
     }, ["name", "amount", "first_date", "total"]),
     summary: (a) => `Kredi: ${a.name} · ${money(a.amount)} × ${a.total} taksit · ilk ${a.first_date}`,
+    undo: undoById("loans"),
   },
   {
     name: "mevduat_ekle", method: "POST", path: "/deposits",
@@ -242,6 +262,7 @@ export const ROUTE_TOOLS: RouteTool[] = [
       withholding: S.num("Stopaj % (opsiyonel)"), account_id: S.int("Anaparanın çıktığı hesap id (opsiyonel)"),
     }, ["name", "principal", "rate", "open_date", "term_days"]),
     summary: (a, n) => `Vadeli mevduat: ${a.name} · ${money(a.principal)} · %${a.rate} · ${a.term_days} gün${at(a, n)}`,
+    undo: undoById("deposits"),
   },
 
   /* ---------------- tanımlar ---------------- */
@@ -253,6 +274,7 @@ export const ROUTE_TOOLS: RouteTool[] = [
       kind: S.enum("Hesap türü", ["banka", "nakit", "araci", "fon"]),
     }, ["name"]),
     summary: (a) => `Yeni hesap: ${a.name} (${a.kind ?? "banka"}) · açılış ${money(a.balance ?? 0)}`,
+    undo: undoById("accounts"),
   },
   {
     name: "hesap_mutabakat", method: "POST", path: "/accounts/:id/reconcile", pathParams: ["id"],
@@ -270,12 +292,14 @@ export const ROUTE_TOOLS: RouteTool[] = [
     description: "Rapor için gelir/gider kategorisi tanımlar. Var olan bir kategoriyi yeniden oluşturma — önce bağlamdaki listeye bak.",
     parameters: obj({ name: S.str("Kategori adı"), kind: S.enum("Tür", ["income", "expense"]), color: S.str("Renk (opsiyonel, #rrggbb)") }, ["name", "kind"]),
     summary: (a) => `Yeni kategori: ${a.name} (${a.kind === "income" ? "gelir" : "gider"})`,
+    undo: undoById("categories"),
   },
   {
     name: "portfoy_grubu_ekle", method: "POST", path: "/portfolios",
     description: "Portföy grubu (kurum/strateji kabı) tanımlar.",
     parameters: obj({ name: S.str("Grup adı"), note: S.str("Not (opsiyonel)") }, ["name"]),
     summary: (a) => `Yeni portföy grubu: ${a.name}`,
+    undo: undoById("portfolios"),
   },
   {
     name: "fiyat_belirle", method: "PUT", path: "/prices",
@@ -287,6 +311,7 @@ export const ROUTE_TOOLS: RouteTool[] = [
       price: S.num("Birim fiyat"), currency: S.enum("Fiyatın para birimi (varsayılan TRY)", ["TRY", "USD"]),
     }, ["symbol", "asset_type", "price"]),
     summary: (a) => `Elle fiyat: ${a.symbol} = ${a.price} ${a.currency ?? "TRY"}`,
+    undo: (a) => ({ method: "DELETE", path: `/prices/${a.asset_type}/${encodeURIComponent(String(a.symbol))}` }),
   },
 ];
 
@@ -333,4 +358,5 @@ export const SKIPPED: { route: string; reason: string }[] = [
   { route: "DELETE /prices/:asset_type/:symbol", reason: "elle fiyatı sıfırlama arayüzdeki rozetten" },
   { route: "POST /ai/chat", reason: "asistanın kendi ucu" },
   { route: "POST /ai/execute", reason: "asistanın kendi ucu" },
+  { route: "POST /ai/undo", reason: "asistanın kendi ucu (uygulanan planı geri alır; modelin çağırdığı bir araç değil)" },
 ];

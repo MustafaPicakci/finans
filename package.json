@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "concurrently -n api,web -c yellow,cyan \"pnpm --filter @finans/server dev\" \"pnpm --filter @finans/web dev\"",
     "build": "pnpm -r build",
-    "test": "pnpm --filter @finans/engine test",
+    "test": "pnpm -r test",
     "start": "pnpm --filter @finans/server start"
   },
   "devDependencies": {

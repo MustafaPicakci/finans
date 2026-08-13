@@ -17,11 +17,12 @@
    fazlasını yapamaz. */
 
 import { randomUUID } from "node:crypto";
-import { getProvider, type ChatMessage, type ToolDef } from "./provider.js";
-import { ROUTE_TOOLS, type ArgVals } from "./tools.js";
+import { getProvider, type AiProvider, type ChatMessage, type ToolDef } from "./provider.js";
+import { ROUTE_TOOLS, type ArgVals, type RouteTool } from "./tools.js";
 import { READ_TOOLS } from "./read.js";
 import { buildContext, nameLookup, type UserContext } from "./context.js";
 import { enrichSummary } from "./enrich.js";
+import { db, nowLocal } from "../db.js";
 
 /** İç istek gönderici — index.ts sağlar (kök Hono uygulaması orada). */
 export type Invoke = (c: any, method: string, path: string, body?: unknown) => Promise<{ status: number; data: any }>;
@@ -75,7 +76,7 @@ export type ChatResponse = { reply: string; pending: PendingAction[]; model: str
    işlemi DEĞİL — çift kayıt bakiyeyi iki kez oynatırdı. Plan kimliği tek kullanımlıktır. */
 const consumedPlans = new Map<string, number>();
 const PLAN_TTL = 30 * 60_000;
-function consumePlan(key: string): boolean {
+export function consumePlan(key: string): boolean {
   const now = Date.now();
   for (const [k, t] of consumedPlans) if (now - t > PLAN_TTL) consumedPlans.delete(k);
   if (consumedPlans.has(key)) return false;
@@ -83,11 +84,20 @@ function consumePlan(key: string): boolean {
   return true;
 }
 
-export async function runAgent(uid: number, history: ChatTurn[]): Promise<ChatResponse> {
-  const provider = getProvider();
-  if (!provider) throw new Error("AI yapılandırılmadı");
-  const ctx = await buildContext(uid);
-  const names = nameLookup(ctx);
+/** Döngünün dış dünyaya (db/model) bakan tek yüzeyi. Enjekte edilebilir olması testi
+    veritabanından bağımsız kılar: sahte sağlayıcı + sahte okuma/özet ile tüm dallar
+    (okuma sonucu geri besleme, plana alma, eksik alan, tavanlar) sınanabilir. */
+export type AgentDeps = {
+  provider: AiProvider;
+  system: string;
+  /** Okuma aracını çalıştırır (kullanıcıya scope'lu) */
+  runRead: (name: string, args: ArgVals) => Promise<unknown>;
+  /** Onay satırını üretir (sunucunun hesapladığı tutarlarla zenginleştirilmiş) */
+  summarize: (tool: RouteTool, args: ArgVals) => Promise<string>;
+};
+
+/** Ajan döngüsü: model konuşur, OKUMA araçları çalışır, YAZMA araçları yalnız PLANLANIR. */
+export async function agentLoop(deps: AgentDeps, history: ChatTurn[]): Promise<{ reply: string; pending: PendingAction[] }> {
   const messages: ChatMessage[] = history.slice(-MAX_HISTORY).map((t) =>
     t.role === "user" ? { role: "user", content: t.content } : { role: "assistant", content: t.content },
   );
@@ -95,7 +105,7 @@ export async function runAgent(uid: number, history: ChatTurn[]): Promise<ChatRe
   let reply = "";
 
   for (let step = 0; step < MAX_STEPS; step++) {
-    const res = await provider.chat({ system: systemPrompt(ctx), messages, tools: toolDefs() });
+    const res = await deps.provider.chat({ system: deps.system, messages, tools: toolDefs() });
     reply = res.text || reply;
     if (!res.toolCalls.length) break;
     messages.push({ role: "assistant", content: res.text, toolCalls: res.toolCalls });
@@ -105,15 +115,13 @@ export async function runAgent(uid: number, history: ChatTurn[]): Promise<ChatRe
       const read = READ_TOOLS.find((t) => t.name === call.name);
       const write = ROUTE_TOOLS.find((t) => t.name === call.name);
       if (read) {
-        result = await read.run(uid, call.args).catch((e) => ({ hata: String((e as Error).message).slice(0, 200) }));
+        result = await deps.runRead(call.name, call.args).catch((e) => ({ hata: String((e as Error).message).slice(0, 200) }));
       } else if (write) {
         const missing = missingFields(call.args, write.parameters.required);
         if (missing.length) result = { hata: `eksik zorunlu alan: ${missing.join(", ")}` };
         else if (pending.length >= MAX_PENDING) result = { hata: "tek seferde en fazla " + MAX_PENDING + " işlem planlanabilir" };
         else {
-          /* Özet, sunucunun hesapladığı tutarla zenginleştirilir (ekstre tutarı, düzenli
-             kalemin o ayki tutarı, mutabakat farkı) — kullanıcı neyi onayladığını görsün. */
-          const summary = await enrichSummary(uid, write.name, call.args, safeSummary(write, call.args, names));
+          const summary = await deps.summarize(write, call.args);
           pending.push({ tool: write.name, args: call.args, summary });
           result = { durum: "planlandı, kullanıcının onayı bekleniyor", ozet: summary };
         }
@@ -124,6 +132,23 @@ export async function runAgent(uid: number, history: ChatTurn[]): Promise<ChatRe
     }
   }
   if (!reply) reply = pending.length ? "Aşağıdaki işlemleri hazırladım, onaylarsan uygulayayım." : "Bunu anlayamadım, biraz daha açar mısın?";
+  return { reply, pending };
+}
+
+/** Gerçek bağımlılıkları (model + kullanıcının verisi) bağlar ve döngüyü çalıştırır. */
+export async function runAgent(uid: number, history: ChatTurn[]): Promise<ChatResponse> {
+  const provider = getProvider();
+  if (!provider) throw new Error("AI yapılandırılmadı");
+  const ctx = await buildContext(uid);
+  const names = nameLookup(ctx);
+  const { reply, pending } = await agentLoop({
+    provider,
+    system: systemPrompt(ctx),
+    runRead: (name, args) => READ_TOOLS.find((t) => t.name === name)!.run(uid, args),
+    /* Özet, sunucunun hesapladığı tutarla zenginleştirilir (ekstre tutarı, düzenli
+       kalemin o ayki tutarı, mutabakat farkı) — kullanıcı neyi onayladığını görsün. */
+    summarize: (tool, args) => enrichSummary(uid, tool.name, args, safeSummary(tool, args, names)),
+  }, history);
   return { reply, pending, model: provider.label, planId: randomUUID() };
 }
 
@@ -132,7 +157,11 @@ function safeSummary(tool: (typeof ROUTE_TOOLS)[number], args: ArgVals, names: R
   try { return tool.summary(args, names); } catch { return `${tool.name}: ${JSON.stringify(args).slice(0, 160)}`; }
 }
 
-export type ExecutionResult = { summary: string; ok: boolean; detail: string };
+export type ExecutionResult = {
+  summary: string; ok: boolean; detail: string;
+  /** doluysa bu istek işlemi geri alır (uygulama günlüğüne yazılır, "Geri al" onu kullanır) */
+  undo?: { method: "DELETE"; path: string };
+};
 
 /** Onaylanan işlemleri sırayla uygular. İlk hatada durur — yarım kalan kısım
     açıkça "uygulanmadı" olarak döner, sessizce atlanmaz. */
@@ -155,7 +184,15 @@ export async function executeActions(c: any, actions: PendingAction[], invoke: I
       out.push({ summary: a.summary, ok: false, detail: res.data?.error || `sunucu hatası (${res.status})` });
       stopped = true;
     } else {
-      out.push({ summary: a.summary, ok: true, detail: res.data?.already ? "zaten kayıtlıydı" : "uygulandı" });
+      /* Geri alma tarifi UYGULAMA ANINDA hesaplanır: yeni kaydın id'si ancak ucun
+         yanıtında vardır. Idempotent uçlarda "zaten kayıtlıydı" ise geri alma
+         önerilmez — o kaydı asistan yaratmadı, silmek kullanıcının işini bozardı. */
+      const undo = res.data?.already ? null : (tool.undo?.(a.args, res.data ?? {}) ?? null);
+      out.push({
+        summary: a.summary, ok: true,
+        detail: res.data?.already ? "zaten kayıtlıydı" : "uygulandı",
+        ...(undo ? { undo } : {}),
+      });
     }
   }
   return out;
@@ -204,7 +241,47 @@ export function mountAi(api: any, deps: { invoke: Invoke; rateLimited: RateLimit
     // tek kullanımlık: aynı plan ikinci kez uygulanmaz (ağ tekrarında çift kayıt olurdu)
     if (!consumePlan(`${uid}:${planId}`)) return c.json({ error: "Bu plan zaten uygulandı" }, 409);
     const results = await executeActions(c, actions as PendingAction[], deps.invoke);
+    /* Uygulama günlüğü: "Geri al" bunu okur. Günlük yazımı başarısız olsa bile işlemler
+       uygulanmıştır — kullanıcıya yalan söylememek için hata yutulur, yalnız loglanır
+       (geri alma o plan için kullanılamaz, kayıtlar arayüzden silinebilir). */
+    const undoable = results.filter((r) => r.ok && r.undo);
+    if (undoable.length) {
+      await db.tx(async (t) => {
+        for (const [i, r] of results.entries()) {
+          if (!r.ok || !r.undo) continue;
+          await t.run(
+            "INSERT INTO ai_actions (user_id, plan_id, created_at, tool, summary, undo_method, undo_path) VALUES (?,?,?,?,?,?,?)",
+            uid, planId, nowLocal(), (actions[i] as PendingAction).tool, r.summary, r.undo.method, r.undo.path,
+          );
+        }
+      }).catch((e) => console.error("[ai] uygulama günlüğü yazılamadı:", e));
+    }
     console.log(`[audit] Asistan ${results.filter((r) => r.ok).length}/${results.length} işlem uyguladı (id:${uid})`);
+    return c.json({ results, undoable: undoable.length });
+  });
+
+  /* Geri al: o planın günlükteki işlemlerini TERS SIRADA geri alır. Ters sıra önemli —
+     "hesap aç + o hesaba işlem yaz" planında önce işlem silinmeli, yoksa hesap silinemez
+     (ya da işlemi de cascade götürür). Zaten geri alınmış satır atlanır (idempotent). */
+  api.post("/ai/undo", async (c: any) => {
+    const uid = c.get("user").id;
+    const b = await c.req.json().catch(() => null);
+    const planId = b && typeof b.planId === "string" ? b.planId : "";
+    if (!planId) return c.json({ error: "plan kimliği gerekli" }, 400);
+    const rows = await db.all<{ id: number; summary: string; undo_method: string; undo_path: string }>(
+      "SELECT id, summary, undo_method, undo_path FROM ai_actions WHERE user_id=? AND plan_id=? AND undone_at IS NULL ORDER BY id DESC",
+      uid, planId,
+    );
+    if (!rows.length) return c.json({ error: "geri alınacak işlem yok" }, 404);
+    const results: ExecutionResult[] = [];
+    for (const r of rows) {
+      const res = await deps.invoke(c, r.undo_method, r.undo_path)
+        .catch((e) => ({ status: 500, data: { error: String((e as Error).message) } }));
+      const ok = res.status < 400;
+      if (ok) await db.run("UPDATE ai_actions SET undone_at=? WHERE id=? AND user_id=?", nowLocal(), r.id, uid);
+      results.push({ summary: r.summary, ok, detail: ok ? "geri alındı" : res.data?.error || `hata (${res.status})` });
+    }
+    console.log(`[audit] Asistan ${results.filter((r) => r.ok).length}/${results.length} işlemi geri aldı (id:${uid})`);
     return c.json({ results });
   });
 }

@@ -21,6 +21,7 @@ export function Asistan({ reload }: { reload: () => void }) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [pending, setPending] = useState<AiAction[]>([]);
   const [planId, setPlanId] = useState(""); // tek kullanımlık: uygulanan plan tekrar gönderilemez
+  const [undo, setUndo] = useState<{ planId: string; count: number } | null>(null); // son uygulanan plan geri alınabilir mi
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -34,7 +35,7 @@ export function Asistan({ reload }: { reload: () => void }) {
     const t = text.trim();
     if (!t || busy) return;
     const next: Msg[] = [...msgs, { role: "user", content: t }];
-    setMsgs(next); setInput(""); setPending([]); setErr(""); setBusy(true);
+    setMsgs(next); setInput(""); setPending([]); setUndo(null); setErr(""); setBusy(true);
     try {
       const res = await api.aiChat(next);
       setMsgs([...next, { role: "assistant", content: res.reply }]);
@@ -48,14 +49,30 @@ export function Asistan({ reload }: { reload: () => void }) {
     if (!pending.length || busy) return;
     setBusy(true); setErr("");
     try {
-      const { results } = await api.aiExecute(planId, pending);
+      const { results, undoable } = await api.aiExecute(planId, pending);
       setPending([]); setPlanId("");
       setMsgs((m) => [...m, { role: "assistant", content: formatResults(results) }]);
+      setUndo(undoable > 0 ? { planId, count: undoable } : null);
       reload(); // defter değişti → tüm veriyi tazele
     } catch (e) {
       setErr(String((e as Error).message));
     } finally { setBusy(false); }
-  }, [pending, busy, reload]);
+  }, [pending, planId, busy, reload]);
+
+  /* Geri al: yalnız asistanın YARATTIĞI kayıtlar için (düzenleme/silme/mutabakat geri alınamaz —
+     eski hâl saklanmıyor). Sunucu ters sırada siler ve günlüğü işaretler. */
+  const undoLast = useCallback(async () => {
+    if (!undo || busy) return;
+    setBusy(true); setErr("");
+    try {
+      const { results } = await api.aiUndo(undo.planId);
+      setUndo(null);
+      setMsgs((m) => [...m, { role: "assistant", content: formatResults(results) }]);
+      reload();
+    } catch (e) {
+      setErr(String((e as Error).message));
+    } finally { setBusy(false); }
+  }, [undo, busy, reload]);
 
   if (status && !status.enabled) {
     return (
@@ -105,6 +122,13 @@ export function Asistan({ reload }: { reload: () => void }) {
           }}>{m.content}</div>
         ))}
         {busy && <div style={{ fontSize: 12.5, color: T.mut3 }}>düşünüyor…</div>}
+
+        {undo && pending.length === 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12.5, color: T.mut }}>
+            <span>Son uygulanan {undo.count} kayıt geri alınabilir.</span>
+            <button onClick={undoLast} disabled={busy} style={{ ...css.ghost, padding: "6px 11px", fontSize: 12.5 }}>↩ Geri al</button>
+          </div>
+        )}
 
         {pending.length > 0 && (
           <div style={{ border: `1px solid ${T.acc}`, borderRadius: 14, padding: 14, background: T.panel2 }}>
