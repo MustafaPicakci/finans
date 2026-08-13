@@ -283,7 +283,20 @@ api.get("/all", async (c) => {
       db.all("SELECT * FROM transfers WHERE user_id=? ORDER BY date DESC, id DESC", uid),
       db.all<any>("SELECT symbol, asset_type, price, source, updated_at, currency FROM prices"),
       db.all<any>("SELECT symbol, asset_type, price, updated_at, currency FROM user_prices WHERE user_id=?", uid),
-      db.all("SELECT * FROM price_history ORDER BY date"),
+      /* price_history GLOBAL bir tablodur ve TEFAS tazelemesi bedavaya gelen TÜM fonları
+         (yüzlerce) her gün oraya yazar — "yeni fon eklenirse fiyatı hazır olsun" diye, bkz.
+         prices.ts. Ama okuma tarafı filtrelemeyince bu, her sayfa açılışında tüm piyasanın
+         geçmişini istemciye indirmek demekti: yüz binlerce satıra doğru büyüyen, sürekli
+         şişen bir yük (ölçüldü: 770 kB / 5,5 sn). Veri tek yerde kullanılıyor — portföy
+         değer grafiği (`portfolioValueHistory`) — ve orada yalnız KULLANICININ işlem yaptığı
+         semboller anlamlı. EXISTS ile ona daraltılıyor; grafik değişmez, yük düşer. */
+      db.all(
+        `SELECT ph.* FROM price_history ph
+          WHERE EXISTS (SELECT 1 FROM trades t
+                         WHERE t.user_id=? AND t.symbol=ph.symbol AND t.asset_type=ph.asset_type)
+          ORDER BY ph.date`,
+        uid,
+      ),
       db.all<{ key: string; value: string }>("SELECT key, value FROM settings"),
       db.all<{ key: string; value: string }>("SELECT key, value FROM user_settings WHERE user_id=?", uid),
     ]);
