@@ -355,7 +355,6 @@ export default function App() {
                   /* renkli emoji yerine kenar çubuğuyla aynı SVG: menüdeki simgeler tek renk kalsın */
                   { label: balancesHidden ? "Bakiyeleri göster" : "Bakiyeleri gizle", icon: <EyeIcon off={balancesHidden} />, on: toggleBalancesHidden },
                   { label: theme === "light" ? "Koyu tema" : "Açık tema", icon: <ThemeIcon />, on: () => setTheme((t) => (t === "light" ? "dark" : "light")) },
-                  { label: "Çıkış yap", icon: <PowerIcon />, on: logout, danger: true },
                 ] as { label: string; icon: React.ReactNode; on: () => void; disabled?: boolean; danger?: boolean }[]).map((it) => (
                   <button key={it.label} disabled={it.disabled}
                     onClick={() => { it.on(); setMenuOpen(false); }}
@@ -374,14 +373,27 @@ export default function App() {
                 <button onClick={() => { setTab("profil"); setMenuOpen(false); }}
                   style={{
                     display: "flex", alignItems: "center", gap: 11, width: "100%", textAlign: "left",
-                    background: "none", border: "none", borderTop: `1px solid ${T.line}`, borderRadius: 0,
-                    marginTop: 4, padding: "10px 11px 6px", cursor: "pointer", fontFamily: T.disp,
+                    background: "none", border: "none", borderRadius: 9,
+                    padding: "10px 11px", cursor: "pointer", fontFamily: T.disp,
                   }}>
                   <span style={{ width: 18, display: "grid", placeItems: "center", color: T.mut }}><NavIcon tab="profil" size={15} /></span>
                   <span style={{ minWidth: 0 }}>
                     <span style={{ display: "block", fontSize: 13.5, fontWeight: 500, color: T.text }}>Hesabım</span>
                     <span style={{ display: "block", fontSize: 11, color: T.mut3, overflow: "hidden", textOverflow: "ellipsis" }}>{user?.email}</span>
                   </span>
+                </button>
+                {/* Çıkış EN ALTTA ve ayırıcının altında: oturumu bitiren eylem, ayar
+                    değiştiren ve ekran açan maddelerle aynı öbekte durmamalı — yanlışlıkla
+                    basılması en pahalı madde odur. */}
+                <button onClick={() => { logout(); setMenuOpen(false); }}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 11, width: "100%", textAlign: "left",
+                    background: "none", border: "none", borderTop: `1px solid ${T.line}`, borderRadius: 0,
+                    marginTop: 4, padding: "12px 11px 8px", cursor: "pointer",
+                    fontSize: 13.5, fontFamily: T.disp, fontWeight: 500, color: T.neg,
+                  }}>
+                  <span style={{ width: 18, display: "grid", placeItems: "center", color: T.neg }}><PowerIcon /></span>
+                  Çıkış yap
                 </button>
               </div>
             )}
