@@ -6,7 +6,7 @@ import {
 import { monthsBack, monthlyTotals, categoryTotals, transactionsInMonth, parseD, fmtD, ymOf, type AllData, type Category } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, tl, CATEGORY_PALETTE } from "../../theme";
-import { Field, Empty, Money, Row, SilDugmesi, FiltreSeridi } from "../../ui";
+import { Field, Empty, Money, Row, SilDugmesi, FiltreSeridi, Aciklama } from "../../ui";
 import { EditSheet, type EditTarget } from "../../EditSheet";
 
 const fmtYm = (ym: string) => {
@@ -56,6 +56,15 @@ export function Rapor({ data, reload }: { data: AllData; reload: () => void }) {
   return (<>
     <div style={css.card}>
       <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Aylık Gelir & Gider Trendi</div>
+      {/* "Bu grafik neyi gösteriyor?" sorusu kullanıcıdan geldi — kapsamı yazılı değildi.
+          Kaynak yalnız `transactions`; plan, kart harcaması ve virman burada YOK. */}
+      <Aciklama k="trend-kapsam" label="bu grafik neyi gösteriyor?">
+        Ay ay <b>gerçekleşen defterin</b> toplamı: yeşil gelir, kırmızı gider, çizgi ikisinin farkı (net).
+        Kapsamı dar tutuluyor — <b>plan buraya girmez</b> (düzenli kalem ancak “Gerçekleşti” ile deftere geçince sayılır),
+        <b> kendi hesapların arası transferler</b> girmez (para sistemden çıkmıyor), <b>portföy alım/satımı</b> girmez
+        (yatırım harcama değildir). <b>Kart harcaması da girmez</b>: ekstreyi “Ödedim” ile kapattığın ay, tek kalem
+        gider olarak görünür — yani kart alışverişinin ayı değil, ödemenin ayı sayılır.
+      </Aciklama>
       {/* aralık seçici bir filtredir (veriyi değil pencereyi değiştirir) → filtre şeridine */}
       <FiltreSeridi>
         <select style={{ ...css.input, width: "auto", padding: "5px 8px", fontSize: 12 }} value={range} onChange={(e) => setRange(Number(e.target.value))}>

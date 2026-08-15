@@ -14,10 +14,10 @@ import { EditSheet, type EditTarget } from "../../EditSheet";
 /* ————— HESAPLAR EKRANI —————
    Banka varlıklarının tek yönetim yeri: vadesiz (nakit) hesaplar + vadeli mevduat.
    Kavramsal olarak ikisi de "hesap"tır; ayrı bölümlerde durur çünkü vadeli mevduatın
-   vade/faiz/stopaj mekaniği farklıdır. En altta hesap & veri (KVKK) ayarları. */
-export function Hesaplar({ data, reload, user, onAccountDeleted }: {
-  data: AllData; reload: () => void; user: { email: string }; onAccountDeleted: () => void;
-}) {
+   vade/faiz/stopaj mekaniği farklıdır. Buradaki "hesap" HER ZAMAN banka/nakit/aracı kurum
+   hesabıdır; KULLANICI hesabı (veri indirme, hesap silme) features/profil'dedir — ikisi aynı
+   ekranda dururken "Hesabı sil" bir banka hesabını siliyormuş gibi okunuyordu. */
+export function Hesaplar({ data, reload }: { data: AllData; reload: () => void }) {
   const [editing, setEditing] = useState<EditTarget | null>(null);
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const cash = data.accounts.reduce((s, a) => s + a.balance, 0);
@@ -45,7 +45,6 @@ export function Hesaplar({ data, reload, user, onAccountDeleted }: {
     <VadesizHesaplar data={data} reload={reload} />
     <Transferler data={data} reload={reload} onEdit={setEditing} />
     <VadeliMevduat data={data} reload={reload} onEdit={setEditing} />
-    <HesapKvkk user={user} onDeleted={onAccountDeleted} />
     {editing && <EditSheet data={data} target={editing} reload={reload} onClose={() => setEditing(null)} />}
   </>);
 }
@@ -384,50 +383,3 @@ function VadeliMevduat({ data, reload, onEdit }: { data: AllData; reload: () => 
   );
 }
 
-/* ————— HESAP & VERİ (KVKK: dışa aktarım + hesap silme) ————— */
-function HesapKvkk({ user, onDeleted }: { user: { email: string }; onDeleted: () => void }) {
-  const [confirm, setConfirm] = useState(false);
-  const [pw, setPw] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-
-  const download = async () => {
-    try {
-      const blob = await api.exportData();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = `finans-export-${new Date().toISOString().slice(0, 10)}.json`;
-      a.click(); URL.revokeObjectURL(url);
-    } catch { setErr("Dışa aktarılamadı"); }
-  };
-  const remove = async () => {
-    setErr(""); setBusy(true);
-    try { await api.deleteAccount(pw); onDeleted(); }
-    catch { setErr("Parola hatalı"); setBusy(false); }
-  };
-
-  return (
-    <div style={css.card}>
-      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Hesap & Veri</div>
-      <div style={{ fontSize: 13, color: T.mut, marginBottom: 12 }}>{user.email}</div>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <button style={css.ghost} onClick={download}>Verilerini indir (JSON)</button>
-        {!confirm && <button style={{ ...css.ghost, color: T.neg, borderColor: T.neg }} onClick={() => setConfirm(true)}>Hesabı sil</button>}
-      </div>
-      {confirm && (
-        <div style={{ marginTop: 12, padding: 12, border: `1px solid ${T.neg}`, borderRadius: 12, background: T.negSoft }}>
-          <div style={{ fontSize: 13, color: T.text, marginBottom: 8 }}>
-            <b>Hesabın ve tüm verilerin kalıcı olarak silinir.</b> Onaylamak için parolanı gir.
-          </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-            <input style={{ ...css.input, width: 200 }} type="password" placeholder="parola" value={pw}
-              onChange={(e) => setPw(e.target.value)} autoComplete="current-password" />
-            <button style={{ ...css.btn, background: T.neg }} disabled={busy || !pw} onClick={remove}>{busy ? "…" : "Kalıcı olarak sil"}</button>
-            <button style={css.ghost} onClick={() => { setConfirm(false); setPw(""); setErr(""); }}>Vazgeç</button>
-          </div>
-          {err && <div style={{ fontSize: 13, color: T.neg, marginTop: 8 }}>{err}</div>}
-        </div>
-      )}
-    </div>
-  );
-}

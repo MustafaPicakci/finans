@@ -3,11 +3,12 @@ import { project, positions, cardInfos, stmtKey, loanRemaining, portfolioValueTr
 import { api, ApiError, type SessionUser } from "./api";
 import { T, css, fmtMoney, themeCSS, THEME_KEY, CCY_KEY, type ThemeMode } from "./theme";
 import { Center } from "./ui";
-import { NAV, NavIcon, type TabKey } from "./nav";
+import { NAV, NavIcon, PROFIL_META, type TabKey } from "./nav";
 import { useBalancesHidden, toggleBalancesHidden } from "./privacy";
 import { Auth, type UrlAuth } from "./features/auth";
 import { Ozet } from "./features/ozet";
 import { Hesaplar } from "./features/hesaplar";
+import { Profil } from "./features/profil";
 import { Nakit } from "./features/nakit";
 import { Plan } from "./features/plan";
 import { Kartlar } from "./features/kart";
@@ -117,7 +118,7 @@ export default function App() {
   const loansActive = data.loans.filter((l) => loanRemaining(l, new Date()) > 0).length;
 
   const openAdd = (kind: AddState["kind"], prefill?: KalemPrefill) => setAdd({ kind, prefill });
-  const meta = NAV.find((n) => n.key === tab)!;
+  const meta = NAV.find((n) => n.key === tab) ?? PROFIL_META; // profil NAV dizisinde yok (bkz. nav.tsx)
   const summary = { netWorthTry, cash, portValueTry, depositsValueTry, cardDebt, loanDebt,
     accountCount: data.accounts.length, portTypes, cardsWaiting, loansActive };
   const initials = (user?.email ?? "?").slice(0, 2).toUpperCase();
@@ -299,11 +300,20 @@ export default function App() {
         </nav>
 
         <div style={{ marginTop: "auto", paddingTop: 16, borderTop: `1px solid ${T.line}`, display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ width: 32, height: 32, borderRadius: 10, background: T.accSoft, color: T.acc, display: "grid", placeItems: "center", fontWeight: 700, fontSize: 13, flexShrink: 0 }}>{initials}</div>
-          <div style={{ flex: 1, minWidth: 0, lineHeight: 1.2 }}>
-            <div style={{ fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{user?.email?.split("@")[0]}</div>
-            <div style={{ fontSize: 11, color: T.mut3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{user?.email}</div>
-          </div>
+          {/* Kullanıcı kartı artık tıklanabilir: kimliğin durduğu yer, kullanıcı hesabı
+              ekranının da giriş kapısıdır (Hesabım — banka "Hesaplar"ıyla karıştırılmasın). */}
+          <button className="nav-btn" onClick={() => setTab("profil")} title="Hesabım"
+            style={{
+              display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0, textAlign: "left",
+              background: tab === "profil" ? T.accSoft : "none", border: "none", borderRadius: 10,
+              padding: "4px 6px", cursor: "pointer", fontFamily: T.disp,
+            }}>
+            <span style={{ width: 32, height: 32, borderRadius: 10, background: T.accSoft, color: T.acc, display: "grid", placeItems: "center", fontWeight: 700, fontSize: 13, flexShrink: 0 }}>{initials}</span>
+            <span style={{ flex: 1, minWidth: 0, lineHeight: 1.2 }}>
+              <span style={{ display: "block", fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: tab === "profil" ? T.acc : T.text }}>{user?.email?.split("@")[0]}</span>
+              <span style={{ display: "block", fontSize: 11, color: T.mut3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{user?.email}</span>
+            </span>
+          </button>
           {privacyBtn({ width: 30, height: 30, borderRadius: 9 })}
           <button className="icon-btn" title="Açık / koyu tema" aria-label="Açık / koyu tema" onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))} style={{ ...iconBtn, width: 30, height: 30, borderRadius: 9 }}><ThemeIcon /></button>
           <button className="icon-btn" title="Çıkış yap" aria-label="Çıkış yap" onClick={logout} style={{ ...iconBtn, width: 30, height: 30, borderRadius: 9 }}><PowerIcon /></button>
@@ -359,9 +369,20 @@ export default function App() {
                     {it.label}
                   </button>
                 ))}
-                <div style={{ borderTop: `1px solid ${T.line}`, margin: "4px 0 2px", paddingTop: 8, padding: "8px 11px 4px", fontSize: 11, color: T.mut3, lineHeight: 1.3 }}>
-                  {user?.email}
-                </div>
+                {/* Mobilde kenar çubuğu yok — kullanıcı hesabı ekranının kapısı burası.
+                    E-posta salt metin değil, tıklanabilir: kimliğin durduğu yer. */}
+                <button onClick={() => { setTab("profil"); setMenuOpen(false); }}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 11, width: "100%", textAlign: "left",
+                    background: "none", border: "none", borderTop: `1px solid ${T.line}`, borderRadius: 0,
+                    marginTop: 4, padding: "10px 11px 6px", cursor: "pointer", fontFamily: T.disp,
+                  }}>
+                  <span style={{ width: 18, display: "grid", placeItems: "center", color: T.mut }}><NavIcon tab="profil" size={15} /></span>
+                  <span style={{ minWidth: 0 }}>
+                    <span style={{ display: "block", fontSize: 13.5, fontWeight: 500, color: T.text }}>Hesabım</span>
+                    <span style={{ display: "block", fontSize: 11, color: T.mut3, overflow: "hidden", textOverflow: "ellipsis" }}>{user?.email}</span>
+                  </span>
+                </button>
               </div>
             )}
           </div>
@@ -372,7 +393,8 @@ export default function App() {
             {tab === "ozet" && <Ozet data={data} days={days} pos={pos} cash={cash} rates={rates} reload={reload} summary={summary} m={m} onGoAccounts={() => setTab("hesaplar")}
               onGoPortfolio={() => setTab("portfoy")}
               onSellFund={(p: TradePrefill) => setAdd({ kind: "trade", tradePrefill: p })} />}
-            {tab === "hesaplar" && <Hesaplar data={data} reload={reload} user={user} onAccountDeleted={() => { setUser(null); setData(null); }} />}
+            {tab === "hesaplar" && <Hesaplar data={data} reload={reload} />}
+            {tab === "profil" && <Profil user={user} onDeleted={() => { setUser(null); setData(null); }} />}
             {tab === "nakit" && <Nakit days={days} data={data} />}
             {tab === "plan" && <Plan data={data} reload={reload} onRealize={(p) => openAdd("kalem", p)} />}
             {tab === "kart" && <Kartlar data={data} reload={reload} onAdd={(k) => openAdd(k)} />}

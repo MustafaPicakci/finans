@@ -131,10 +131,14 @@ export function Portfoy({ data, pos: allPos, rates, ccy, reload, onAdd }: {
         )}
       </FiltreSeridi>}
       {lastUpdate && <div style={{ fontSize: 11, color: T.mut, marginBottom: 6 }}>son güncelleme: {lastUpdate}</div>}
+      {/* Bu metin eskiden "Fonlar (TEFAS) otomatik çekilemiyor, elle yaz" diyordu — o bilgi
+          Faz 20'den beri YANLIŞ (fetchTefasSnapshot günde bir kez tüm fonları çekiyor).
+          Satır başına gerçeği zaten `oto`/`elle` rozeti söylüyor; metin genel kuralı anlatır. */}
       <Aciklama k="fiyat-kutusu" label="fiyat kutuları nasıl çalışır?">
         Her satırdaki kutu o varlığın <b>güncel birim fiyatıdır</b> — pozisyon değeri, açık K/Z ve net varlık bununla hesaplanır.
-        Fonlar (TEFAS) otomatik çekilemiyor; onları elle yaz. Elle girdiğin fiyat <b>oto</b> tazelemede değişmez;
-        otomatik fiyata dönmek için <b>sıfırla</b>’ya bas.
+        Fiyatlar 15 dakikada bir otomatik tazelenir; <b>fonlar (TEFAS) günde bir kez</b>, çünkü NAV günde bir hesaplanır —
+        gün içinde yenilemek fon fiyatını değiştirmez. Fiyatı çekilemeyen varlığı elle yazabilirsin: elle girdiğin fiyat
+        <b> oto</b> tazelemede değişmez ve <b>yalnız sana özeldir</b>; otomatik fiyata dönmek için <b>sıfırla</b>’ya bas.
       </Aciklama>
       {pos.length === 0 && (
         <Empty>{sel === "all" ? "Henüz işlem yok. İlk alışınızı yukarıdan kaydedin." : "Bu portföyde açık pozisyon yok."}</Empty>
