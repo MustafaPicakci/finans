@@ -3,9 +3,19 @@ import type { AssetType, Currency, Trade, AllData, PriceHistoryEntry } from "./t
 export type Position = {
   type: AssetType; sym: string; qty: number; avg: number; realized: number;
   cur: number | null; value: number | null; unreal: number | null; updated: string | null; source: string | null;
+  /** Açık K/Z'nin MALİYETE oranı (0.12 = %12). Mutlak tutar tek başına yanıltıcıdır:
+      ₺3.000 kâr 10 bin liralık pozisyonda başka, 300 binlik pozisyonda başka şeydir.
+      Maliyet 0 ise (ör. tamamı bedelsiz gelen pozisyon) oran tanımsızdır → null. */
+  unrealPct: number | null;
   /** Pozisyonun doğal (native) para birimi — avg/cur/value/unreal/realized hep bu birimdedir */
   currency: Currency;
 };
+
+/** Bir K/Z tutarının maliyete oranı. Maliyet 0/negatifse oran anlamsızdır (null döner) —
+    yüzde hesabı yapan her yer bunu çağırsın, "0'a bölme" her çağrı yerinde ayrı düşünülmesin. */
+export function pnlPct(pnl: number, cost: number): number | null {
+  return cost > 0 ? pnl / cost : null;
+}
 
 /** FX kur seti; şimdilik yalnız USD/TRY. TRY taban birimidir (usdTry = 1 USD kaç TRY). */
 export type Rates = { usdTry: number };
@@ -99,10 +109,12 @@ export function positions(trades: Trade[], prices: AllData["prices"]): Position[
     const price = pm.get(`${p.type}:${p.sym}`);
     const cur = price?.price ?? null;
     const avg = p.qty > 0 ? p.cost / p.qty : 0;
+    const unreal = cur != null && p.qty > 0 ? p.qty * (cur - avg) : null;
     return {
       type: p.type, sym: p.sym, qty: p.qty, avg, realized: p.realized, cur, currency: p.currency,
       value: cur != null ? p.qty * cur : null,
-      unreal: cur != null && p.qty > 0 ? p.qty * (cur - avg) : null,
+      unreal,
+      unrealPct: unreal != null ? pnlPct(unreal, p.qty * avg) : null,
       updated: price?.updated_at ?? null,
       source: price?.source ?? null,
     };

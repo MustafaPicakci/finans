@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { positions, portfolioValueHistory, portfolioValueTry, convert, groupTradesByPortfolio, portfolioGroupValueTry, tradeLedger, summarizeTrades, sliceValueHistory, bucketValueHistory, historyChange, qtyDelta, cashDelta } from "./portfolio.js";
+import { positions, portfolioValueHistory, portfolioValueTry, convert, groupTradesByPortfolio, portfolioGroupValueTry, tradeLedger, summarizeTrades, sliceValueHistory, bucketValueHistory, historyChange, qtyDelta, cashDelta, pnlPct } from "./portfolio.js";
 import type { Trade, Price, PriceHistoryEntry } from "./types.js";
 
 const trade = (over: Partial<Trade>): Trade => ({
@@ -59,7 +59,23 @@ describe("positions", () => {
     const [p] = positions([trade({ id: 1, qty: 10, price: 100 })], prices);
     expect(p.value).toBe(1300);
     expect(p.unreal).toBeCloseTo(300);
+    expect(p.unrealPct).toBeCloseTo(0.3); // 300 / 1000 maliyet = %30
     expect(p.source).toBe("manual");
+  });
+
+  it("açık K/Z yüzdesi maliyete oranlanır; fiyat yoksa null", () => {
+    const [noPrice] = positions([trade({ id: 1, qty: 10, price: 100 })], []);
+    expect(noPrice.unrealPct).toBeNull();
+    // komisyon maliyete girer: 10×100 + 50 = 1050 maliyet, değer 1100 → +50 / 1050
+    const prices: Price[] = [{ symbol: "THYAO", asset_type: "BIST", price: 110, source: "auto", updated_at: "2026-01-01" }];
+    const [withFee] = positions([trade({ id: 1, qty: 10, price: 100, fee: 50 })], prices);
+    expect(withFee.unrealPct).toBeCloseTo(50 / 1050);
+  });
+
+  it("pnlPct sıfır/negatif maliyette null döner (0'a bölme yok)", () => {
+    expect(pnlPct(100, 0)).toBeNull();
+    expect(pnlPct(100, -5)).toBeNull();
+    expect(pnlPct(-25, 100)).toBeCloseTo(-0.25);
   });
 
   it("işlemin para birimini pozisyona taşır; USD pozisyon native (USD) hesaplanır", () => {
