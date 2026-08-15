@@ -5,7 +5,7 @@ import {
 } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, fmtMoney, TYPE_COLORS } from "../../theme";
-import { Empty } from "../../ui";
+import { Empty, FiltreSeridi, SilDugmesi } from "../../ui";
 import { EditSheet, type EditTarget } from "../../EditSheet";
 
 /* ————— HAREKETLER (İŞLEM GEÇMİŞİ) —————
@@ -87,8 +87,11 @@ export function Hareketler({ data, trades, scopeLabel, reload, symbol, onSymbol 
         <div style={{ fontSize: 12, color: T.mut }}>{shown.length} işlem</div>
       </div>
 
-      {/* filtreler */}
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
+      {/* Filtreler tek çukur şeritte (FiltreSeridi) — buradaki hiçbir düğme veri değiştirmez.
+          Eskiden bu kontroller kartın yüzeyinde, eylem düğmeleriyle aynı görünümdeydi. */}
+      <FiltreSeridi sag={filtered
+        ? <button type="button" style={{ ...css.ghost, padding: "5px 10px", fontSize: 11.5 }} onClick={clear}>temizle</button>
+        : undefined}>
         <select style={{ ...css.input, width: "auto", padding: "6px 8px", fontSize: 12.5 }} value={symbol ?? ""} onChange={(e) => onSymbol(e.target.value || null)}>
           <option value="">Tüm semboller</option>
           {symbols.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -115,8 +118,7 @@ export function Hareketler({ data, trades, scopeLabel, reload, symbol, onSymbol 
             }}>{r.label}</button>
           ))}
         </div>
-        {filtered && <button type="button" style={{ ...css.ghost, padding: "6px 10px", fontSize: 12 }} onClick={clear}>filtreyi temizle</button>}
-      </div>
+      </FiltreSeridi>
 
       {/* dönem özeti — para birimi başına */}
       {summaries.map(({ ccy, s }) => (
@@ -171,49 +173,66 @@ function HareketRow({ e, data, reload, onSymbol, onEdit }: {
   const bonus = t.side === "BEDELSİZ", div = t.side === "TEMETTÜ";
   const num = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(4).replace(/0+$/, "").replace(/\.$/, ""));
   return (
-    <div style={{ padding: "9px 0", borderBottom: `1px solid ${T.line}` }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        <span style={{ ...css.mono, fontSize: 12, color: T.mut, width: 52 }}>
-          {fmtD(parseD(t.date), { day: "2-digit", month: "short" })}
-        </span>
-        <span style={{
-          fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 10,
+    <div style={{ padding: "10px 0", borderBottom: `1px solid ${T.line}` }}>
+      {/* Satır TEK SOL KENARA hizalı üç katmandır — kimlik, ayrıntı, etki. Eskiden ayrıntı
+          satırı `marginLeft:60` ile içerliydi (artık var olmayan bir tarih sütununun kalıntısı)
+          ve grup seçici satırın ortasında kocaman bir kutu olarak duruyordu; bilgi yarı solda
+          yarı ortada kalıyordu. Kutu gitti (bkz. inline-select), girintiler tek hizaya geldi. */}
+      <div className="ui-row" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span className="row-lead" style={{
+          fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 10, flexShrink: 0,
           background: SIDE_SOFT[t.side], color: SIDE_INK[t.side],
         }}>{t.side}</span>
-        <button type="button" onClick={() => onSymbol(t.symbol.toUpperCase())} title="Bu sembolün hareketlerini süz"
-          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", ...css.mono, fontWeight: 600, fontSize: 14, color: T.acc }}>
-          {t.symbol}
-        </button>
-        <span style={{ fontSize: 10, fontWeight: 700, color: TYPE_COLORS[t.asset_type] || T.mut }}>{t.asset_type}</span>
-        <span className="row-title" style={{ flex: 1, fontSize: 12.5, color: T.mut }}>
-          {bonus
-            ? <>{num(t.qty)} adet bedelsiz · <span style={{ color: T.mut3 }}>ort. {fmtMoney(e.avgBefore, ccy, true)} → {fmtMoney(e.avgAfter, ccy, true)}</span></>
-            : <>{num(t.qty)} × <span style={css.mono}>{fmtMoney(t.price, ccy, true)}</span>
-              {t.fee > 0 && <span style={{ color: T.mut3 }}> · {div ? "stopaj" : "kom."} {fmtMoney(t.fee, ccy, true)}</span>}</>}
+        {/* Satırın kimliği semboldür. Tarih 2. satıra indi: ay başlıkları (AĞUSTOS 2026) zaten
+            bağlamı veriyor, gün tek başına 1. satırda yer kaplamayı hak etmiyor. */}
+        {/* flex:1 + tutarda marginLeft:auto → tutarlar MASAÜSTÜNDE de sağ kolonda hizalanır
+            (row-amount kuralı yalnız mobil medya sorgusunda; geniş ekranda hepsi sola yığılıyordu) */}
+        <span className="row-title" style={{ display: "flex", alignItems: "baseline", gap: 6, minWidth: 0, flex: 1 }}>
+          <button type="button" onClick={() => onSymbol(t.symbol.toUpperCase())} title="Bu sembolün hareketlerini süz"
+            style={{ background: "none", border: "none", padding: 0, cursor: "pointer", ...css.mono, fontWeight: 600, fontSize: 14, color: T.acc, minHeight: 0 }}>
+            {t.symbol}
+          </button>
+          <span style={{ fontSize: 10, fontWeight: 700, color: TYPE_COLORS[t.asset_type] || T.mut, flexShrink: 0 }}>{t.asset_type}</span>
         </span>
         {/* İşlem büyüklüğü — nötr ve işaretsiz. Yönü ALIŞ/SATIŞ rozeti söyler; kırmızı/yeşil bu
             ekranda yalnız gerçekleşen K/Z'ye ayrılmıştır (işaretli tutar "zarar" gibi okunuyordu).
             Ayrıca portföy işlemi hesaba bağlı değilse hiçbir bakiyeyi oynatmaz — eksi işareti bunu da
             yanlış ima ediyordu. */}
-        <span className="row-amount" style={{ ...css.mono, fontSize: 13.5, color: bonus ? T.mut3 : T.text }}
+        <span className="row-amount" style={{ ...css.mono, fontSize: 13.5, marginLeft: "auto", color: bonus ? T.mut3 : T.text }}
           title={bonus ? "bedelsizde para hareketi yoktur" : buy ? "ödenen (komisyon dahil)" : div ? "hesaba giren temettü" : "ele geçen (komisyon düşülmüş)"}>
           {bonus ? "—" : fmtMoney(Math.round(Math.abs(e.cash)), ccy)}
         </span>
+        <button className="row-end" style={css.edit} title="İşlemi düzenle" onClick={() => onEdit({ kind: "trade", row: t })}>✎</button>
+        <SilDugmesi ad={<>{t.side} · {t.symbol} · {num(t.qty)} adet</>} title="İşlemi sil"
+          onSil={async () => { await api.del("trades", t.id); reload(); }}
+          sonuc={<>Pozisyon ve ortalama maliyet yeniden hesaplanır.{t.account_id != null && " Tutar bağlı hesaba geri işlenir."}</>} />
+      </div>
+
+      {/* 2. katman: ne zaman, ne kadar, hangi grupta — hepsi aynı sol kenardan başlar */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 3, fontSize: 12, color: T.mut }}>
+        <span style={{ ...css.mono, color: T.mut3 }}>{fmtD(parseD(t.date), { day: "2-digit", month: "short" })}</span>
+        <span>
+          {bonus
+            ? <>{num(t.qty)} adet bedelsiz · <span style={{ color: T.mut3 }}>ort. {fmtMoney(e.avgBefore, ccy, true)} → {fmtMoney(e.avgAfter, ccy, true)}</span></>
+            : <>{num(t.qty)} × <span style={css.mono}>{fmtMoney(t.price, ccy, true)}</span>
+              {t.fee > 0 && <span style={{ color: T.mut3 }}> · {div ? "stopaj" : "kom."} {fmtMoney(t.fee, ccy, true)}</span>}</>}
+        </span>
         {data.portfolios.length > 0 && (
-          <select
-            title="Portföy grubu" style={{ ...css.input, width: 122, padding: "3px 6px", fontSize: 11.5 }}
+          /* inline-select: kutu değil metin gibi görünür, üstüne gelince/odaklanınca kenarlık
+             kazanır. Tek tıkla grup atama korunur (✎ formundan yapmak çok daha yavaş), ama
+             salt-okunur bir listenin ortasında kalıcı bir giriş kutusu gibi durmaz. */
+          <select className="inline-select" title="Portföy grubu"
+            style={{ ...css.input, width: "auto", maxWidth: 150, padding: "1px 4px", fontSize: 11.5, color: T.mut3 }}
             value={t.portfolio_id ?? ""}
             onChange={async (ev) => { await api.setTradePortfolio(t.id, ev.target.value ? +ev.target.value : null); reload(); }}>
             <option value="">Gruplanmamış</option>
             {data.portfolios.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
         )}
-        <button style={css.edit} title="İşlemi düzenle" onClick={() => onEdit({ kind: "trade", row: t })}>✎</button>
-        <button style={css.del} title="İşlemi sil" onClick={async () => { await api.del("trades", t.id); reload(); }}>✕</button>
       </div>
 
-      {/* pozisyona etkisi — modern portföy uygulamalarındaki "lot" satırı */}
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginLeft: 60, marginTop: 4, fontSize: 11.5, color: T.mut3 }}>
+      {/* 3. katman: pozisyona etkisi ("lot" satırı) */}
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 3, fontSize: 11.5, color: T.mut3 }}>
         <span>
           adet <span style={css.mono}>{num(e.qtyBefore)}</span> → <span style={{ ...css.mono, color: T.mut }}>{num(e.qtyAfter)}</span>
         </span>

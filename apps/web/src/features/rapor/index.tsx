@@ -6,7 +6,7 @@ import {
 import { monthsBack, monthlyTotals, categoryTotals, transactionsInMonth, parseD, fmtD, ymOf, type AllData, type Category } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, tl, CATEGORY_PALETTE } from "../../theme";
-import { Field, Empty, Money, Row } from "../../ui";
+import { Field, Empty, Money, Row, SilDugmesi, FiltreSeridi } from "../../ui";
 import { EditSheet, type EditTarget } from "../../EditSheet";
 
 const fmtYm = (ym: string) => {
@@ -55,12 +55,13 @@ export function Rapor({ data, reload }: { data: AllData; reload: () => void }) {
 
   return (<>
     <div style={css.card}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-        <div style={{ fontWeight: 700, fontSize: 15 }}>Aylık Gelir & Gider Trendi</div>
-        <select style={{ ...css.input, width: 90, padding: "5px 8px", fontSize: 12 }} value={range} onChange={(e) => setRange(Number(e.target.value))}>
-          {[3, 6, 12, 24].map((m) => <option key={m} value={m}>{m} ay</option>)}
+      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Aylık Gelir & Gider Trendi</div>
+      {/* aralık seçici bir filtredir (veriyi değil pencereyi değiştirir) → filtre şeridine */}
+      <FiltreSeridi>
+        <select style={{ ...css.input, width: "auto", padding: "5px 8px", fontSize: 12 }} value={range} onChange={(e) => setRange(Number(e.target.value))}>
+          {[3, 6, 12, 24].map((m) => <option key={m} value={m}>son {m} ay</option>)}
         </select>
-      </div>
+      </FiltreSeridi>
       {!hasAnyTx ? (
         <Empty>"+ Ekle" ile gerçekleşen harcama/gelir kaydettikçe burada bir trend grafiği görünecek.</Empty>
       ) : (
@@ -85,10 +86,10 @@ export function Rapor({ data, reload }: { data: AllData; reload: () => void }) {
     </div>
 
     <div style={css.card}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-        <div style={{ fontWeight: 700, fontSize: 15 }}>Kategori Dağılımı</div>
-        <input type="month" style={{ ...css.input, width: 160 }} value={ym} onChange={(e) => setYm(e.target.value || curYm)} />
-      </div>
+      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Kategori Dağılımı</div>
+      <FiltreSeridi>
+        <input type="month" style={{ ...css.input, width: "auto", padding: "5px 8px", fontSize: 12 }} value={ym} onChange={(e) => setYm(e.target.value || curYm)} />
+      </FiltreSeridi>
       {totals.length === 0 ? <Empty>Bu ayda kayıtlı işlem yok.</Empty> : (<>
         <div style={{ display: "flex", gap: 16, fontSize: 13, marginTop: 10, marginBottom: 4 }}>
           <span>Gelir <Money v={Math.round(totalIncome)} sign /></span>
@@ -137,17 +138,20 @@ export function Rapor({ data, reload }: { data: AllData; reload: () => void }) {
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>İşlemler</div>
             {monthTxs.map((t, i) => (
               <Row key={t.id} last={i === monthTxs.length - 1}>
-                <span style={{ ...css.mono, fontSize: 12, color: T.mut, width: 74 }}>{fmtD(parseD(t.date), { day: "2-digit", month: "short", year: "2-digit" })}</span>
-                <div style={{ flex: 1 }}>
+                <span className="row-lead" style={{ ...css.mono, fontSize: 12, color: T.mut, width: 74 }}>{fmtD(parseD(t.date), { day: "2-digit", month: "short", year: "2-digit" })}</span>
+                <div className="row-title" style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13 }}>{t.name}</div>
                   <div style={{ fontSize: 11, color: T.mut }}>
                     {t.category_id != null && catById.get(t.category_id) ? catById.get(t.category_id)!.name : "Kategorisiz"}
                     {t.account_id != null && accById.get(t.account_id) && <> · {accById.get(t.account_id)!.name}</>}
                   </div>
                 </div>
-                <Money v={t.amount} sign />
-                <button style={css.edit} title="Düzenle" onClick={() => setEditing({ kind: "transaction", row: t })}>✎</button>
-                <button style={css.del} onClick={async () => { await api.del("transactions", t.id); reload(); }}>✕</button>
+                <span className="row-amount"><Money v={t.amount} sign /></span>
+                <button className="row-end" style={css.edit} title="Düzenle" onClick={() => setEditing({ kind: "transaction", row: t })}>✎</button>
+                <SilDugmesi ad={t.name} onSil={async () => { await api.del("transactions", t.id); reload(); }}
+                  sonuc={t.account_id != null && accById.get(t.account_id)
+                    ? <>Tutar <b>{accById.get(t.account_id)!.name}</b> hesabına geri işlenecek.</>
+                    : "Bu işlem bir hesaba bağlı değil; yalnız Rapor'dan düşer."} />
               </Row>
             ))}
           </div>
@@ -160,11 +164,11 @@ export function Rapor({ data, reload }: { data: AllData; reload: () => void }) {
       {data.categories.length === 0 && <Empty>Henüz kategori yok. Market, Ulaşım, Fatura gibi ekleyebilirsin.</Empty>}
       {data.categories.map((c, i) => (
         <Row key={c.id} last={i === data.categories.length - 1}>
-          <span style={{ color: catColor(c.id), fontSize: 12 }}>●</span>
+          <span className="row-lead" style={{ color: catColor(c.id), fontSize: 12 }}>●</span>
           {/* Faz 18: ad ve tür satır içinde düzenlenir. Sil+yeniden ekle, kategoriye bağlı tüm
               işlemlerin category_id'sini NULL'a düşürürdü (ON DELETE SET NULL) — yani bir yazım
               hatasını düzeltmek geçmiş raporlamayı silmek olurdu. */}
-          <input style={{ ...css.input, flex: 1, fontSize: 13, padding: "3px 6px", border: "1px solid transparent", background: "transparent" }}
+          <input className="row-title" style={{ ...css.input, flex: 1, fontSize: 13, padding: "3px 6px", border: "1px solid transparent", background: "transparent" }}
             defaultValue={c.name} key={c.name} title="Kategori adı (düzenlemek için tıkla)"
             onFocus={(e) => { e.target.style.borderColor = T.line; e.target.style.background = T.panel2; }}
             onBlur={async (e) => {
@@ -173,12 +177,15 @@ export function Rapor({ data, reload }: { data: AllData; reload: () => void }) {
               if (v && v !== c.name) { await api.put(`categories/${c.id}`, { name: v }); reload(); }
               else e.target.value = c.name;
             }} />
-          <select style={{ ...css.input, width: "auto", padding: "3px 6px", fontSize: 11 }} value={c.kind}
+          {/* row-end: dar bir seçici, alt satıra atılıp her kategoriyi iki satır yapmasın */}
+          <select className="row-end" style={{ ...css.input, width: "auto", padding: "3px 6px", fontSize: 11 }} value={c.kind}
             title="Kategori türü"
             onChange={async (e) => { await api.put(`categories/${c.id}`, { kind: e.target.value }); reload(); }}>
             <option value="expense">gider</option><option value="income">gelir</option>
           </select>
-          <button style={css.del} onClick={async () => { await api.del("categories", c.id); reload(); }}>✕</button>
+          {/* ON DELETE SET NULL: işlemler silinmez, kategorisiz kalır — kullanıcı bunu bilmeli */}
+          <SilDugmesi ad={c.name} onSil={async () => { await api.del("categories", c.id); reload(); }}
+            sonuc={<>Bu kategorideki işlemler <b>silinmez</b>, "Kategorisiz"e düşer. Geçmiş raporlarda dağılım değişir.</>} />
         </Row>
       ))}
       <form onSubmit={async (e) => {

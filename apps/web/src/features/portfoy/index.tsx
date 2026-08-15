@@ -1,19 +1,23 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
-  parseD, fmtD, num, convert, positions, groupTradesByPortfolio, portfolioValueTry,
+  parseD, fmtD, num, convert, positions, groupTradesByPortfolio, portfolioValueTry, pnlPct,
   type AllData, type Position, type Rates, type Currency, type AssetType, type PortfolioKey,
 } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, fmtMoney, TYPE_COLORS } from "../../theme";
-import { Empty, Row, Field } from "../../ui";
+import { Empty, Row, Field, Aciklama, FiltreSeridi, SilDugmesi } from "../../ui";
 import { Hareketler } from "./Hareketler";
 import { DegerGrafigi } from "./DegerGrafigi";
 import type { AddKind } from "../forms";
 
 /** İşaretli tutar, verilen para biriminde (Money bileşeni TRY'ye sabit olduğundan native gösterim için) */
-const Signed = ({ v, ccy, size = 12 }: { v: number; ccy: Currency; size?: number }) => (
+/* K/Z gösterimi. `pct` verilirse tutarın yanında oranı da yazar — mutlak tutar tek başına
+   ölçeksizdir (₺3.000 kâr, 10 binlik pozisyonda %30, 300 binlikte %1). Oran maliyet 0 ise
+   (tamamı bedelsiz gelen pozisyon) null gelir ve hiç yazılmaz. */
+const Signed = ({ v, ccy, size = 12, pct }: { v: number; ccy: Currency; size?: number; pct?: number | null }) => (
   <span style={{ ...css.mono, fontSize: size, color: v > 0 ? T.pos : v < 0 ? T.neg : T.mut }}>
     {v > 0 ? "+" : ""}{fmtMoney(v, ccy)}
+    {pct != null && <span style={{ opacity: 0.75 }}> ({v > 0 ? "+" : ""}%{(pct * 100).toFixed(1).replace(".", ",")})</span>}
   </span>
 );
 
@@ -74,6 +78,10 @@ export function Portfoy({ data, pos: allPos, rates, ccy, reload, onAdd }: {
 
   const totUnreal = pos.reduce((s, p) => s + convert(p.unreal ?? 0, p.currency, ccy, rates), 0);
   const totReal = pos.reduce((s, p) => s + convert(p.realized, p.currency, ccy, rates), 0);
+  /* Toplam açık K/Z oranı: yüzdeler ORTALANAMAZ (₺100'lük %50 ile ₺100.000'lik %1 aynı ağırlıkta
+     değil) — toplam K/Z, toplam maliyete bölünür. Fiyatı olmayan pozisyon her iki toplama da girmez. */
+  const totCost = pos.reduce((s, p) => s + (p.unreal != null ? convert(p.qty * p.avg, p.currency, ccy, rates) : 0), 0);
+  const totUnrealPct = pnlPct(totUnreal, totCost);
   const lastUpdate = data.prices.reduce((m, p) => (p.updated_at > m ? p.updated_at : m), "");
 
   /* Para piyasası (nakit sayılan) fonlar — Nakit Akışı takviminde nakit gibi değerlenir */
@@ -92,33 +100,42 @@ export function Portfoy({ data, pos: allPos, rates, ccy, reload, onAdd }: {
 
   return (<>
     <div style={css.card}>
-      <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 6, marginBottom: 10, alignItems: "center" }}>
+      {/* Başlık satırı = KİMLİK + ÖZET + tek eylem (fiyat tazeleme, ikon).
+          "+ İşlem" düğmesi kaldırıldı: işlem girişinin tek kapısı global "+ Ekle" (CLAUDE.md'deki
+          kural); sekmeye ikinci bir giriş noktası koymak hem kuralı deler hem de filtre
+          çipleriyle aynı hizada durup "bu da mı filtre?" karışıklığı yaratıyordu. */}
+      <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 10, alignItems: "center" }}>
         <div style={{ fontWeight: 700, fontSize: 15 }}>Pozisyonlar</div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", fontSize: 12, color: T.mut }}>
           <span>gerç. K/Z <Signed v={Math.round(totReal)} ccy={ccy} /></span>
-          <span>açık K/Z <Signed v={Math.round(totUnreal)} ccy={ccy} /></span>
-          <button style={css.ghost} onClick={refresh} disabled={busy}>{busy ? "Yenileniyor…" : "Fiyatları Yenile"}</button>
-          <button style={{ ...css.ghost, color: T.acc, borderColor: T.acc }} onClick={() => onAdd("trade")}>+ İşlem</button>
+          <span>açık K/Z <Signed v={Math.round(totUnreal)} ccy={ccy} pct={totUnrealPct} /></span>
+          <button className="icon-btn" onClick={refresh} disabled={busy}
+            title={busy ? "Yenileniyor…" : "Fiyatları yenile"} aria-label="Fiyatları yenile"
+            style={{
+              width: 32, height: 32, borderRadius: 9, border: `1px solid ${T.line}`, background: T.panel,
+              color: T.mut, cursor: busy ? "default" : "pointer", display: "grid", placeItems: "center",
+              fontSize: 14, flexShrink: 0, opacity: busy ? 0.6 : 1,
+            }}>
+            <span style={{ display: "inline-block", animation: busy ? "spin 1s linear infinite" : "none" }}>↻</span>
+          </button>
         </div>
       </div>
-      {showStrip && (
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
-          <PortfolioChip label="Tümü" value={portfolioValueTry(allPos, rates)} ccy={ccy} rates={rates} active={sel === "all"} onClick={() => setSel("all")} />
-          {data.portfolios.map((p) => (
-            <PortfolioChip key={p.id} label={p.name} title={p.note ?? undefined} value={groupValue(p.id)} ccy={ccy} rates={rates}
-              active={sel === p.id} onClick={() => setSel(p.id)} />
-          ))}
-          {(hasUngrouped || sel === null) && (
-            <PortfolioChip label="Gruplanmamış" value={groupValue(null)} ccy={ccy} rates={rates} active={sel === null} onClick={() => setSel(null)} />
-          )}
-        </div>
-      )}
+      {showStrip && <FiltreSeridi>
+        <PortfolioChip label="Tümü" value={portfolioValueTry(allPos, rates)} ccy={ccy} rates={rates} active={sel === "all"} onClick={() => setSel("all")} />
+        {data.portfolios.map((p) => (
+          <PortfolioChip key={p.id} label={p.name} title={p.note ?? undefined} value={groupValue(p.id)} ccy={ccy} rates={rates}
+            active={sel === p.id} onClick={() => setSel(p.id)} />
+        ))}
+        {(hasUngrouped || sel === null) && (
+          <PortfolioChip label="Gruplanmamış" value={groupValue(null)} ccy={ccy} rates={rates} active={sel === null} onClick={() => setSel(null)} />
+        )}
+      </FiltreSeridi>}
       {lastUpdate && <div style={{ fontSize: 11, color: T.mut, marginBottom: 6 }}>son güncelleme: {lastUpdate}</div>}
-      <div style={{ fontSize: 11, color: T.mut, marginBottom: 8, lineHeight: 1.5 }}>
+      <Aciklama k="fiyat-kutusu" label="fiyat kutuları nasıl çalışır?">
         Her satırdaki kutu o varlığın <b>güncel birim fiyatıdır</b> — pozisyon değeri, açık K/Z ve net varlık bununla hesaplanır.
         Fonlar (TEFAS) otomatik çekilemiyor; onları elle yaz. Elle girdiğin fiyat <b>oto</b> tazelemede değişmez;
         otomatik fiyata dönmek için <b>sıfırla</b>’ya bas.
-      </div>
+      </Aciklama>
       {pos.length === 0 && (
         <Empty>{sel === "all" ? "Henüz işlem yok. İlk alışınızı yukarıdan kaydedin." : "Bu portföyde açık pozisyon yok."}</Empty>
       )}
@@ -129,6 +146,8 @@ export function Portfoy({ data, pos: allPos, rates, ccy, reload, onAdd }: {
         if (items.length === 0) return null;
         const gValue = items.reduce((s, p) => s + convert(p.value ?? 0, p.currency, ccy, rates), 0);
         const gUnreal = items.reduce((s, p) => s + convert(p.unreal ?? 0, p.currency, ccy, rates), 0);
+        // grup oranı da toplam K/Z ÷ toplam maliyet (yüzde ortalaması alınmaz — bkz. totUnrealPct)
+        const gCost = items.reduce((s, p) => s + (p.unreal != null ? convert(p.qty * p.avg, p.currency, ccy, rates) : 0), 0);
         const isCollapsed = collapsed.has(g.key);
         const toggle = () => setCollapsed((prev) => {
           const next = new Set(prev);
@@ -147,7 +166,7 @@ export function Portfoy({ data, pos: allPos, rates, ccy, reload, onAdd }: {
                 <span style={{ fontSize: 11, color: T.mut }}>{items.length} varlık</span>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontSize: 11, color: T.mut }}>açık K/Z <Signed v={Math.round(gUnreal)} ccy={ccy} size={11} /></span>
+                <span style={{ fontSize: 11, color: T.mut }}>açık K/Z <Signed v={Math.round(gUnreal)} ccy={ccy} size={11} pct={pnlPct(gUnreal, gCost)} /></span>
                 <span style={{ ...css.mono, fontSize: 13, fontWeight: 600 }}>{fmtMoney(Math.round(gValue), ccy)}</span>
               </div>
             </div>
@@ -196,7 +215,7 @@ export function Portfoy({ data, pos: allPos, rates, ccy, reload, onAdd }: {
                       color: cashFunds.has(p.sym) ? T.pos : T.mut,
                     }}>{cashFunds.has(p.sym) ? "✓ nakit sayılır" : "nakit say"}</button>
                 )}
-                {p.unreal != null && <span style={{ fontSize: 12, color: T.mut }}>açık K/Z: <Signed v={Math.round(p.unreal)} ccy={p.currency} /></span>}
+                {p.unreal != null && <span style={{ fontSize: 12, color: T.mut }}>açık K/Z: <Signed v={Math.round(p.unreal)} ccy={p.currency} pct={p.unrealPct} /></span>}
                 {p.realized !== 0 && <span style={{ fontSize: 12, color: T.mut }}>gerçekleşen: <Signed v={Math.round(p.realized)} ccy={p.currency} /></span>}
               </div>
             </div>
@@ -254,11 +273,11 @@ function PortfolioManager({ data, rates, ccy, reload, groupValue }: {
   return (
     <div style={css.card}>
       <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Portföyler</div>
-      <div style={{ fontSize: 12, color: T.mut, marginBottom: 10, lineHeight: 1.5 }}>
+      <Aciklama k="portfoy-gruplari" label="portföy grubu ne işe yarar?">
         Varlıklarını mantıksal olarak ayır (ör. <b>Alfa Portföy</b>, <b>Emeklilik</b>, <b>Büyüme</b>).
         Gruplama <b>işlem düzeyindedir</b>: aynı sembolü iki portföyde ayrı ortalama maliyetle tutabilirsin.
         Net varlık ve alokasyon değişmez — bu yalnız takip/raporlama içindir.
-      </div>
+      </Aciklama>
       <form onSubmit={add} style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
         <Field label="Ad" flex={2}>
           <input style={css.input} value={f.name} placeholder="örn. Alfa Portföy" onChange={(e) => setF({ ...f, name: e.target.value })} />
@@ -275,7 +294,9 @@ function PortfolioManager({ data, rates, ccy, reload, groupValue }: {
         <Row key={p.id} last={i === arr.length - 1}>
           {/* Faz 18: ad ve not satır içinde düzenlenir (sil+yeniden ekle işlemleri Gruplanmamış'a
               düşürür, yani grubu yeniden kurmak elle yeniden atama demek olurdu). */}
-          <span className="row-title" style={{ flex: 1, fontSize: 13, display: "flex", gap: 6, alignItems: "center", minWidth: 0 }}>
+          {/* flexWrap: iki giriş alanı + sayaç dar ekranda tek satıra sığmıyor, sarmalanmazsa
+              ad kutusu 40px'e eziliyordu (bkz. row-title kuralı — o dış satırı sarar, bu içini) */}
+          <span className="row-title" style={{ flex: 1, fontSize: 13, display: "flex", gap: 6, alignItems: "center", minWidth: 0, flexWrap: "wrap" }}>
             <input style={{ ...css.input, fontWeight: 700, fontSize: 13, padding: "3px 6px", border: "1px solid transparent", background: "transparent", width: 130 }}
               defaultValue={p.name} key={`n${p.name}`} title="Portföy adı (düzenlemek için tıkla)"
               onFocus={(e) => { e.target.style.borderColor = T.line; e.target.style.background = T.panel2; }}
@@ -296,12 +317,10 @@ function PortfolioManager({ data, rates, ccy, reload, groupValue }: {
             <span style={{ color: T.mut3, fontSize: 11, whiteSpace: "nowrap" }}>{count(p.id)} işlem</span>
           </span>
           <span className="row-amount" style={{ ...css.mono, fontSize: 13 }}>{fmtMoney(Math.round(convert(groupValue(p.id), "TRY", ccy, rates)), ccy)}</span>
-          <button style={css.del} title="Portföyü sil (işlemler Gruplanmamış'a döner)"
-            onClick={async () => {
-              if (!confirm(`"${p.name}" silinsin mi? İçindeki ${count(p.id)} işlem silinmez, "Gruplanmamış"a döner.`)) return;
-              await api.del("portfolios", p.id);
-              reload();
-            }}>✕</button>
+          {/* native confirm() yerine ortak SilDugmesi — tüm silmeler aynı onay kutusunu kullanır */}
+          <SilDugmesi ad={p.name} title="Portföyü sil"
+            onSil={async () => { await api.del("portfolios", p.id); reload(); }}
+            sonuc={<>İçindeki <b>{count(p.id)} işlem silinmez</b>, "Gruplanmamış"a döner. Net varlık ve alokasyon değişmez.</>} />
         </Row>
       ))}
     </div>

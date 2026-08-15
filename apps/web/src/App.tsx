@@ -36,6 +36,10 @@ export default function App() {
     const text = [p.get("ekle"), p.get("title"), p.get("url")].filter(Boolean).join(" ").trim();
     return text || null;
   });
+  /* Mobil üst çubuk taşma menüsü: 390px'te beş kontrol (yenile/₺$/göz/tema/çıkış) başlığı
+     eziyor, "Nakit Akışı" iki satıra kırılıyordu. Sık kullanılan ₺/$ üstte kalır, gerisi
+     buranın altına iner. Masaüstünde bu düğme yok — orada zaten kenar çubuğu taşıyor. */
+  const [menuOpen, setMenuOpen] = useState(false);
   const [urlAuth, setUrlAuth] = useState<UrlAuth>(() => { // e-posta bağlantısındaki reset/verify token'ı
     const p = new URLSearchParams(window.location.search);
     const reset = p.get("reset"), verify = p.get("verify");
@@ -64,6 +68,15 @@ export default function App() {
     localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
   useEffect(() => { localStorage.setItem(CCY_KEY, ccy); }, [ccy]);
+  useEffect(() => { // taşma menüsü: dışarı tıklama ve Escape kapatır
+    if (!menuOpen) return;
+    const close = () => setMenuOpen(false);
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setMenuOpen(false); };
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", esc);
+    return () => { window.removeEventListener("click", close); window.removeEventListener("keydown", esc); };
+  }, [menuOpen]);
+  useEffect(() => { setMenuOpen(false); }, [tab]); // sekme değişince açık menü asılı kalmasın
 
   const rates = useMemo(() => ({ usdTry: Number(data?.settings.fx_usd_try || 0) }), [data]);
   const days = useMemo(() => (data ? project(data, Number(data.settings.horizon || 6), rates) : []), [data, rates]);
@@ -129,6 +142,20 @@ export default function App() {
     width: 34, height: 34, borderRadius: 10, border: `1px solid ${T.line}`, background: T.panel,
     color: T.mut, cursor: "pointer", display: "grid", placeItems: "center", fontSize: 15, flexShrink: 0,
   };
+  /* ⏻ (U+23FB) ve ◐ tipografik karakterlerdi ve Android'de yazı tipinde bulunmayıp
+     TOFU (▯) olarak çiziliyordu — "çıkış" düğmesi boş kutu görünüyordu. Simgeler artık
+     SVG: hangi cihazda hangi yazı tipinin ne taşıdığına bağımlı değiliz. */
+  const PowerIcon = () => (
+    <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+      <path d="M10 3v7" /><path d="M14.9 5.6a6.5 6.5 0 1 1-9.8 0" />
+    </svg>
+  );
+  const ThemeIcon = () => (
+    <svg width="15" height="15" viewBox="0 0 20 20" stroke="currentColor" strokeWidth="1.6" fill="none">
+      <circle cx="10" cy="10" r="7" />
+      <path d="M10 3a7 7 0 0 0 0 14Z" fill="currentColor" stroke="none" />
+    </svg>
+  );
   const EyeIcon = ({ off }: { off: boolean }) => (
     <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       <path d="M1.5 10S4.5 4 10 4s8.5 6 8.5 6-3 6-8.5 6-8.5-6-8.5-6Z" />
@@ -161,6 +188,13 @@ export default function App() {
         .nav-btn:hover{background:${T.panel2}}
         .icon-btn{transition:border-color .15s,color .15s}
         .icon-btn:hover{border-color:${T.mut3};color:${T.text}}
+        /* Metin gibi duran satır içi seçici: salt-okunur bir listenin ortasındaki kalıcı giriş
+           kutusu görsel gürültüdür. Kenarlık yalnız etkileşimde belirir. Mobildeki
+           "input,select,button{min-height:40px}" dokunma hedefi kuralı bunu 40px'e şişirip
+           satırı domine ediyordu — burada bilinçli olarak geri alınıyor (küçük, ikincil,
+           yanlışlıkla basılsa da geri alınabilir bir kontrol). */
+        .inline-select{background:transparent!important;border-color:transparent!important;min-height:0!important;cursor:pointer}
+        .inline-select:hover,.inline-select:focus{border-color:${T.line}!important;background:${T.panel2}!important}
         .hero-grid{display:grid;grid-template-columns:1.15fr 1fr;gap:16px}
         .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
         .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
@@ -168,10 +202,28 @@ export default function App() {
            sütunu genişletip sayfayı sağa taşırabilir — grid item'ları büzülebilir kılıyoruz. */
         .tab-grid > *, .hero-grid > *, .grid2 > *, .grid3 > * { min-width: 0; }
         @media (max-width:900px){ .hero-grid,.grid2,.grid3{grid-template-columns:1fr} }
+        /* KPI'lar mobilde 2×2 kalır. grid2'nin tek sütuna inmesi bunlar için yanlıştı:
+           dört kart tam genişlikte ~600px yiyip Özet'i yedi ekran boyuna çıkarıyordu.
+           İçerik tek satırlık sayı — dar sütun yeter, yeter ki yazı ölçeği küçülsün.
+           !important gerekli: kartlar stillerini inline veriyor. */
+        @media (max-width:900px){
+          .kpi-grid{grid-template-columns:1fr 1fr!important;gap:10px!important}
+          .kpi-card{padding:13px 14px!important}
+          .kpi-val{font-size:17px!important;margin-top:5px!important}
+          .kpi-sub{font-size:10.5px!important}
+          .duo-tabs{display:flex}
+          .duo-pane[data-on="false"]{display:none!important}
+          .duo-baslik{display:none} /* başlığı sekme çubuğu söylüyor, tekrarlama */
+        }
         .bottom-nav{display:none}
         .add-fab{display:none}
         .mobile-only{display:none!important}
+        .row-break{display:none} /* yalnız mobil sarmalamada iş görür (bkz. Row) */
+        /* İkili kart: masaüstünde ikisi de yan yana görünür, sekme çubuğu gizli.
+           Mobilde çubuk belirir ve yalnız seçili olan render edilir (Özet, ozet/index.tsx). */
+        .duo-tabs{display:none}
         @media (max-width:900px){
+          .desktop-only{display:none!important}
           .sidebar{display:none!important}
           .bottom-nav{display:flex}
           .add-fab{display:flex}
@@ -180,20 +232,28 @@ export default function App() {
           .topbar{padding:14px 16px!important}
           .btn-label{display:none}
           input,select,button{min-height:40px}
-          /* Liste satırları dar ekranda alt alta insin (sabit genişlikli çocuklar sıkışıp
-             hizaları kaydırıyordu). Kural üçlü:
-               row-title  → satırın kimliği (hesap adı, işlem açıklaması) KENDİ satırını alır;
-                            yoksa 110px'e sıkışıp "Garanti V…" diye kırpılıyordu,
-               row-amount → tutar hangi satıra düşerse düşsün sağa yaslanır (ragged hizayı
-                            önler: aynı listede tutarlar farklı yerlerden başlıyordu),
-               input/select → ekran genişliğini aşamaz.
+          /* Liste satırı yerleşimi mobilde SABİT — bkz. ui/index.tsx'teki Row açıklaması.
+             (Bu blok bir template literal içinde: yorumda backtick KULLANMA, dizgiyi kapatır.)
+             Eskiden yalnız flex-wrap:wrap vardı ve nereye sarılacağı satırın içeriğine
+             kalıyordu: tutar kimi satırda başlıkla yan yana, kimi satırda tek başına 3.
+             satıra düşüyor, uzun adlar 110px'e sıkışıp kırpılıyordu. Artık order düzeni
+             belirler, row-break de kontrolleri kesin olarak alt satıra iter.
              !important gerekli: bu bileşenler stillerini inline veriyor (flex:1 vb.) ve
              inline stil sınıf kuralını yener. */
-          .ui-row{flex-wrap:wrap}
-          /* 100% değil "100% − ikon": satır başındaki küçük ikon/rozet başlıkla AYNI satırda
-             kalsın (tam genişlik verince ikon tek başına bir satırda asılı kalıyordu). */
-          .row-title{flex-basis:calc(100% - 40px)!important;min-width:0!important}
-          .row-amount{margin-left:auto!important}
+          /* flex-start: başlık iki satıra sardığında tutar dikeyde ortalanıp alt satırın
+             üstüne biniyordu; tutar adın İLK satırıyla hizalı kalmalı. */
+          .ui-row{flex-wrap:wrap;row-gap:6px;align-items:flex-start!important}
+          .ui-row > .row-lead{order:0;flex-shrink:0} /* tarih / ikon / renk noktası */
+          /* basis 0 şart: "auto" olsaydı başlık kendi içeriği kadar genişler, uzun bir
+             hesap adı tutarı alt satıra iterdi (aynı listede tutarlar farklı satırlara
+             düşüyordu). basis 0 + min-width 0 → başlık artan yeri alır, içinde sarar. */
+          .ui-row > .row-title{order:1;flex:1 1 0!important;min-width:0!important}
+          .ui-row > .row-amount{order:2;margin-left:auto!important;flex:0 0 auto!important;text-align:right!important;min-width:0!important}
+          /* satır düzeyindeki küçük eylemler (✎ ✕) tutarın yanında, 1. satırda kalır;
+             alt satıra atılınca tek başlarına üçüncü bir satır açıyorlardı. */
+          .ui-row > .row-end{order:3;flex:0 0 auto!important}
+          .ui-row > .row-break{order:4;flex-basis:100%;height:0;display:block}
+          .ui-row > *{order:5}
           input,select{max-width:100%}
           /* Üst çubuk: sekme alt başlığı dar ekranda üç satıra sarıp başlığı ikonlardan
              koparıyordu; başlık tek başına yeterli. */
@@ -245,8 +305,8 @@ export default function App() {
             <div style={{ fontSize: 11, color: T.mut3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{user?.email}</div>
           </div>
           {privacyBtn({ width: 30, height: 30, borderRadius: 9 })}
-          <button className="icon-btn" title="Açık / koyu tema" onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))} style={{ ...iconBtn, width: 30, height: 30, borderRadius: 9 }}>◐</button>
-          <button className="icon-btn" title="Çıkış yap" onClick={logout} style={{ ...iconBtn, width: 30, height: 30, borderRadius: 9 }}>⏻</button>
+          <button className="icon-btn" title="Açık / koyu tema" aria-label="Açık / koyu tema" onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))} style={{ ...iconBtn, width: 30, height: 30, borderRadius: 9 }}><ThemeIcon /></button>
+          <button className="icon-btn" title="Çıkış yap" aria-label="Çıkış yap" onClick={logout} style={{ ...iconBtn, width: 30, height: 30, borderRadius: 9 }}><PowerIcon /></button>
         </div>
       </aside>
 
@@ -261,7 +321,7 @@ export default function App() {
             <div className="topbar-sub" style={{ fontSize: 12.5, color: T.mut3, marginTop: 1 }}>{meta.sub}</div>
           </div>
           <div style={{ flex: 1 }} />
-          <button className="icon-btn" onClick={refresh} disabled={refreshing} title="Fiyatları yenile" style={{
+          <button className="icon-btn desktop-only" onClick={refresh} disabled={refreshing} title="Fiyatları yenile" style={{
             display: "flex", alignItems: "center", gap: 7, width: "auto", height: 34, padding: "0 13px", borderRadius: 10,
             border: `1px solid ${T.line}`, background: T.panel, color: T.mut, fontSize: 12.5, fontWeight: 500, fontFamily: T.disp, cursor: "pointer",
           }}>
@@ -269,14 +329,47 @@ export default function App() {
             <span className="btn-label">{refreshing ? "Yenileniyor…" : "Fiyatları yenile"}</span>
           </button>
           {ccyToggle}
-          {privacyBtn({}, "mobile-only")}
-          <button className="icon-btn mobile-only" title="Açık / koyu tema" onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))} style={iconBtn}>◐</button>
-          <button className="icon-btn mobile-only" title="Çıkış yap" onClick={logout} style={iconBtn}>⏻</button>
+          {/* Mobil taşma menüsü — masaüstünde gizli (orada kenar çubuğu bu işi görür) */}
+          <div className="mobile-only" style={{ position: "relative", placeItems: "center" }}>
+            <button className="icon-btn" aria-label="Diğer" aria-expanded={menuOpen}
+              onClick={(e) => { e.stopPropagation(); setMenuOpen((o) => !o); }}
+              style={{ ...iconBtn, ...(menuOpen ? { borderColor: T.acc, color: T.acc } : {}) }}>⋯</button>
+            {menuOpen && (
+              <div onClick={(e) => e.stopPropagation()} style={{
+                position: "absolute", top: "calc(100% + 8px)", right: 0, zIndex: 40, minWidth: 210,
+                background: T.panel, border: `1px solid ${T.line}`, borderRadius: 14, boxShadow: "var(--shadow)",
+                padding: 6, display: "grid", gap: 2,
+              }}>
+                {([
+                  { label: refreshing ? "Yenileniyor…" : "Fiyatları yenile", icon: <span style={{ display: "inline-block", animation: refreshing ? "spin 1s linear infinite" : "none" }}>↻</span>, on: () => refresh(), disabled: refreshing },
+                  /* renkli emoji yerine kenar çubuğuyla aynı SVG: menüdeki simgeler tek renk kalsın */
+                  { label: balancesHidden ? "Bakiyeleri göster" : "Bakiyeleri gizle", icon: <EyeIcon off={balancesHidden} />, on: toggleBalancesHidden },
+                  { label: theme === "light" ? "Koyu tema" : "Açık tema", icon: <ThemeIcon />, on: () => setTheme((t) => (t === "light" ? "dark" : "light")) },
+                  { label: "Çıkış yap", icon: <PowerIcon />, on: logout, danger: true },
+                ] as { label: string; icon: React.ReactNode; on: () => void; disabled?: boolean; danger?: boolean }[]).map((it) => (
+                  <button key={it.label} disabled={it.disabled}
+                    onClick={() => { it.on(); setMenuOpen(false); }}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 11, width: "100%", textAlign: "left",
+                      background: "none", border: "none", borderRadius: 9, padding: "10px 11px", cursor: "pointer",
+                      fontSize: 13.5, fontFamily: T.disp, fontWeight: 500, color: it.danger ? T.neg : T.text,
+                      opacity: it.disabled ? 0.5 : 1,
+                    }}>
+                    <span style={{ width: 18, display: "grid", placeItems: "center", fontSize: 13, color: it.danger ? T.neg : T.mut }}>{it.icon}</span>
+                    {it.label}
+                  </button>
+                ))}
+                <div style={{ borderTop: `1px solid ${T.line}`, margin: "4px 0 2px", paddingTop: 8, padding: "8px 11px 4px", fontSize: 11, color: T.mut3, lineHeight: 1.3 }}>
+                  {user?.email}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="content-pad" style={{ flex: 1, padding: "26px 32px 56px", maxWidth: 1180, width: "100%", margin: "0 auto" }}>
           <div key={tab} className="tab-grid" style={{ animation: "fadeUp .4s ease both", display: "grid", gap: 16 }}>
-            {tab === "ozet" && <Ozet data={data} days={days} pos={pos} cash={cash} rates={rates} reload={reload} summary={summary} m={m} ccy={ccy} onGoAccounts={() => setTab("hesaplar")}
+            {tab === "ozet" && <Ozet data={data} days={days} pos={pos} cash={cash} rates={rates} reload={reload} summary={summary} m={m} onGoAccounts={() => setTab("hesaplar")}
               onGoPortfolio={() => setTab("portfoy")}
               onSellFund={(p: TradePrefill) => setAdd({ kind: "trade", tradePrefill: p })} />}
             {tab === "hesaplar" && <Hesaplar data={data} reload={reload} user={user} onAccountDeleted={() => { setUser(null); setData(null); }} />}

@@ -8,7 +8,7 @@ import {
 } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, tl } from "../../theme";
-import { Field, AmountField, Empty, Row } from "../../ui";
+import { Field, AmountField, Empty, Row, Aciklama, SilDugmesi } from "../../ui";
 import { EditSheet, type EditTarget } from "../../EditSheet";
 
 /* ————— HESAPLAR EKRANI —————
@@ -62,15 +62,15 @@ function Transferler({ data, reload, onEdit }: {
   return (
     <div style={css.card}>
       <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Transferler (Virman)</div>
-      <div style={{ fontSize: 12, color: T.mut, marginBottom: 8 }}>
+      <Aciklama k="transfer-nedir" label="transfer mi, gider mi?">
         Kendi hesapların arasındaki para hareketleri. Net varlığını ve Rapor'u değiştirmez — yalnız paranın
         nerede durduğunu değiştirir. <b>“+ Ekle → Transfer”</b> ile eklenir.
         Başkasına gönderdiğin para transfer değil <b>giderdir</b> (Gelir/Gider kalemi olarak gir).
-      </div>
+      </Aciklama>
       {data.transfers.length === 0 && <Empty>Henüz transfer yok.</Empty>}
       {shown.map((t, i) => (
         <Row key={t.id} last={i === shown.length - 1 && data.transfers.length <= limit}>
-          <span style={{ ...css.mono, fontSize: 11.5, color: T.mut, width: 74 }}>
+          <span className="row-lead" style={{ ...css.mono, fontSize: 11.5, color: T.mut, width: 74 }}>
             {fmtD(new Date(t.date + "T00:00:00"), { day: "2-digit", month: "short", year: "2-digit" })}
           </span>
           <div className="row-title" style={{ flex: 1, fontSize: 13.5 }}>
@@ -80,8 +80,9 @@ function Transferler({ data, reload, onEdit }: {
           <span className="row-amount" style={{ ...css.mono, fontSize: 13.5 }}>{tl.format(Math.round(t.amount))}</span>
           <button style={{ ...css.ghost, padding: "5px 10px", fontSize: 12 }}
             onClick={() => onEdit({ kind: "transfer", row: t })}>Düzenle</button>
-          <button style={css.del} title="Sil (iki bacağı birden geri alır)"
-            onClick={async () => { await api.del("transfers", t.id); reload(); }}>✕</button>
+          <SilDugmesi title="Transferi sil" ad={<>{name(t.from_account_id)} → {name(t.to_account_id)} · {tl.format(Math.round(t.amount))}</>}
+            onSil={async () => { await api.del("transfers", t.id); reload(); }}
+            sonuc={<>Virmanın <b>iki bacağı birden</b> geri alınır: {tl.format(Math.round(t.amount))} kaynak hesaba döner, hedef hesaptan düşer.</>} />
         </Row>
       ))}
       {data.transfers.length > shown.length && (
@@ -114,11 +115,11 @@ function VadesizHesaplar({ data, reload }: { data: AllData; reload: () => void }
   return (
     <div style={css.card}>
       <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Hesaplar (Nakit)</div>
-      <div style={{ fontSize: 12, color: T.mut, marginBottom: 8 }}>
+      <Aciklama k="hesap-turleri" label="hangi hesapları tanımlamalıyım?">
         Banka, nakit cüzdan, aracı kurum… Nakit ve aracı kurumu da hesap olarak tanımla; ATM çekimi ya da
         Midas'a aktarım böylece “kaybolan para” olmaz, <b>“+ Ekle → Transfer”</b> ile yer değiştirir.
         <b> Doğrula</b> ile gerçek bakiyeyi girip defteri dış dünyaya sabitlersin.
-      </div>
+      </Aciklama>
       {data.accounts.length === 0 && <Empty>Henüz hesap yok.</Empty>}
       {data.accounts.map((a, i) => {
         const open = shown === a.id, reconOpen = recon === a.id;
@@ -128,7 +129,7 @@ function VadesizHesaplar({ data, reload }: { data: AllData; reload: () => void }
         return (
           <React.Fragment key={a.id}>
             <Row last={last}>
-              <span title={ACCOUNT_KIND_LABEL[kind]} style={{
+              <span className="row-lead" title={ACCOUNT_KIND_LABEL[kind]} style={{
                 width: 28, height: 28, borderRadius: 9, background: T.panel2, display: "grid",
                 placeItems: "center", fontSize: 13, color: KIND_COLOR[kind], flexShrink: 0,
               }}>{KIND_ICON[kind]}</span>
@@ -151,7 +152,8 @@ function VadesizHesaplar({ data, reload }: { data: AllData; reload: () => void }
                       : `✓ ${a.last_recon_date} tarihinde doğrulandı`}
                 </div>
               </div>
-              <select style={{ ...css.input, width: 108, padding: "5px 8px", fontSize: 12 }} value={kind}
+              {/* 108px "Aracı kurum"u kırpıyordu (en uzun etiket) — ok payıyla birlikte 128 gerekiyor */}
+              <select style={{ ...css.input, width: 128, padding: "5px 8px", fontSize: 12 }} value={kind}
                 title="Hesap türü"
                 onChange={async (e) => { await api.put(`accounts/${a.id}`, { kind: e.target.value }); reload(); }}>
                 {(Object.keys(ACCOUNT_KIND_LABEL) as AccountKind[]).map((k) => <option key={k} value={k}>{ACCOUNT_KIND_LABEL[k]}</option>)}
@@ -167,7 +169,10 @@ function VadesizHesaplar({ data, reload }: { data: AllData; reload: () => void }
               </button>
               {/* row-amount: satır mobilde sarmalanınca tutar hangi satıra düşerse sağa yaslanır */}
               <span className="row-amount" style={{ ...css.mono, minWidth: 100, textAlign: "right", fontSize: 14 }}>{tl.format(Math.round(a.balance))}</span>
-              <button style={css.del} onClick={async () => { await api.del("accounts", a.id); reload(); }}>✕</button>
+              {/* Uygulamanın en yıkıcı silmesi: hesabın TÜM hareket defteri CASCADE ile gider */}
+              <SilDugmesi ad={a.name} title="Hesabı sil"
+                onSil={async () => { await api.del("accounts", a.id); reload(); }}
+                sonuc={<>Bu hesabın <b>tüm hareket geçmişi</b> silinir ve {tl.format(Math.round(a.balance))} bakiye net varlığından düşer. Hesaba bağlı işlemler kayıtsız kalır.</>} />
             </Row>
             {reconOpen && <Mutabakat data={data} account={a} reload={reload} onDone={() => setRecon(null)} />}
             {open && <HesapHareketleri data={data} account={a} />}
@@ -332,7 +337,7 @@ function VadeliMevduat({ data, reload, onEdit }: { data: AllData; reload: () => 
   return (
     <div style={css.card}>
       <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Vadeli Mevduat</div>
-      <div style={{ fontSize: 12, color: T.mut, marginBottom: 8 }}>Anapara + faiz vade sonuna kadar net varlığa işleyerek girer; para vade sonuna dek kilitli sayılır (harcanabilir nakde girmez). "+ Ekle" → Vadeli mevduat ile açabilirsin.</div>
+      <Aciklama k="vadeli-mevduat" label="vadeli mevduat nasıl işler?">Anapara + faiz vade sonuna kadar net varlığa işleyerek girer; para vade sonuna dek kilitli sayılır (harcanabilir nakde girmez). "+ Ekle" → Vadeli mevduat ile açabilirsin.</Aciklama>
       {data.deposits.length === 0 && <Empty>Vadeli mevduatın yok.</Empty>}
       {data.deposits.map((d, i) => {
         const mat = depositMaturity(d);
@@ -343,7 +348,7 @@ function VadeliMevduat({ data, reload, onEdit }: { data: AllData; reload: () => 
         const acc = d.account_id ? data.accounts.find((a) => a.id === d.account_id) : null;
         return (
           <Row key={d.id} last={i === data.deposits.length - 1}>
-            <div style={{ flex: 1 }}>
+            <div className="row-title" style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 14 }}>
                 {d.name}{" "}
                 {matured
@@ -360,15 +365,18 @@ function VadeliMevduat({ data, reload, onEdit }: { data: AllData; reload: () => 
                 <span style={css.mono}>{tl.format(Math.round(depositMaturityValue(d)))}</span>
               </div>
             </div>
-            <span style={{ ...css.mono, color: T.acc, fontSize: 14 }}>{tl.format(Math.round(nowVal))}</span>
+            <span className="row-amount" style={{ ...css.mono, color: T.acc, fontSize: 14 }}>{tl.format(Math.round(nowVal))}</span>
             {matured && d.account_id != null && (
               <button style={{ ...css.ghost, padding: "5px 10px", fontSize: 12, color: T.pos, borderColor: T.pos }}
                 title="Net faizi hesaba gelir olarak işle, anaparayı iade et ve mevduatı kapat"
                 onClick={() => close(d)}>Hesaba geçir</button>
             )}
-            <button style={css.edit} title="Mevduatı düzenle" onClick={() => onEdit({ kind: "deposit", row: d })}>✎</button>
-            <button style={css.del} title={d.account_id != null ? "Sil (anapara bağlı hesaba iade edilir)" : "Sil"}
-              onClick={async () => { await api.del("deposits", d.id); reload(); }}>✕</button>
+            <button className="row-end" style={css.edit} title="Mevduatı düzenle" onClick={() => onEdit({ kind: "deposit", row: d })}>✎</button>
+            <SilDugmesi ad={d.name} title="Mevduatı sil"
+              onSil={async () => { await api.del("deposits", d.id); reload(); }}
+              sonuc={acc
+                ? <>Anapara ({tl.format(Math.round(d.principal))}) <b>{acc.name}</b> hesabına iade edilir; birikmiş faiz kaydedilmez. Faizi de almak için önce <b>Hesaba geçir</b> kullan.</>
+                : <>Mevduat net varlıktan çıkar. Bağlı hesap olmadığından anapara hiçbir yere iade edilmez.</>} />
           </Row>
         );
       })}

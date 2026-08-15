@@ -5,12 +5,11 @@ import {
 } from "recharts";
 import {
   fmtD, parseD, keyOf, convert, depositValueOn, fundSellSuggestion, setupGaps,
-  type AllData, type Day, type Position, type Rates, type Currency,
+  type AllData, type Day, type Position, type Rates,
 } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, tl, TYPE_COLORS } from "../../theme";
-import { Money, Empty } from "../../ui";
-import { DegerGrafigi } from "../portfoy/DegerGrafigi";
+import { Money, Empty, Aciklama } from "../../ui";
 import type { TradePrefill } from "../../AddSheet";
 
 const SETUP_DISMISS_KEY = "finans-setup-dismissed";
@@ -35,9 +34,9 @@ function sparkPath(vals: number[], W: number, H: number, pad = 6): { line: strin
 /* Özet grafikleri TRY canonical'dır (nakit projeksiyonu + portföy değeri geçmişi hep TRY).
    Hero net varlık + KPI kartları buradadır (değerler App.tsx'te TRY hesaplanıp görüntü birimine çevrilerek gelir).
    Hesap/mevduat yönetimi Hesaplar sekmesindedir; burada yalnız özet + "Yönet" kısayolu. */
-export function Ozet({ data, days, pos, cash, rates, reload, summary, m, ccy, onGoAccounts, onGoPortfolio, onSellFund }: {
+export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAccounts, onGoPortfolio, onSellFund }: {
   data: AllData; days: Day[]; pos: Position[]; cash: number; rates: Rates; reload: () => void;
-  summary: OzetSummary; m: (v: number, dec?: boolean) => string; ccy: Currency; onGoAccounts: () => void;
+  summary: OzetSummary; m: (v: number, dec?: boolean) => string; onGoAccounts: () => void;
   onSellFund: (p: TradePrefill) => void; onGoPortfolio: () => void;
 }) {
   /* "Ödeme öncesi fon boz" önerisi (Faz 17): saf nakit önümüzdeki hafta eksiye düşüyorsa,
@@ -87,6 +86,8 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, ccy, on
   /* Kurulum eksikleri (Faz 16/17 opt-in yetenekleri): kullanıcı kurmadıysa özellikler atıl
      kalıyor ve uygulama bunu hiç söylemiyordu. Kural engine'de (setupGaps), burası yalnız
      gösterir; kapatılan uyarı localStorage'da saklanır (kendi kararı kalıcı olsun). */
+  /* Mobilde sekmelenen ikili kart (masaüstünde ikisi de görünür, bu durum kullanılmaz) */
+  const [duo, setDuo] = React.useState<"alokasyon" | "yaklasan">("alokasyon");
   const [dismissed, setDismissed] = React.useState<string[]>(
     () => (localStorage.getItem(SETUP_DISMISS_KEY) || "").split(",").filter(Boolean),
   );
@@ -98,25 +99,6 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, ccy, on
   };
 
   return (<>
-    {gaps.length > 0 && (
-      <div style={{ ...css.card, padding: 18, display: "flex", flexDirection: "column", gap: 12 }}>
-        <div style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: T.mut3 }}>
-          Kurulumunu tamamla
-        </div>
-        {gaps.map((g) => (
-          <div key={g.key} style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
-            <div style={{ flex: 1, minWidth: 240 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 600 }}>{g.title}</div>
-              <div style={{ fontSize: 12.5, color: T.mut, marginTop: 2, lineHeight: 1.5 }}>{g.detail}</div>
-            </div>
-            <button style={{ ...css.btn, padding: "8px 14px", fontSize: 12.5 }}
-              onClick={() => (g.tab === "hesaplar" ? onGoAccounts() : onGoPortfolio())}>{g.action}</button>
-            <button title="Bu uyarıyı bir daha gösterme" onClick={() => dismiss(g.key)}
-              style={{ background: "none", border: "none", color: T.mut3, cursor: "pointer", fontSize: 15, lineHeight: 1, padding: "8px 2px" }}>×</button>
-          </div>
-        ))}
-      </div>
-    )}
     <div className="hero-grid">
       <div style={{ ...css.card, display: "flex", flexDirection: "column", padding: "24px 26px" }}>
         <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase", color: T.mut3 }}>Net Varlık</div>
@@ -130,18 +112,43 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, ccy, on
           </svg>
         )}
       </div>
-      <div className="grid2">
+      {/* kpi-grid: mobilde tek sütuna inmez, 2×2 kalır (bkz. App.tsx medya sorgusu) */}
+      <div className="grid2 kpi-grid">
         {kpis.map((k) => (
-          <div key={k.name} style={{ ...css.card, padding: "16px 18px" }}>
+          <div key={k.name} className="kpi-card" style={{ ...css.card, padding: "16px 18px" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, fontWeight: 500, color: T.mut }}>
-              <span style={{ width: 8, height: 8, borderRadius: 3, background: k.color }} />{k.name}
+              <span style={{ width: 8, height: 8, borderRadius: 3, background: k.color, flexShrink: 0 }} />{k.name}
             </div>
-            <div style={{ ...css.mono, fontSize: 21, fontWeight: 600, letterSpacing: "-0.01em", whiteSpace: "nowrap", marginTop: 7, color: k.neg ? T.neg : T.text }}>{k.val}</div>
-            <div style={{ fontSize: 11.5, color: T.mut3, marginTop: 3 }}>{k.sub}</div>
+            <div className="kpi-val" style={{ ...css.mono, fontSize: 21, fontWeight: 600, letterSpacing: "-0.01em", whiteSpace: "nowrap", marginTop: 7, color: k.neg ? T.neg : T.text }}>{k.val}</div>
+            <div className="kpi-sub" style={{ fontSize: 11.5, color: T.mut3, marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{k.sub}</div>
           </div>
         ))}
       </div>
     </div>
+
+    {/* Kurulum uyarıları HERO'NUN ALTINDA. Üstteyken açılışta ilk görülen şey kullanıcının
+        net varlığı değil, yapmadığı işler oluyordu (mobilde ilk 450px'i yiyordu). Satır başına
+        tek sıra: başlık + detay + eylem; detay ikinci satırda, düğmeler sağda. */}
+    {gaps.length > 0 && (
+      <div style={{ ...css.card, padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: T.mut3 }}>
+          Kurulumunu tamamla
+        </div>
+        {gaps.map((g) => (
+          <div key={g.key} className="ui-row" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: 0, borderBottom: "none" }}>
+            <div className="row-title" style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>{g.title}</div>
+              <div style={{ fontSize: 11.5, color: T.mut, marginTop: 1, lineHeight: 1.45 }}>{g.detail}</div>
+            </div>
+            <button className="row-end" title="Bu uyarıyı bir daha gösterme" onClick={() => dismiss(g.key)}
+              style={{ background: "none", border: "none", color: T.mut3, cursor: "pointer", fontSize: 15, lineHeight: 1, padding: "4px 2px", minHeight: 0 }}>×</button>
+            <span className="row-break" aria-hidden="true" />
+            <button style={{ ...css.ghost, padding: "7px 13px", fontSize: 12.5, color: T.acc, borderColor: T.acc }}
+              onClick={() => (g.tab === "hesaplar" ? onGoAccounts() : onGoPortfolio())}>{g.action}</button>
+          </div>
+        ))}
+      </div>
+    )}
 
     <div style={{ ...css.card, paddingBottom: 6 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
@@ -162,9 +169,9 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, ccy, on
           </select>
         </div>
       </div>
-      <div style={{ fontSize: 11, color: T.mut, marginTop: 4 }}>
+      <Aciklama k="likit-nakit" label="likit nakit nedir?">
         Likit nakit = hesap bakiyeleri + “nakit say” işaretli para piyasası fonları. Portföy, hisse ve vadeli mevduat buna dahil değildir (onlar toplam varlıkta).
-      </div>
+      </Aciklama>
       {runwayDay ? (
         <div style={{ display: "flex", alignItems: "center", gap: 8, color: runwayIn! <= 0 ? T.neg : T.warn, background: runwayIn! <= 0 ? T.negSoft : T.warnSoft, borderRadius: 10, padding: "8px 12px", fontSize: 13, marginTop: 8, fontWeight: 500 }}>
           {runwayIn! <= 0
@@ -224,9 +231,20 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, ccy, on
       </div>
     </div>
 
+    {/* İki kart masaüstünde YAN YANA, mobilde SEKMELİ tek kart (duo-*, App.tsx).
+        Alt alta iki tam kart mobilde ~400px yiyordu ve ikisi de "bir bakışta" bilgi;
+        aynı anda ikisine birden bakılmıyor. Masaüstünde sekme çubuğu hiç render edilmez. */}
+    <div className="duo-tabs" style={{ display: "flex", borderRadius: 10, overflow: "hidden", border: `1px solid ${T.line}`, marginBottom: -6 }}>
+      {([["alokasyon", "Varlık Dağılımı"], ["yaklasan", "Yaklaşan Hareketler"]] as const).map(([k, label]) => (
+        <button key={k} onClick={() => setDuo(k)} style={{
+          flex: 1, padding: "9px 10px", border: "none", cursor: "pointer", fontSize: 12.5, fontFamily: T.disp,
+          fontWeight: duo === k ? 700 : 500, background: duo === k ? T.panel : T.panel2, color: duo === k ? T.acc : T.mut,
+        }}>{label}</button>
+      ))}
+    </div>
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 14 }}>
-      <div style={css.card}>
-        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Varlık Dağılımı</div>
+      <div className="duo-pane" data-on={duo === "alokasyon"} style={css.card}>
+        <div className="duo-baslik" style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Varlık Dağılımı</div>
         {alloc.length === 0 ? <Empty>Hesap bakiyesi veya işlem ekleyin.</Empty> : (
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <div style={{ width: 130, height: 130 }}>
@@ -249,8 +267,8 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, ccy, on
           </div>
         )}
       </div>
-      <div style={css.card}>
-        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Yaklaşan Hareketler</div>
+      <div className="duo-pane" data-on={duo === "yaklasan"} style={css.card}>
+        <div className="duo-baslik" style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Yaklaşan Hareketler</div>
         {upcoming.length === 0 ? <Empty>Plan sekmesinden gelir/gider ekleyin.</Empty> : upcoming.map((e, i) => (
           <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: i < upcoming.length - 1 ? `1px solid ${T.line}` : "none" }}>
             <div style={{ fontSize: 13 }}>
@@ -262,13 +280,6 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, ccy, on
       </div>
     </div>
 
-    <div>
-      <DegerGrafigi trades={data.trades} priceHistory={data.price_history} rates={rates} ccy={ccy}
-        title="Portföy Değeri Geçmişi" />
-      <div style={{ fontSize: 12, color: T.mut, margin: "-8px 2px 16px" }}>
-        Fiyat yenilendikçe (otomatik veya elle) o günün kaydı tutulur. Nakit geçmişi tutulmadığından bu net varlık değil, yalnızca portföy değeridir.
-      </div>
-    </div>
 
     <div style={css.card}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>

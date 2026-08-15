@@ -2,7 +2,7 @@ import React, { useState, useMemo } from "react";
 import { fmtD, parseD, keyOf, type AllData, type Day } from "@finans/engine";
 import { T, css, tl } from "../../theme";
 import { maskBrief } from "../../privacy";
-import { Money, Empty } from "../../ui";
+import { Money, Empty, Aciklama, FiltreSeridi } from "../../ui";
 
 /** Takvimde gösterilen gerçekleşen (defter) hareketi; `card` doluysa kart harcaması (nakdi o gün oynatmaz) */
 type LedgerEv = { n: string; a: number; card?: string };
@@ -34,25 +34,29 @@ export function Nakit({ days, data }: { days: Day[]; data: AllData }) {
 
   return (
     <div style={css.card}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-        <div style={{ display: "flex", gap: 6, overflowX: "auto", minWidth: 0 }}>
-          {months.map((m, i) => (
-            <button key={i} onClick={() => setMi(i)} style={{
-              background: i === mi ? T.acc : T.panel2, color: i === mi ? T.accInk : T.mut,
-              border: `1px solid ${i === mi ? T.acc : T.line}`, borderRadius: 20, padding: "6px 12px",
-              fontSize: 12, cursor: "pointer", whiteSpace: "nowrap", fontFamily: T.disp, fontWeight: i === mi ? 700 : 400,
-            }}>{m.label}</button>
-          ))}
-        </div>
-        <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: `1px solid ${T.line}` }}>
+      {/* Ay seçici + görünüm değiştirici: ikisi de yalnız GÖRÜNÜMÜ değiştirir, veriyi değil →
+          filtre şeridine girer (bkz. FiltreSeridi). Ay çipleri artık marka rengiyle dolmuyor;
+          mor, ekranda "sıradaki eylem" için ayrıldı — seçili filtre beyaz yüzey + mor metin. */}
+      <FiltreSeridi sag={
+        <span style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: `1px solid ${T.line}` }}>
           {(["takvim", "liste"] as const).map((v) => (
             <button key={v} onClick={() => setView(v)} style={{
               padding: "6px 12px", border: "none", cursor: "pointer", fontSize: 12, fontFamily: T.disp, fontWeight: view === v ? 700 : 400,
-              background: view === v ? T.panel2 : "transparent", color: view === v ? T.acc : T.mut, textTransform: "capitalize",
+              background: view === v ? T.panel : "transparent", color: view === v ? T.acc : T.mut, textTransform: "capitalize",
             }}>{v}</button>
           ))}
-        </div>
-      </div>
+        </span>
+      }>
+        <span style={{ display: "flex", gap: 6, overflowX: "auto", minWidth: 0 }}>
+          {months.map((m, i) => (
+            <button key={i} onClick={() => setMi(i)} style={{
+              background: i === mi ? T.panel : "transparent", color: i === mi ? T.acc : T.mut,
+              border: `1px solid ${i === mi ? T.line : "transparent"}`, borderRadius: 20, padding: "6px 12px",
+              fontSize: 12, cursor: "pointer", whiteSpace: "nowrap", fontFamily: T.disp, fontWeight: i === mi ? 700 : 400,
+            }}>{m.label}</button>
+          ))}
+        </span>
+      </FiltreSeridi>
       {view === "takvim" ? <Takvim key={cur.label} month={cur} ledger={ledger} /> : <Liste days={cur.days} />}
     </div>
   );
@@ -161,12 +165,14 @@ function Takvim({ month, ledger }: { month: { y: number; mo: number; days: Day[]
         );
       })}
     </div>
-    <div style={{ display: "flex", gap: 14, marginTop: 10, fontSize: 11, color: T.mut, flexWrap: "wrap" }}>
-      <span><span style={{ ...css.mono, color: T.text }}>sayı</span> = etkin nakit (nakit + para piyasası)</span>
-      <span><span style={{ ...css.mono, color: T.mut }}>Σ</span> = tüm varlık</span>
-      <span><span style={{ color: T.neg }}>kırmızı</span> = eksi etkin nakit</span>
-      <span><span style={{ color: T.pos }}>✓</span> = gerçekleşen hareket</span>
-    </div>
+    <Aciklama k="takvim-lejant" label="hücredeki rakamlar ne?">
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+        <span><span style={{ ...css.mono, color: T.text }}>sayı</span> = etkin nakit (nakit + para piyasası)</span>
+        <span><span style={{ ...css.mono, color: T.mut }}>Σ</span> = tüm varlık</span>
+        <span><span style={{ color: T.neg }}>kırmızı</span> = eksi etkin nakit</span>
+        <span><span style={{ color: T.pos }}>✓</span> = gerçekleşen hareket</span>
+      </div>
+    </Aciklama>
     {selK && (selDay || selLedger.length > 0) && (() => {
       const date = selDay ? selDay.date : parseD(selK);
       const ledgerList = selLedger.length > 0 && (

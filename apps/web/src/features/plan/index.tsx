@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { todayStr, parseD, fmtD, keyOf, num, ymOf, recActiveOn, recOccurrenceDate, recurringAmountIndex, recAmountOn, loanPayDay, loanRemaining, type AllData, type Recurring, type OneOff } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, tl } from "../../theme";
-import { Field, AmountField, Money, Empty, Row } from "../../ui";
+import { Field, AmountField, Money, Empty, Row, SilDugmesi, Aciklama } from "../../ui";
 import type { KalemPrefill } from "../forms";
 import { EditSheet, type EditTarget } from "../../EditSheet";
 
@@ -69,8 +69,9 @@ export function Plan({ data, reload, onRealize }: { data: AllData; reload: () =>
         const futureAmts = (amtRows ?? []).filter((a) => a.from_month > curYm); // planlı tutar değişiklikleri
         return (
           <div key={r.id} style={{ padding: "9px 0", borderBottom: i === data.recurring.length - 1 ? "none" : `1px solid ${T.line}`, opacity: ended ? 0.5 : 1 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <div style={{ flex: 1, minWidth: 160 }}>
+            {/* Row bileşeni değil (altında açılır paneller var) ama mobil yerleşim kuralı aynı */}
+            <div className="ui-row" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <div className="row-title" style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 14 }}>{r.name} {ended && <span style={{ fontSize: 11, color: T.mut }}>· bitti</span>}</div>
                 <div style={{ fontSize: 11, color: T.mut }}>
                   her ayın {r.day}. günü · {period}
@@ -80,12 +81,15 @@ export function Plan({ data, reload, onRealize }: { data: AllData; reload: () =>
                 {futureAmts.map((a) => (
                   <div key={a.from_month} style={{ fontSize: 11, color: T.acc, marginTop: 2 }}>
                     ↗ {fmtYm(a.from_month)} itibarıyla {tl.format(r.kind === "income" ? a.amount : -a.amount)}
-                    <button style={{ ...css.del, fontSize: 11, marginLeft: 6 }} title="planlı tutar değişikliğini geri al"
-                      onClick={async () => { await api.delRecurringAmount(r.id, a.from_month); reload(); }}>✕</button>
+                    <SilDugmesi className="" style={{ fontSize: 11, marginLeft: 6 }} title="planlı tutar değişikliğini geri al"
+                      ad={<>{fmtYm(a.from_month)} tutar değişikliği</>}
+                      onSil={async () => { await api.delRecurringAmount(r.id, a.from_month); reload(); }}
+                      sonuc={<>Kalem bu aydan itibaren <b>bir önceki tutarla</b> devam eder; kalemin kendisi silinmez.</>} />
                   </div>
                 ))}
               </div>
-              <Money v={r.kind === "income" ? amountNow : -amountNow} sign />
+              <span className="row-amount"><Money v={r.kind === "income" ? amountNow : -amountNow} sign /></span>
+              <span className="row-break" aria-hidden="true" />
               {realizedNow
                 ? (<>
                     <span style={{ fontSize: 11, color: T.pos, ...css.mono }}>{fmtYm(curYm)} ✓</span>
@@ -102,9 +106,11 @@ export function Plan({ data, reload, onRealize }: { data: AllData; reload: () =>
                 onClick={() => { setChanging(changing?.id === r.id ? null : r); setChVal({ amount: String(amountNow || ""), from_month: curYm }); }}>
                 Değiştir
               </button>
-              <button style={css.edit} title="Kalemi düzenle (ad/gün/hedef/pencere — tutar “Değiştir”den)"
+              <button className="row-end" style={css.edit} title="Kalemi düzenle (ad/gün/hedef/pencere — tutar “Değiştir”den)"
                 onClick={() => setEditing({ kind: "recurring", row: r })}>✎</button>
-              <button style={css.del} onClick={async () => { await api.del("recurring", r.id); reload(); }}>✕</button>
+              <SilDugmesi ad={r.name} title="Düzenli kalemi sil"
+                onSil={async () => { await api.del("recurring", r.id); reload(); }}
+                sonuc={<>Kalem ve <b>tüm tutar geçmişi</b> silinir; projeksiyondan çıkar. Bu kalemden daha önce deftere geçirdiğin gerçekleşmeler <b>silinmez</b>.</>} />
             </div>
             {realizing === r.id && !hasTarget && (
               <form style={{ background: T.panel2, borderRadius: 8, padding: 10, marginTop: 8 }}
@@ -152,23 +158,24 @@ export function Plan({ data, reload, onRealize }: { data: AllData; reload: () =>
 
     <div style={css.card}>
       <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Tek Seferlik Kalemler</div>
-      <div style={{ fontSize: 12, color: T.mut, marginBottom: 8 }}>
+      <Aciklama k="tek-seferlik" label="tek seferlik kalem nedir?">
         İleri tarihli planlar; günü gelince <b>Gerçekleşti</b> ile deftere geçir — hesap bakiyesine işler, plandan düşer.
-      </div>
+      </Aciklama>
       {data.oneoffs.length === 0 && <Empty>Tatil, prim, vergi iadesi gibi ileri tarihli tek seferlik gelir/giderler.</Empty>}
       {data.oneoffs.map((o, i) => {
         const due = o.date <= today;
         return (
           <Row key={o.id} last={i === data.oneoffs.length - 1}>
-            <div style={{ flex: 1 }}>
+            <div className="row-title" style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 14 }}>{o.name} {due && <span style={{ fontSize: 11, color: T.warn }}>· günü geldi</span>}</div>
               <div style={{ fontSize: 11, color: T.mut, ...css.mono }}>{fmtD(parseD(o.date), { day: "2-digit", month: "short", year: "numeric" })}</div>
             </div>
-            <Money v={o.amount} sign />
+            <span className="row-amount"><Money v={o.amount} sign /></span>
             <button style={{ ...css.ghost, padding: "5px 10px", fontSize: 12, ...(due ? { color: T.acc, borderColor: T.acc } : {}) }}
               onClick={() => realize(o)}>Gerçekleşti</button>
-            <button style={css.edit} title="Düzenle" onClick={() => setEditing({ kind: "oneoff", row: o })}>✎</button>
-            <button style={css.del} onClick={async () => { await api.del("oneoffs", o.id); reload(); }}>✕</button>
+            <button className="row-end" style={css.edit} title="Düzenle" onClick={() => setEditing({ kind: "oneoff", row: o })}>✎</button>
+            <SilDugmesi ad={o.name} onSil={async () => { await api.del("oneoffs", o.id); reload(); }}
+              sonuc="Planlanan kalem nakit projeksiyonundan çıkar. Gerçekleşen bir kayıt oluşturmaz." />
           </Row>
         );
       })}
@@ -179,22 +186,25 @@ export function Plan({ data, reload, onRealize }: { data: AllData; reload: () =>
         <div style={{ fontWeight: 700, fontSize: 15 }}>Krediler & Taksitler</div>
         {totalDebt > 0 && <div style={{ fontSize: 12, color: T.mut }}>kalan borç <span style={{ ...css.mono, color: T.neg }}>{tl.format(totalDebt)}</span></div>}
       </div>
-      <div style={{ fontSize: 12, color: T.mut, margin: "0 0 8px" }}>Kalan taksit tarihten otomatik hesaplanır; biten kredi projeksiyondan kendiliğinden düşer.</div>
+      <Aciklama k="kredi-taksit" label="kalan taksit nasıl hesaplanıyor?">Kalan taksit tarihten otomatik hesaplanır; biten kredi projeksiyondan kendiliğinden düşer.</Aciklama>
       {data.loans.length === 0 && <Empty>Kredi, taksitli borç veya senet yok.</Empty>}
       {data.loans.map((l, i) => {
         const rem = loanRemaining(l, now);
         return (
           <Row key={l.id} last={i === data.loans.length - 1}>
-            <div style={{ flex: 1 }}>
+            <div className="row-title" style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 14 }}>{l.name} {rem === 0 && <span style={{ fontSize: 11, color: T.pos }}>· bitti</span>}</div>
               <div style={{ fontSize: 11, color: T.mut }}>
                 ayın {loanPayDay(l)}. günü · <b style={{ color: T.acc }}>{rem}</b>/{l.total} taksit kaldı · kalan{" "}
                 <span style={css.mono}>{tl.format(l.amount * rem)}</span>
               </div>
             </div>
-            <span style={{ ...css.mono, color: rem ? T.neg : T.mut, fontSize: 14 }}>{tl.format(l.amount)}/ay</span>
-            <button style={css.edit} title="Krediyi düzenle" onClick={() => setEditing({ kind: "loan", row: l })}>✎</button>
-            <button style={css.del} onClick={async () => { await api.del("loans", l.id); reload(); }}>✕</button>
+            <span className="row-amount" style={{ ...css.mono, color: rem ? T.neg : T.mut, fontSize: 14 }}>{tl.format(l.amount)}/ay</span>
+            <button className="row-end" style={css.edit} title="Krediyi düzenle" onClick={() => setEditing({ kind: "loan", row: l })}>✎</button>
+            <SilDugmesi ad={l.name} title="Krediyi sil" onSil={async () => { await api.del("loans", l.id); reload(); }}
+              sonuc={rem > 0
+                ? <>Kalan <b>{rem} taksit</b> ({tl.format(l.amount * rem)}) projeksiyondan ve net varlık borcundan çıkar.</>
+                : "Kredi zaten bitmiş; projeksiyonu etkilemez."} />
           </Row>
         );
       })}

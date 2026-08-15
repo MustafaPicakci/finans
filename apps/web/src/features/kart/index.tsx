@@ -2,7 +2,7 @@ import React, { useRef, useState } from "react";
 import { parseD, fmtD, keyOf, num, cardInfos, stmtKey, txShares, type AllData, type Card } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, tl } from "../../theme";
-import { Field, AmountField, Hint, Empty, Row } from "../../ui";
+import { Field, AmountField, Hint, Empty, Row, Aciklama, SilDugmesi } from "../../ui";
 import type { AddKind } from "../forms";
 import { EditSheet, type EditTarget } from "../../EditSheet";
 
@@ -56,6 +56,10 @@ export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => 
     setPaying(null); setPp({ account_id: "", category_id: "" }); reload();
   };
   const unpay = async (cardId: number, dueK: string) => { await api.unpayStatement(cardId, dueK); reload(); };
+  /* Ekstre satırındaki tek eylem düğmesinin sabit ölçüsü (Ödedim / Geri al aynı genişlikte) */
+  const STMT_BTN: React.CSSProperties = {
+    padding: "5px 10px", fontSize: 11.5, minWidth: 78, textAlign: "center", lineHeight: 1.2,
+  };
   /* tek satırlık ekstre görünümü: durum + Ödedim/Geri al */
   const StmtRow = ({ cardId, label, due, amount, paid, first }: { cardId: number; label: string; due: Date; amount: number; paid: boolean; first: boolean }) => {
     const dueK = keyOf(due);
@@ -67,10 +71,13 @@ export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => 
         </span>
         <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ ...css.mono, color: paid ? T.mut3 : T.text, textDecoration: paid ? "line-through" : "none" }}>{tl.format(Math.round(amount))}</span>
+          {/* Ödedim / Geri al AYNI kutuda durmalı: etiketler farklı uzunlukta olduğundan
+              düğmeler satırdan satıra büyüyüp küçülüyor, ekstre listesi tırtıklı görünüyordu.
+              Sabit min-width + ortalanmış metin kolonu hizalar. */}
           {paid
-            ? <button style={{ ...css.ghost, padding: "3px 8px", fontSize: 11 }} title="Ödemeyi geri al (gider kaydı silinir, bakiye iade edilir)"
+            ? <button style={{ ...css.ghost, ...STMT_BTN }} title="Ödemeyi geri al (gider kaydı silinir, bakiye iade edilir)"
                 onClick={() => unpay(cardId, dueK)}>Geri al</button>
-            : <button style={{ ...css.ghost, padding: "3px 8px", fontSize: 11, color: T.acc, borderColor: T.acc }}
+            : <button style={{ ...css.ghost, ...STMT_BTN, color: T.acc, borderColor: T.acc }}
                 onClick={() => { setPaying(paying?.cardId === cardId && paying.dueK === dueK ? null : { cardId, dueK, amount }); setPp({ account_id: "", category_id: "" }); }}>Ödedim</button>}
         </span>
       </div>
@@ -122,14 +129,13 @@ export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => 
           {totalDebt > 0 && (
             <div style={{ fontSize: 12, color: T.mut }}>toplam kart borcu <span style={{ ...css.mono, color: T.neg }}>{tl.format(totalDebt)}</span></div>
           )}
-          {data.cards.length > 0 && (
-            <button style={{ ...css.ghost, padding: "6px 12px", fontSize: 12.5, color: T.acc, borderColor: T.acc }} onClick={() => onAdd("cardtx")}>+ Harcama</button>
-          )}
+          {/* "+ Harcama" kaldırıldı — işlem girişinin tek kapısı global "+ Ekle" (Portföy'deki
+              "+ İşlem" ile aynı gerekçe: sekmeye ikinci giriş noktası koymak kuralı deliyor). */}
         </div>
       </div>
-      <div style={{ fontSize: 12, color: T.mut, margin: "4px 0 8px" }}>
+      <Aciklama k="kart-ekstre" label="ekstreler nasıl oluşuyor?">
         Harcamalar kesim gününe göre ekstreye dağılır; her ekstre son ödeme tarihinde nakit akışına gider olarak düşer. Geçmiş vadeli ekstreler ödendi varsayılır.
-      </div>
+      </Aciklama>
       {infos.length === 0 && <Empty>Henüz kart yok. Aşağıdan ekleyin.</Empty>}
       {infos.map((ci, i) => {
         const usage = ci.card.limit_amount > 0 ? Math.min(1, ci.debt / ci.card.limit_amount) : 0;
@@ -142,11 +148,13 @@ export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => 
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <span style={{ ...css.mono, fontSize: 14, color: ci.debt > 0 ? T.neg : T.mut }}>{tl.format(Math.round(ci.debt))}</span>
-                <button style={css.edit} title="Kartı düzenle"
+                <button className="row-end" style={css.edit} title="Kartı düzenle"
                   onClick={() => setEditCard(editCard?.id === ci.card.id
                     ? null
                     : { id: ci.card.id, name: ci.card.name, limit_amount: String(ci.card.limit_amount || ""), statement_day: String(ci.card.statement_day), due_day: String(ci.card.due_day) })}>✎</button>
-                <button style={css.del} onClick={async () => { await api.del("cards", ci.card.id); reload(); }}>✕</button>
+                {/* CASCADE: kartın tüm harcamaları da gider — bu satırın en ağır silmesi */}
+                <SilDugmesi ad={ci.card.name} title="Kartı sil" onSil={async () => { await api.del("cards", ci.card.id); reload(); }}
+                  sonuc={<>Bu karta ait <b>tüm harcamalar</b> ve ekstre geçmişi de silinir. Güncel borç: {tl.format(Math.round(ci.debt))}.</>} />
               </div>
             </div>
             {/* Faz 18: kart tanımı satır içinde düzenlenir. Sil+yeniden ekle bu kartın TÜM harcamalarını
@@ -271,8 +279,8 @@ export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => 
           const remaining = shares.filter((s) => s.due >= today);
           return (
             <Row key={t.id} last={i === arr.length - 1}>
-              <span style={{ ...css.mono, fontSize: 12, color: T.mut, width: 74 }}>{fmtD(parseD(t.date), { day: "2-digit", month: "short", year: "2-digit" })}</span>
-              <span style={{ flex: 1, fontSize: 13 }}>
+              <span className="row-lead" style={{ ...css.mono, fontSize: 12, color: T.mut, width: 74 }}>{fmtD(parseD(t.date), { day: "2-digit", month: "short", year: "2-digit" })}</span>
+              <span className="row-title" style={{ flex: 1, fontSize: 13, minWidth: 0 }}>
                 {t.name} <span style={{ color: T.mut, fontSize: 11 }}>{card?.name}</span>
                 {t.installments > 1 && (
                   <span style={{ fontSize: 11, color: T.acc, marginLeft: 6 }}>
@@ -281,8 +289,11 @@ export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => 
                 )}
               </span>
               <span className="row-amount" style={{ ...css.mono, fontSize: 13 }}>{tl.format(Math.round(t.amount))}</span>
-              <button style={css.edit} title="Düzenle" onClick={() => setEditing({ kind: "cardtx", row: t })}>✎</button>
-              <button style={css.del} onClick={async () => { await api.del("cardtxs", t.id); reload(); }}>✕</button>
+              <button className="row-end" style={css.edit} title="Düzenle" onClick={() => setEditing({ kind: "cardtx", row: t })}>✎</button>
+              <SilDugmesi ad={t.name} onSil={async () => { await api.del("cardtxs", t.id); reload(); }}
+                sonuc={t.installments > 1
+                  ? <>Taksitli harcama: <b>{t.installments} taksidin tamamı</b> ekstrelerden düşer.</>
+                  : "İlgili ekstrenin tutarı azalır."} />
             </Row>
           );
         })}
