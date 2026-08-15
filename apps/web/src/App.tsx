@@ -156,6 +156,7 @@ export default function App() {
         ::-webkit-scrollbar-thumb:hover{background:${T.mut3}}
         @keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
         @keyframes spin{to{transform:rotate(360deg)}}
+        @keyframes dictPulse{0%,100%{opacity:1}50%{opacity:.25}}
         .nav-btn{transition:background .14s,color .14s}
         .nav-btn:hover{background:${T.panel2}}
         .icon-btn{transition:border-color .15s,color .15s}

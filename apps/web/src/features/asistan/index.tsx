@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api, type AiAction, type AiPlan, type AiResult } from "../../api";
 import { T, css } from "../../theme";
+import { useDictation } from "./dictation";
 
 /* ————— Asistan (Faz 22) —————
    Doğal dille anlatılan finansal olayları kayda çevirir. Kritik tasarım kararı:
@@ -32,6 +33,13 @@ export function Asistan({ reload, initialText, onConsumed }: {
   const [err, setErr] = useState("");
   const [status, setStatus] = useState<{ enabled: boolean; model: string | null } | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  /* Dikte kutuyu DOLDURUR, göndermez: kullanıcı gördüğü metni düzeltip kendi gönderir
+     (ses yanlış anlaşılırsa da onay kartına değil, metin kutusuna düşer). */
+  const dict = useDictation({
+    onText: (t) => setInput((prev) => (prev.trim() ? `${prev.trimEnd()} ${t}` : t)),
+  });
 
   const loadHistory = useCallback(() => api.aiHistory().then((r) => setHistory(r.plans)).catch(() => {}), []);
   useEffect(() => {
@@ -191,19 +199,53 @@ export function Asistan({ reload, initialText, onConsumed }: {
         </div>
       )}
 
-      <form onSubmit={(e) => { e.preventDefault(); send(input); }} style={{ display: "flex", gap: 8 }}>
-        <input value={input} onChange={(e) => setInput(e.target.value)} disabled={busy}
-          placeholder="Örn: bugün 5.000 TL maaş yattı, Garanti'ye"
-          style={{ ...css.input, fontFamily: T.disp, flex: 1 }} />
-        <button type="submit" disabled={busy || !input.trim()} style={{ ...css.btn, opacity: busy || !input.trim() ? 0.6 : 1 }}>Gönder</button>
+      {dict.listening && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: T.mut }}>
+          <span style={{ width: 8, height: 8, borderRadius: 999, background: T.neg, flexShrink: 0, animation: "dictPulse 1.2s ease-in-out infinite" }} />
+          <span style={{ flex: 1, minWidth: 0, fontStyle: dict.interim ? "italic" : "normal", color: dict.interim ? T.mut : T.mut3 }}>
+            {dict.interim || "dinliyor… konuşmayı bitirince mikrofona tekrar bas"}
+          </span>
+        </div>
+      )}
+      {dict.error && <div style={{ color: T.neg, fontSize: 12.5 }}>{dict.error}</div>}
+
+      <form onSubmit={(e) => { e.preventDefault(); dict.stop(); send(input); }} style={{ display: "flex", gap: 8 }}>
+        <input ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)} disabled={busy}
+          placeholder={dict.listening ? "konuşabilirsin…" : "Örn: bugün 5.000 TL maaş yattı, Garanti'ye"}
+          style={{ ...css.input, fontFamily: T.disp, flex: 1, minWidth: 0 }} />
+        {dict.supported && (
+          <button type="button" onClick={() => { dict.toggle(); inputRef.current?.focus(); }} disabled={busy}
+            title={dict.listening ? "Dikteyi durdur" : "Sesle yaz"}
+            aria-label={dict.listening ? "Dikteyi durdur" : "Sesle yaz"} aria-pressed={dict.listening}
+            style={{
+              ...css.ghost, padding: "9px 12px", flexShrink: 0, opacity: busy ? 0.6 : 1,
+              background: dict.listening ? T.negSoft : T.panel2,
+              color: dict.listening ? T.neg : T.mut,
+              borderColor: dict.listening ? T.neg : T.line,
+            }}><MicIcon stop={dict.listening} /></button>
+        )}
+        <button type="submit" disabled={busy || !input.trim()} style={{ ...css.btn, flexShrink: 0, opacity: busy || !input.trim() ? 0.6 : 1 }}>Gönder</button>
       </form>
       <div style={{ fontSize: 11.5, color: T.mut3, lineHeight: 1.5 }}>
         Asistan senin yetkilerinle çalışır: yalnız kendi verine erişir, hesap silme gibi yıkıcı işlemleri yapamaz.
         Mesajların ve hesap/kart/kategori adların (bakiyelerle birlikte) yanıtı üretmesi için seçili model sağlayıcısına gönderilir.
+        {dict.supported && " Mikrofon, cihazın/tarayıcının kendi konuşma tanımasını kullanır — ses bu uygulamanın sunucusuna gitmez, yalnız yazıya dökülen metni sen gönderirsin."}
       </div>
     </div>
   );
 }
+
+/** Mikrofon / durdur ikonu — uygulamanın diğer ikonlarıyla aynı çizgi diliyle (emoji tarayıcıya göre değişiyor) */
+const MicIcon = ({ stop }: { stop: boolean }) => (
+  <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ display: "block" }}>
+    {stop ? <rect x="5.5" y="5.5" width="9" height="9" rx="1.5" fill="currentColor" stroke="none" /> : (
+      <>
+        <rect x="7.2" y="2.2" width="5.6" height="9.6" rx="2.8" />
+        <path d="M4.4 9.2a5.6 5.6 0 0 0 11.2 0M10 14.8V17.5M7.4 17.6h5.2" />
+      </>
+    )}
+  </svg>
+);
 
 /** "2026-08-12 19:40:12" → "12 Ağu 19:40" (bugünse yalnız saat) */
 function shortTime(at: string): string {
