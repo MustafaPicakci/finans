@@ -234,7 +234,10 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAcc
     {/* İki kart masaüstünde YAN YANA, mobilde SEKMELİ tek kart (duo-*, App.tsx).
         Alt alta iki tam kart mobilde ~400px yiyordu ve ikisi de "bir bakışta" bilgi;
         aynı anda ikisine birden bakılmıyor. Masaüstünde sekme çubuğu hiç render edilmez. */}
-    <div className="duo-tabs" style={{ display: "flex", borderRadius: 10, overflow: "hidden", border: `1px solid ${T.line}`, marginBottom: -6 }}>
+    {/* display'i BURADA verme: inline stil sınıf kuralını yener ve masaüstünde de görünürdü
+        (görünüyordu da — sekmeler çıkıyor, tıklamak bir şey değiştirmiyordu çünkü orada
+        iki kart zaten yan yana). Görünürlük tamamen .duo-tabs sınıfının işi. */}
+    <div className="duo-tabs" style={{ borderRadius: 10, overflow: "hidden", border: `1px solid ${T.line}`, marginBottom: -6 }}>
       {([["alokasyon", "Varlık Dağılımı"], ["yaklasan", "Yaklaşan Hareketler"]] as const).map(([k, label]) => (
         <button key={k} onClick={() => setDuo(k)} style={{
           flex: 1, padding: "9px 10px", border: "none", cursor: "pointer", fontSize: 12.5, fontFamily: T.disp,
