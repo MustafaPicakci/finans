@@ -4,6 +4,7 @@ import { api } from "../../api";
 import { T, css, tl } from "../../theme";
 import { Field, AmountField, Money, Empty, Row, SilDugmesi, Aciklama } from "../../ui";
 import type { KalemPrefill } from "../forms";
+import { KategoriAlani } from "../forms/KategoriAlani";
 import { EditSheet, type EditTarget } from "../../EditSheet";
 
 /* ————— PLAN (nakit projeksiyonunu besleyen her şey tek yerde) —————
@@ -116,7 +117,7 @@ export function Plan({ data, reload, onRealize }: { data: AllData; reload: () =>
               <form style={{ background: T.panel2, borderRadius: 8, padding: 10, marginTop: 8 }}
                 onSubmit={(e) => { e.preventDefault(); realizeRec(r, { account_id: rp.account_id ? +rp.account_id : null, category_id: rp.category_id ? +rp.category_id : null }); }}>
                 <div style={{ fontSize: 12, color: T.mut, marginBottom: 8 }}>
-                  Bu kalemin <b>{fmtYm(curYm)}</b> ayını deftere geçir. Hesap seçersen bakiyeye işler; boş bırakırsan yalnız Rapor'a girer.
+                  Bu kalemin <b>{fmtYm(curYm)}</b> ayını deftere geçir. Hesap seçersen bakiyeye işler; boş bırakırsan yalnız gelir/gider kaydı olur.
                 </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
                   <Field label="Hesap (ops.)">
@@ -125,14 +126,8 @@ export function Plan({ data, reload, onRealize }: { data: AllData; reload: () =>
                       {data.accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                     </select>
                   </Field>
-                  {cats.length > 0 && (
-                    <Field label="Kategori (ops.)">
-                      <select style={css.input} value={rp.category_id} onChange={(e) => setRp({ ...rp, category_id: e.target.value })}>
-                        <option value="">Kategorisiz</option>
-                        {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                      </select>
-                    </Field>
-                  )}
+                  <KategoriAlani label="Kategori (ops.)" flex={1} data={data} reload={reload}
+                    value={rp.category_id} onChange={(v) => setRp({ ...rp, category_id: v })} kind={r.kind} />
                   <button type="submit" style={css.btn}>Gerçekleştir</button>
                 </div>
               </form>

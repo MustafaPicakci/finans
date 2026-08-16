@@ -6,6 +6,7 @@ import {
   type Trade, type Transaction, type Transfer, type Loan,
 } from "@finans/engine";
 import { api } from "../../api";
+import { KategoriAlani } from "./KategoriAlani";
 import { T, css, fmtMoney, TYPE_HINT } from "../../theme";
 import { Field, AmountField, Hint, SuggestInput } from "../../ui";
 import {
@@ -62,7 +63,7 @@ function SaveButtons({ ok, reason, onSaveNew, editing }: { ok: boolean; reason: 
 }
 
 /** Gelir/gider kalemi — tarihe göre otomatik yönlendirilir:
-    bugün/geçmiş → gerçekleşen kayıt (transactions; hesaba bağlıysa bakiyeye işler, Rapor'a girer),
+    bugün/geçmiş → gerçekleşen kayıt (transactions; hesaba bağlıysa bakiyeye işler, gelir/gider defterine girer),
     ileri tarih → plan kalemi (oneoffs; nakit projeksiyonuna girer). */
 export function KalemForm({ data, reload, onClose, prefill, edit }: FormProps & {
   prefill?: KalemPrefill; edit?: Extract<EditTarget, { kind: "transaction" | "oneoff" }>;
@@ -155,12 +156,9 @@ export function KalemForm({ data, reload, onClose, prefill, edit }: FormProps & 
               {data.accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
           </Field>
-          <Field label="Kategori" flex={2}>
-            <select style={css.input} value={tx.category_id} onChange={(e) => setTx({ ...tx, category_id: e.target.value })}>
-              <option value="">Kategorisiz</option>
-              {data.categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-          </Field>
+          <KategoriAlani data={data} reload={reload} value={tx.category_id}
+            onChange={(v) => setTx({ ...tx, category_id: v })}
+            kind={tx.type === "gelir" ? "income" : "expense"} />
         </div>
       )}
       <div style={{ fontSize: 12, color: T.mut, marginTop: 10, background: T.panel2, borderRadius: 8, padding: "8px 12px" }}>
@@ -171,8 +169,8 @@ export function KalemForm({ data, reload, onClose, prefill, edit }: FormProps & 
           : future
             ? "İleri tarihli → plan kalemi olarak kaydedilir: Nakit Akışı projeksiyonuna girer, günü gelince Plan'dan \"Gerçekleşti\" ile deftere geçirebilirsin."
             : tx.account_id
-              ? "Gerçekleşen kayıt: seçili hesabın bakiyesine hemen işler ve Rapor'a girer."
-              : "Gerçekleşen kayıt: hesap seçilmedi — sadece Rapor'a girer, bakiyeye dokunmaz."}
+              ? "Gerçekleşen kayıt: seçili hesabın bakiyesine hemen işler ve gelir/gider kaydı olur."
+              : "Gerçekleşen kayıt: hesap seçilmedi — sadece gelir/gider kaydı olur, bakiyeye dokunmaz."}
       </div>
       <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} editing={!!edit} />
     </form>
@@ -238,7 +236,7 @@ export function CardTxForm({ data, reload, onClose, prefill, edit }: FormProps &
 
 /** Düzenli gelir/gider → her ay tekrarlar, nakit projeksiyonuna girer.
     Opsiyonel hedef (hesap veya kart) bağlanırsa günü gelince Plan'dan "Gerçekleşti" ile (veya "otomatik"
-    açıksa cron ile) gerçek kayda dönüşür: hesap → transactions (bakiye+Rapor), kart → o ayki ekstreye. */
+    açıksa cron ile) gerçek kayda dönüşür: hesap → transactions (bakiye + gelir/gider defteri), kart → o ayki ekstreye. */
 export function RecurringForm({ data, reload, onClose, edit }: FormProps & { edit?: Recurring }) {
   /* Faz 18 — düzenlemede TUTAR yoktur: kimlik (`recurring`) ile tutar (`recurring_amounts` zaman
      çizelgesi) Faz 9'da bilinçli olarak ayrıldı. Tutarı buradan değiştirmek geçmiş projeksiyonu
@@ -296,13 +294,9 @@ export function RecurringForm({ data, reload, onClose, edit }: FormProps & { edi
             {rec.kind === "expense" && data.cards.map((c) => <option key={`c${c.id}`} value={`card:${c.id}`}>Kart: {c.name}</option>)}
           </select>
         </Field>
-        {isAcc && cats.length > 0 && (
-          <Field label="Kategori (ops.)" flex={2}>
-            <select style={css.input} value={rec.category_id} onChange={(e) => setRec({ ...rec, category_id: e.target.value })}>
-              <option value="">Kategorisiz</option>
-              {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-          </Field>
+        {isAcc && (
+          <KategoriAlani label="Kategori (ops.)" data={data} reload={reload} value={rec.category_id}
+            onChange={(v) => setRec({ ...rec, category_id: v })} kind={rec.kind} />
         )}
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
@@ -317,10 +311,10 @@ export function RecurringForm({ data, reload, onClose, edit }: FormProps & { edi
       )}
       <div style={{ fontSize: 12, color: T.mut, marginTop: 8, background: T.panel2, borderRadius: 8, padding: "8px 12px" }}>
         {!rec.target
-          ? "Hedef yok: yalnız Nakit Akışı tahminine girer, bakiyeye/Rapor'a dokunmaz."
+          ? "Hedef yok: yalnız Nakit Akışı tahminine girer, bakiyeye/gelir/gider defterine dokunmaz."
           : rec.target.startsWith("card:")
             ? "Kart hedefi: gerçekleşince o ayki kart ekstresine düşer; son ödeme günü nakit akışına gider olarak girer."
-            : "Hesap hedefi: gerçekleşince seçili hesabın bakiyesine işler ve Rapor'a girer."}
+            : "Hesap hedefi: gerçekleşince seçili hesabın bakiyesine işler ve gelir/gider defterine girer."}
         {rec.target && " Günü gelince Plan'dan “Gerçekleşti” ile, otomatik açıksa kendiliğinden işlenir."}
       </div>
       {edit && (
@@ -442,9 +436,9 @@ export function DepositForm({ data, reload, onClose, edit }: FormProps & { edit?
 }
 
 /** Virman (Faz 16) — kendi hesapların arası para hareketi. TEK kayıt iki bacağı birden yazar:
-    kaynaktan düşer, hedefe ekler. Rapor'a girmez, net varlığı değiştirmez.
+    kaynaktan düşer, hedefe ekler. gelir/gider defterine girmez, net varlığı değiştirmez.
     Bu form olmadan kullanıcı iki sahte gelir/gider kaydı girmek zorundaydı — biri unutulunca
-    bakiye kayar, Rapor'da olmayan bir gelir/gider görünürdü. */
+    bakiye kayar, defterde olmayan bir gelir/gider görünürdü. */
 export function TransferForm({ data, reload, onClose, edit }: FormProps & { edit?: Transfer }) {
   const [f, setF] = useState(() => edit
     ? {
@@ -504,7 +498,7 @@ export function TransferForm({ data, reload, onClose, edit }: FormProps & { edit
         <div style={{ fontSize: 12, color: T.mut, marginTop: 10, background: T.panel2, borderRadius: 8, padding: "10px 12px", display: "grid", gap: 4 }}>
           <div><b>{from.name}</b> <span style={{ color: T.neg }}>−{fmtMoney(amount, "TRY", true)}</span> → <span style={{ ...css.mono }}>{fmtMoney(from.balance - amount, "TRY", true)}</span></div>
           <div><b>{to.name}</b> <span style={{ color: T.pos }}>+{fmtMoney(amount, "TRY", true)}</span> → <span style={{ ...css.mono }}>{fmtMoney(to.balance + amount, "TRY", true)}</span></div>
-          <div style={{ color: T.mut3 }}>Net varlığın değişmez; Rapor'a gelir/gider olarak girmez.</div>
+          <div style={{ color: T.mut3 }}>Net varlığın değişmez; gelir/gider defterine gelir/gider olarak girmez.</div>
           {from.balance - amount < 0 && <div style={{ color: T.neg }}>Uyarı: {from.name} bakiyesi eksiye düşüyor.</div>}
         </div>
       )}

@@ -74,7 +74,7 @@ export const ROUTE_TOOLS: RouteTool[] = [
     name: "islem_ekle", method: "POST", path: "/transactions",
     description:
       "Gerçekleşen (olmuş bitmiş) bir gelir veya gideri deftere yazar. Tutar İŞARETLİDİR: gider NEGATİF, gelir POZİTİF. " +
-      "account_id verilirse o hesabın bakiyesi bu kadar oynar; verilmezse kayıt yalnız Rapor'a girer. " +
+      "account_id verilirse o hesabın bakiyesi bu kadar oynar; verilmezse kayıt yalnız gelir/gider defterine girer. " +
       "İleri tarihli (henüz olmamış) bir kalem için bunu DEĞİL plan_kalemi_ekle'yi kullan. Kendi hesapların arası para hareketi için virman_ekle kullan.",
     parameters: obj({
       date: S.str(DATE), name: S.str("Kısa açıklama, örn. 'Market'"),
@@ -150,7 +150,7 @@ export const ROUTE_TOOLS: RouteTool[] = [
     name: "virman_ekle", method: "POST", path: "/transfers",
     description:
       "KENDİ hesapların arasında para hareketi (ATM'den nakit çekme, aracı kuruma para atma, hesaplar arası aktarım). " +
-      "Net varlığı değiştirmez, Rapor'a girmez. BAŞKASINA gönderilen para virman DEĞİL giderdir → islem_ekle kullan.",
+      "Net varlığı değiştirmez, gelir/gider defterine girmez. BAŞKASINA gönderilen para virman DEĞİL giderdir → islem_ekle kullan.",
     parameters: obj({
       date: S.str(DATE), from_account_id: S.int("Paranın çıktığı hesap id"), to_account_id: S.int("Paranın girdiği hesap id"),
       amount: S.num("Tutar (pozitif, TRY)"), note: S.str("Not (opsiyonel)"),
@@ -289,7 +289,7 @@ export const ROUTE_TOOLS: RouteTool[] = [
   },
   {
     name: "kategori_ekle", method: "POST", path: "/categories",
-    description: "Rapor için gelir/gider kategorisi tanımlar. Var olan bir kategoriyi yeniden oluşturma — önce bağlamdaki listeye bak.",
+    description: "Gelir/gider kategorisi tanımlar. Var olan bir kategoriyi yeniden oluşturma — önce bağlamdaki listeye bak.",
     parameters: obj({ name: S.str("Kategori adı"), kind: S.enum("Tür", ["income", "expense"]), color: S.str("Renk (opsiyonel, #rrggbb)") }, ["name", "kind"]),
     summary: (a) => `Yeni kategori: ${a.name} (${a.kind === "income" ? "gelir" : "gider"})`,
     undo: undoById("categories"),

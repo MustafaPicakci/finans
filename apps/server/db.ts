@@ -112,8 +112,8 @@ CREATE TABLE IF NOT EXISTS accounts (
   last_recon_balance double precision
 );
 /* Faz 16 — virman: kendi hesapların arasındaki para hareketi. TEK kayıt, İKİ hareket satırı
-   (kaynak −, hedef +) yazar; net varlığı ve Rapor'u değiştirmez. Eskiden bu iki bacak birbirinden
-   habersiz iki sahte transactions satırıydı — biri unutulunca bakiye kayardı ve Rapor'da sahte
+   (kaynak −, hedef +) yazar; net varlığı ve gelir/gider defterini değiştirmez. Eskiden bu iki bacak birbirinden
+   habersiz iki sahte transactions satırıydı — biri unutulunca bakiye kayardı ve defterde sahte
    gelir/gider görünürdü. Tek kayıt olduğu için artık yarım virman yazmak yapısal olarak imkânsız.
    Hesap silinirse virman da gider (bacakları anlamsız kalırdı); hareketler zaten CASCADE. */
 CREATE TABLE IF NOT EXISTS transfers (
@@ -301,7 +301,7 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS account_id integer REFERENCES accoun
 -- Faz 11: işlem opsiyonel bir portföy grubuna aitse orada raporlanır; grup silinince işlem "Gruplanmamış"a düşer
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS portfolio_id integer REFERENCES portfolios(id) ON DELETE SET NULL;
 -- Faz 8: düzenli kalem opsiyonel bir hesaba VEYA karta bağlanır (günü gelince gerçek kayda dönüşür);
--- category_id hesap-hedefli gerçekleşen işlemin Rapor kategorisi; auto → cron otomatik gerçekleştirir
+-- category_id hesap-hedefli gerçekleşen işlemin gelir/gider kategorisi; auto → cron otomatik gerçekleştirir
 ALTER TABLE recurring ADD COLUMN IF NOT EXISTS account_id integer REFERENCES accounts(id) ON DELETE SET NULL;
 ALTER TABLE recurring ADD COLUMN IF NOT EXISTS card_id integer REFERENCES cards(id) ON DELETE SET NULL;
 ALTER TABLE recurring ADD COLUMN IF NOT EXISTS category_id integer REFERENCES categories(id) ON DELETE SET NULL;

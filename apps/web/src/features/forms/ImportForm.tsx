@@ -151,7 +151,7 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
       <div style={{ fontSize: 12, color: T.mut, marginTop: 10, background: T.panel2, borderRadius: 8, padding: "8px 12px" }}>
         {accountId
           ? <>Seçili satırlar gerçekleşen kayıt olarak yazılır ve <b>{data.accounts.find((a) => a.id === +accountId)?.name}</b> bakiyesine toplam <span style={{ ...css.mono, color: sum < 0 ? T.neg : T.pos }}>{fmtMoney(sum, "TRY", true)}</span> işler.</>
-          : "Hesap seçilmedi — kayıtlar yalnız Rapor'a girer, bakiyeye dokunmaz."}
+          : "Hesap seçilmedi — kayıtlar yalnız gelir/gider defterine girer, bakiyeye dokunmaz."}
       </div>
       {err && <div style={{ color: T.neg, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>

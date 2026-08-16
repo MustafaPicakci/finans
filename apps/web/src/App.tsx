@@ -3,17 +3,18 @@ import { project, positions, cardInfos, stmtKey, loanRemaining, portfolioValueTr
 import { api, ApiError, type SessionUser } from "./api";
 import { T, css, fmtMoney, themeCSS, THEME_KEY, CCY_KEY, type ThemeMode } from "./theme";
 import { Center } from "./ui";
-import { NAV, NavIcon, PROFIL_META, type TabKey } from "./nav";
+import { NAV, NavIcon, PROFIL_META, TANIMLAR_META, type TabKey } from "./nav";
 import { useBalancesHidden, toggleBalancesHidden } from "./privacy";
 import { Auth, type UrlAuth } from "./features/auth";
 import { Ozet } from "./features/ozet";
 import { Hesaplar } from "./features/hesaplar";
 import { Profil } from "./features/profil";
+import { Tanimlar } from "./features/tanimlar";
 import { Nakit } from "./features/nakit";
 import { Plan } from "./features/plan";
 import { Kartlar } from "./features/kart";
 import { Portfoy } from "./features/portfoy";
-import { Rapor } from "./features/rapor";
+import { Kayitlar } from "./features/kayitlar";
 import { Asistan } from "./features/asistan";
 import { AddSheet, type AddState, type KalemPrefill, type TradePrefill } from "./AddSheet";
 
@@ -118,7 +119,8 @@ export default function App() {
   const loansActive = data.loans.filter((l) => loanRemaining(l, new Date()) > 0).length;
 
   const openAdd = (kind: AddState["kind"], prefill?: KalemPrefill) => setAdd({ kind, prefill });
-  const meta = NAV.find((n) => n.key === tab) ?? PROFIL_META; // profil NAV dizisinde yok (bkz. nav.tsx)
+  // profil/tanimlar bilerek NAV dizisinde yok (bkz. nav.tsx) — başlıkları kendi META'larından gelir
+  const meta = NAV.find((n) => n.key === tab) ?? (tab === "tanimlar" ? TANIMLAR_META : PROFIL_META);
   const summary = { netWorthTry, cash, portValueTry, depositsValueTry, cardDebt, loanDebt,
     accountCount: data.accounts.length, portTypes, cardsWaiting, loansActive };
   const initials = (user?.email ?? "?").slice(0, 2).toUpperCase();
@@ -299,7 +301,16 @@ export default function App() {
           })}
         </nav>
 
-        <div style={{ marginTop: "auto", paddingTop: 16, borderTop: `1px solid ${T.line}`, display: "flex", alignItems: "center", gap: 10 }}>
+        {/* Tanımlar: ana menüde değil ama kenar çubuğunun dibinde erişilebilir — günlük iş
+            listesini şişirmeden, aradığında bulunabilir bir yerde. */}
+        <button className="nav-btn" onClick={() => setTab("tanimlar")} style={{
+          marginTop: "auto", display: "flex", alignItems: "center", gap: 11, padding: "9px 11px",
+          border: "none", borderRadius: 11, cursor: "pointer", fontSize: 13, fontFamily: T.disp,
+          fontWeight: tab === "tanimlar" ? 600 : 500, textAlign: "left",
+          background: tab === "tanimlar" ? T.accSoft : "none", color: tab === "tanimlar" ? T.acc : T.mut3,
+        }}><NavIcon tab="tanimlar" /> Tanımlar</button>
+
+        <div style={{ paddingTop: 12, borderTop: `1px solid ${T.line}`, display: "flex", alignItems: "center", gap: 10 }}>
           {/* Kullanıcı kartı artık tıklanabilir: kimliğin durduğu yer, kullanıcı hesabı
               ekranının da giriş kapısıdır (Hesabım — banka "Hesaplar"ıyla karıştırılmasın). */}
           <button className="nav-btn" onClick={() => setTab("profil")} title="Hesabım"
@@ -370,6 +381,16 @@ export default function App() {
                 ))}
                 {/* Mobilde kenar çubuğu yok — kullanıcı hesabı ekranının kapısı burası.
                     E-posta salt metin değil, tıklanabilir: kimliğin durduğu yer. */}
+                <button onClick={() => { setTab("tanimlar"); setMenuOpen(false); }}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 11, width: "100%", textAlign: "left",
+                    background: "none", border: "none", borderRadius: 9,
+                    padding: "10px 11px", cursor: "pointer", fontFamily: T.disp,
+                    fontSize: 13.5, fontWeight: 500, color: T.text,
+                  }}>
+                  <span style={{ width: 18, display: "grid", placeItems: "center", color: T.mut }}><NavIcon tab="tanimlar" size={15} /></span>
+                  Tanımlar
+                </button>
                 <button onClick={() => { setTab("profil"); setMenuOpen(false); }}
                   style={{
                     display: "flex", alignItems: "center", gap: 11, width: "100%", textAlign: "left",
@@ -407,11 +428,12 @@ export default function App() {
               onSellFund={(p: TradePrefill) => setAdd({ kind: "trade", tradePrefill: p })} />}
             {tab === "hesaplar" && <Hesaplar data={data} reload={reload} />}
             {tab === "profil" && <Profil user={user} onDeleted={() => { setUser(null); setData(null); }} />}
+            {tab === "tanimlar" && <Tanimlar data={data} reload={reload} />}
             {tab === "nakit" && <Nakit days={days} data={data} />}
             {tab === "plan" && <Plan data={data} reload={reload} onRealize={(p) => openAdd("kalem", p)} />}
             {tab === "kart" && <Kartlar data={data} reload={reload} onAdd={(k) => openAdd(k)} />}
             {tab === "portfoy" && <Portfoy data={data} pos={pos} rates={rates} ccy={ccy} reload={reload} onAdd={(k) => openAdd(k)} />}
-            {tab === "rapor" && <Rapor data={data} reload={reload} />}
+            {tab === "kayitlar" && <Kayitlar data={data} reload={reload} />}
             {tab === "asistan" && <Asistan reload={reload} initialText={shared} onConsumed={() => setShared(null)} />}
           </div>
         </div>

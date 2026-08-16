@@ -7,7 +7,7 @@ export type { EditTarget };
 
 /* ————— KAYIT DÜZENLEME (Faz 14) —————
    "+ Ekle" akışının formlarını düzenle modunda açan tek modal. Kayıtların listelendiği
-   her sekme (Rapor / Plan / Kart / Portföy-Hareketler) yalnız bir `EditTarget` state'i
+   her sekme (Kayıtlar / Plan / Kart / Portföy-Hareketler) yalnız bir `EditTarget` state'i
    tutar ve bunu render eder — böylece düzenleme deneyimi her yerde aynıdır ve form
    mantığı (doğrulama, ipuçları, autocomplete) tek yerde kalır. */
 

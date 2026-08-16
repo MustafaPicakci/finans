@@ -459,7 +459,7 @@ api.post("/accounts/:id/reconcile", async (c) => {
 
 /* ---- virman (Faz 16) ----
    Kendi hesapların arasındaki para hareketi: TEK kayıt + İKİ hareket satırı (kaynak −, hedef +),
-   hepsi aynı db.tx içinde. Rapor'a girmez, net varlığı değiştirmez. Düzenleme/silme deseni diğer
+   hepsi aynı db.tx içinde. gelir/gider defterine girmez, net varlığı değiştirmez. Düzenleme/silme deseni diğer
    yan etkili uçlarla aynı: revertEntries ile YAZILMIŞ bacaklar geri alınır, yenisi uygulanır —
    böylece hesaplar değişse bile geri alma doğru satırları hedefler.
    NOT: başkasına gönderilen para virman değildir (net varlıktan çıkar) — o `transactions`'ta gider. */
@@ -624,7 +624,7 @@ api.delete("/recurring/:id/amount/:from_month", async (c) => {
 
 /* ---- düzenli kalemin (recurring) bir ayını (ym) gerçekleştirme ----
    Hedefe göre gerçek kayıt üretir: kart → card_txs (ilgili ekstreye düşer), hesap → transactions
-   (bakiyeyi oynatır, Rapor'a girer). recurring_realized (recurring_id, ym) PK'si ile TAM-BİR-KEZ
+   (bakiyeyi oynatır, gelir/gider defterine girer). recurring_realized (recurring_id, ym) PK'si ile TAM-BİR-KEZ
    (idempotent); tahmin (project) o ayı artık göstermez → çift sayım önlenir. */
 type RecurringRow = {
   id: number; kind: "income" | "expense"; name: string; day: number;
@@ -915,7 +915,7 @@ crud("cardtxs", "card_txs", [
 
 /* ---- kart ekstresi ödeme (Faz 8.2) ----
    Ekstre olayı projeksiyonda sanaldı; "Ödedim" onu gerçek kayda çevirir: transactions'a −tutar yazılır
-   (hesap seçildiyse bakiye düşer, Rapor'a girer), (card_id, due) statement_payments ile işaretlenir →
+   (hesap seçildiyse bakiye düşer, gider kaydı oluşur), (card_id, due) statement_payments ile işaretlenir →
    borç ve projeksiyon o ekstreyi artık saymaz (çift sayım yok). Tutar SUNUCUDA hesaplanır (engine
    txShares — istemciden gelen tutara güvenilmez). Geçmiş vadeli ekstre de ödenebilir (kayıt altına almak
    için); o zaten borçta/projeksiyonda olmadığından yalnız defter kaydı üretir. */

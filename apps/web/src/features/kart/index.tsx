@@ -4,12 +4,13 @@ import { api } from "../../api";
 import { T, css, tl } from "../../theme";
 import { Field, AmountField, Hint, Empty, Row, Aciklama, SilDugmesi } from "../../ui";
 import type { AddKind } from "../forms";
+import { KategoriAlani } from "../forms/KategoriAlani";
 import { EditSheet, type EditTarget } from "../../EditSheet";
 
 /* ————— KARTLAR ————— */
 /* Kart TANIMI burada yapılır; kart HARCAMASI girişi global "+" akışındadır.
    Ekstre ödeme (Faz 8.2): "Ödedim" ekstreyi gerçek gider kaydına çevirir (hesap seçilirse bakiye düşer,
-   Rapor'a girer) ve borç/projeksiyondan düşer; "Geri al" kaydı ve işareti siler. */
+   gelir/gider defterine girer) ve borç/projeksiyondan düşer; "Geri al" kaydı ve işareti siler. */
 
 /** Son ~40 gün içinde vadesi GEÇMİŞ en yakın ekstre (kayıt altına almak için) — cardInfos yalnız
     bugünden sonrakileri döndürdüğünden geçmişteki son ekstre burada ayrıca hesaplanır. */
@@ -200,7 +201,7 @@ export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => 
             )}
             {/* otomatik ödeme talimatı: hesap seçiliyse vadesi gelen ekstre cron ile o hesaptan ödenir */}
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, fontSize: 12, color: T.mut }}>
-              <span title="Vade günü geldiğinde ekstre seçili hesaptan kendiliğinden ödenir (bakiye düşer, Rapor'a girer)">
+              <span title="Vade günü geldiğinde ekstre seçili hesaptan kendiliğinden ödenir (bakiye düşer, gider kaydı oluşur)">
                 {ci.card.pay_account_id ? <span style={{ color: T.acc }}>⚡</span> : null} otomatik ödeme:
               </span>
               <select style={{ ...css.input, width: "auto", padding: "4px 8px", fontSize: 12 }} value={ci.card.pay_account_id ?? ""}
@@ -228,7 +229,7 @@ export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => 
                 <div style={{ fontSize: 12, color: T.mut, marginBottom: 8 }}>
                   <span style={css.mono}>{fmtD(parseD(paying.dueK), { day: "2-digit", month: "short" })}</span> ekstresi
                   (<span style={css.mono}>{tl.format(Math.round(paying.amount))}</span>) gider olarak deftere geçirilir.
-                  Hesap seçersen bakiyeden düşer; boş bırakırsan yalnız Rapor'a girer.
+                  Hesap seçersen bakiyeden düşer; boş bırakırsan yalnız gelir/gider kaydı olur.
                 </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
                   <Field label="Hesap (ops.)">
@@ -237,14 +238,9 @@ export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => 
                       {data.accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                     </select>
                   </Field>
-                  {expCats.length > 0 && (
-                    <Field label="Kategori (ops.)">
-                      <select style={css.input} value={pp.category_id} onChange={(e) => setPp({ ...pp, category_id: e.target.value })}>
-                        <option value="">Kategorisiz</option>
-                        {expCats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                      </select>
-                    </Field>
-                  )}
+                  {/* Ekstre ödemesi her zaman bir GİDER kaydıdır → yeni kategori gider türünde açılır */}
+                  <KategoriAlani label="Kategori (ops.)" flex={1} data={data} reload={reload}
+                    value={pp.category_id} onChange={(v) => setPp({ ...pp, category_id: v })} kind="expense" />
                   <button type="submit" style={css.btn}>Ödendi olarak kaydet</button>
                   <button type="button" style={css.ghost} onClick={() => setPaying(null)}>Vazgeç</button>
                 </div>

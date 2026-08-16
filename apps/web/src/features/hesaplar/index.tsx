@@ -50,7 +50,7 @@ export function Hesaplar({ data, reload }: { data: AllData; reload: () => void }
 }
 
 /* ————— TRANSFERLER (Faz 16) —————
-   Virmanlar Rapor'a girmez (gelir/gider değiller), bu yüzden listelenecekleri yer burasıdır:
+   Virmanlar gelir/gider defterine girmez (gelir/gider değiller), bu yüzden listelenecekleri yer burasıdır:
    hesapların yanı. Silme iki bacağı birden geri alır — yarım kalan virman mümkün değil. */
 function Transferler({ data, reload, onEdit }: {
   data: AllData; reload: () => void; onEdit: (t: EditTarget) => void;
@@ -62,7 +62,7 @@ function Transferler({ data, reload, onEdit }: {
     <div style={css.card}>
       <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Transferler (Virman)</div>
       <Aciklama k="transfer-nedir" label="transfer mi, gider mi?">
-        Kendi hesapların arasındaki para hareketleri. Net varlığını ve Rapor'u değiştirmez — yalnız paranın
+        Kendi hesapların arasındaki para hareketleri. Net varlığını ve gelir/gider defterini değiştirmez — yalnız paranın
         nerede durduğunu değiştirir. <b>“+ Ekle → Transfer”</b> ile eklenir.
         Başkasına gönderdiğin para transfer değil <b>giderdir</b> (Gelir/Gider kalemi olarak gir).
       </Aciklama>
@@ -324,7 +324,7 @@ function HesapHareketleri({ data, account }: { data: AllData; account: AllData["
    Değer net varlığa engine'de accrue eder (kilitli varlık); silme bağlı hesaba anaparayı iade eder. */
 function VadeliMevduat({ data, reload, onEdit }: { data: AllData; reload: () => void; onEdit: (t: EditTarget) => void }) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  /* vade kapatma: bağlı hesaba net faizi gelir olarak işle, sonra mevduatı sil (anapara iadesi) → hesap += vade değeri, Rapor'a faiz girer */
+  /* vade kapatma: bağlı hesaba net faizi gelir olarak işle, sonra mevduatı sil (anapara iadesi) → hesap += vade değeri, gelir/gider defterine faiz girer */
   const close = async (d: AllData["deposits"][number]) => {
     if (d.account_id) {
       const net = depositNetInterest(d);

@@ -14,8 +14,8 @@ export type AddState = { kind: AddKind | "pick"; prefill?: KalemPrefill; cardPre
    neyi etkilediğini (bakiye / projeksiyon / ekstre / rapor) anlatır. */
 
 const OPTIONS: { kind: AddKind; dot: string; title: string; desc: string }[] = [
-  { kind: "kalem", dot: "var(--cat-1)", title: "Gelir / Gider kalemi", desc: "Bugün veya geçmiş tarihli → gerçekleşen kayıt: hesabın bakiyesine işler, Rapor'a girer. İleri tarihli → plan: nakit projeksiyonuna girer" },
-  { kind: "transfer", dot: "var(--type-doviz)", title: "Transfer (virman)", desc: "Kendi hesapların arasında para taşı: bankadan bankaya, ATM'den nakde, aracı kuruma. İki bacağı tek kayıtta yazar; Rapor'a girmez, net varlığın değişmez" },
+  { kind: "kalem", dot: "var(--cat-1)", title: "Gelir / Gider kalemi", desc: "Bugün veya geçmiş tarihli → gerçekleşen kayıt: hesabın bakiyesine işler, gelir/gider olarak kaydedilir. İleri tarihli → plan: nakit projeksiyonuna girer" },
+  { kind: "transfer", dot: "var(--type-doviz)", title: "Transfer (virman)", desc: "Kendi hesapların arasında para taşı: bankadan bankaya, ATM'den nakde, aracı kuruma. İki bacağı tek kayıtta yazar; gelir/gider sayılmaz, net varlığın değişmez" },
   { kind: "cardtx", dot: "var(--neg)", title: "Kart harcaması", desc: "Kesim gününe göre ekstreye işlenir; son ödeme günü nakit akışına gider olarak düşer" },
   { kind: "recurring", dot: "var(--brand)", title: "Düzenli gelir / gider", desc: "Maaş, kira, fatura… her ay tekrarlar, nakit projeksiyonuna girer" },
   { kind: "loan", dot: "var(--cat-8)", title: "Kredi / taksit", desc: "Sabit taksit planı; kalan taksitler nakit projeksiyonuna ve kredi borcuna girer" },
