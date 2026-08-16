@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { hits, normYm, ymOf, monthsBack, num } from "./date.js";
+import { hits, normYm, ymOf, num } from "./date.js";
 
 describe("hits", () => {
   it("ayın belirtilen gününde eşleşir", () => {
@@ -43,17 +43,6 @@ describe("ymOf", () => {
   });
 });
 
-describe("monthsBack", () => {
-  it("son n ayı eskiden yeniye sıralı döner, verilen ay dahil", () => {
-    expect(monthsBack(3, new Date(2026, 2, 15))).toEqual(["2026-01", "2026-02", "2026-03"]);
-  });
-  it("yıl sınırını doğru geçer", () => {
-    expect(monthsBack(3, new Date(2026, 0, 1))).toEqual(["2025-11", "2025-12", "2026-01"]);
-  });
-  it("n=1 sadece verilen ayı döner", () => {
-    expect(monthsBack(1, new Date(2026, 5, 1))).toEqual(["2026-06"]);
-  });
-});
 
 describe("num", () => {
   it("Türkçe binlik+ondalık biçimini doğru ayrıştırır", () => {

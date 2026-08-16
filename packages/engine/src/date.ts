@@ -34,6 +34,3 @@ export const normYm = (s: string): string | null => {
   const mo = Number(m[2]);
   return mo >= 1 && mo <= 12 ? `${m[1]}-${String(mo).padStart(2, "0")}` : null;
 };
-/** `from` dahil geriye doğru son `n` ayı eskiden yeniye (YYYY-MM) sıralı döner */
-export const monthsBack = (n: number, from: Date = new Date()): string[] =>
-  Array.from({ length: n }, (_, i) => ymOf(new Date(from.getFullYear(), from.getMonth() - (n - 1 - i), 1)));
