@@ -10,7 +10,7 @@ export type Account = {
   last_recon_date?: string | null; last_recon_balance?: number | null;
 };
 /** Virman (Faz 16) — kendi hesapların arasında para hareketi. TEK kayıt, İKİ hareket satırı
-    (kaynak −, hedef +) yazar; net varlığı ve Rapor'u değiştirmez. Başkasına gönderilen para
+    (kaynak −, hedef +) yazar; net varlığı ve gelir/gider defterini değiştirmez. Başkasına gönderilen para
     virman DEĞİL giderdir (net varlıktan çıkar) — o `transactions`'ta kalır. */
 export type Transfer = {
   id: number; date: string; from_account_id: number; to_account_id: number; amount: number; note?: string | null;
