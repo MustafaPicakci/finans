@@ -11,6 +11,29 @@ import { useDictation } from "./dictation";
 
 type Msg = { role: "user" | "assistant"; content: string };
 
+/* ————— Sohbet kalıcılığı —————
+   Sekme `tab === "asistan" && <Asistan/>` ile render edildiğinden başka sekmeye
+   geçmek bileşeni SÖKER: konuşma state'te tutulursa "Akbank ekstresini ödedim"
+   dedikten sonra Kart sekmesine bakıp dönmek sohbeti siliyordu. Sunucu bilinçli
+   olarak durumsuz (geçmiş her istekte istemciden gider), o yüzden yer localStorage.
+   Saklanan yalnız MESAJLAR: `pending`/`planId` saklanmaz, çünkü plan kimliği tek
+   kullanımlık ve 30 dk ömürlü — yenilemeden sonra geri gelen bir onay kartı ya
+   409 alırdı ya da kullanıcı onu hâlâ geçerli sanırdı. */
+const CHAT_KEY = "finans-ai-sohbet";
+const MAX_SAVED = 40; // ~son 20 tur; sunucu zaten son 20 turu okuyor
+
+function loadChat(): Msg[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CHAT_KEY) || "[]");
+    if (!Array.isArray(raw)) return [];
+    return raw.filter((m): m is Msg =>
+      !!m && typeof m.content === "string" && (m.role === "user" || m.role === "assistant"));
+  } catch { return []; }
+}
+
+/** Çıkışta çağrılır: ortak cihazda bir sonraki kullanıcı öncekinin sohbetini görmemeli. */
+export function clearChat() { localStorage.removeItem(CHAT_KEY); }
+
 const ORNEKLER = [
   "11 temmuzda 12,71 TL'den 20 adet ASELS aldım",
   "TP2 fonundan 2 TL'den 20.000 TL'lik sattım, para Garanti hesabıma geçti",
@@ -24,7 +47,7 @@ export function Asistan({ reload, initialText, onConsumed }: {
   initialText?: string | null;
   onConsumed?: () => void;
 }) {
-  const [msgs, setMsgs] = useState<Msg[]>([]);
+  const [msgs, setMsgs] = useState<Msg[]>(loadChat);
   const [pending, setPending] = useState<AiAction[]>([]);
   const [planId, setPlanId] = useState(""); // tek kullanımlık: uygulanan plan tekrar gönderilemez
   const [history, setHistory] = useState<AiPlan[]>([]); // sunucudaki uygulama geçmişi (geri alma buradan)
@@ -47,6 +70,9 @@ export function Asistan({ reload, initialText, onConsumed }: {
       .catch(() => setStatus({ enabled: false, model: null }));
   }, [loadHistory]);
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, pending, busy]);
+  useEffect(() => {
+    try { localStorage.setItem(CHAT_KEY, JSON.stringify(msgs.slice(-MAX_SAVED))); } catch { /* kota dolu: sohbet uçucu kalır */ }
+  }, [msgs]);
 
   const send = useCallback(async (text: string) => {
     const t = text.trim();
@@ -119,6 +145,13 @@ export function Asistan({ reload, initialText, onConsumed }: {
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <div style={{ fontWeight: 700, fontSize: 15 }}>Ne yaptın, anlat</div>
         <div style={{ flex: 1 }} />
+        {msgs.length > 0 && !busy && (
+          <button
+            onClick={() => { setMsgs([]); setPending([]); setPlanId(""); setErr(""); clearChat(); }}
+            title="Sohbeti temizle (kayıtlara dokunmaz)"
+            style={{ ...css.ghost, fontSize: 12 }}
+          >Sohbeti temizle</button>
+        )}
         {status?.model && (
           <span style={{ fontSize: 11, color: T.mut3, fontFamily: T.mono, border: `1px solid ${T.line}`, borderRadius: 999, padding: "3px 9px" }}>
             {status.model}

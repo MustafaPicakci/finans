@@ -15,7 +15,7 @@ import { Plan } from "./features/plan";
 import { Kartlar } from "./features/kart";
 import { Portfoy } from "./features/portfoy";
 import { Kayitlar } from "./features/kayitlar";
-import { Asistan } from "./features/asistan";
+import { Asistan, clearChat } from "./features/asistan";
 import { AddSheet, type AddState, type KalemPrefill, type TradePrefill } from "./AddSheet";
 
 /* ————— ana uygulama ————— */
@@ -55,7 +55,9 @@ export default function App() {
   useEffect(() => {
     api.me().then(({ user }) => { setUser(user); if (user) reload(); }).catch((e) => setErr(String(e)));
   }, [reload]);
-  const logout = useCallback(async () => { await api.logout().catch(() => {}); setUser(null); setData(null); }, []);
+  /* Sohbet localStorage'da yaşıyor (Asistan) — çıkışta silinmezse ortak cihazda
+     sonraki kullanıcı öncekinin finansal konuşmasını okurdu. */
+  const logout = useCallback(async () => { await api.logout().catch(() => {}); clearChat(); setUser(null); setData(null); }, []);
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try { await api.refreshPrices(); await reload(); } catch { /* best-effort */ } finally { setRefreshing(false); }
