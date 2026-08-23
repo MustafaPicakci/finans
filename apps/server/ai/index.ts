@@ -34,6 +34,7 @@ export type ChatTurn = { role: "user" | "assistant"; content: string };
 const MAX_STEPS = 6;        // araç turu üst sınırı (sonsuz döngü / kota yakma koruması)
 const MAX_PENDING = 12;     // tek istekte planlanabilecek işlem sayısı
 const MAX_HISTORY = 20;     // istemciden gelen geçmişte tutulan tur sayısı
+const HISTORY_PLANS = 5;    // "Asistanın uyguladıkları" listesinde gösterilen plan sayısı
 
 const toolDefs = (): ToolDef[] => [
   ...READ_TOOLS.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })),
@@ -297,7 +298,7 @@ export function mountAi(api: any, deps: { invoke: Invoke; rateLimited: RateLimit
               COUNT(*) FILTER (WHERE undone_at IS NULL)::int AS undoable,
               (array_agg(summary ORDER BY id))[1] AS summary
          FROM ai_actions WHERE user_id=?
-        GROUP BY plan_id ORDER BY MIN(id) DESC LIMIT 10`,
+        GROUP BY plan_id ORDER BY MIN(id) DESC LIMIT ${HISTORY_PLANS}`,
       c.get("user").id,
     );
     return c.json({ plans: rows.map((r) => ({ planId: r.plan_id, at: r.at, total: r.total, undoable: r.undoable, summary: r.summary })) });
