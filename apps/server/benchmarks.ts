@@ -1,5 +1,5 @@
 import { db } from "./db.js";
-import { yahooHistory } from "./prices.js";
+import { yahooHistory, backfillPriceHistory } from "./prices.js";
 
 /* ————— REFERANS ENDEKSLER (Faz 27) —————
    "Portföyüm %8 kazandı" tek başına bir şey söylemez — aynı dönemde BIST %20 kazandıysa
@@ -74,4 +74,42 @@ export async function refreshBenchmarks(range = "1d"): Promise<{ key: string; da
     out.push({ key: b.key, days: rows.length });
   }
   return out;
+}
+
+/* ————— OTOMATİK BAKIM (Faz 27) —————
+   Backfill'i elle çağrılan bir uçta bırakmak sessiz bir tuzaktı: sunucuya kurunca grafik yine
+   kısa başlar, referans çipleri hiç görünmez (veri yokken çip basılmıyor) ve "özellik gelmemiş"
+   sanılırdı. Bu yüzden açılışta ve günlük işte kendi kendine tamamlanır.
+
+   İki ayrı boşluk, iki ayrı ölçüt:
+   - REFERANSLAR: tablo boşsa/sığsa (<60 gün) 2 yıl, doluysa 5 gün (tatil/kapalı kalma boşluğu).
+   - TUTULAN SEMBOLLER: `settings.backfilled_symbols` listesinde OLMAYANLAR doldurulur. Tek bir
+     "yapıldı" bayrağı yetmezdi — sonradan alınan bir hisse listeye girmez, geçmişi kısa kalır
+     ve sebebi görünmezdi. Liste sayesinde yalnız YENİ semboller çekilir (boşsa hiç istek yok). */
+
+const SYMS_KEY = "backfilled_symbols";
+
+export async function autoBackfill(): Promise<{ benchmarks: number; symbols: string[] }> {
+  const covered = await db.get<{ n: number }>("SELECT count(DISTINCT date)::int AS n FROM benchmark_history");
+  const benchRange = (covered?.n ?? 0) < 60 ? "2y" : "5d";
+  const bench = await refreshBenchmarks(benchRange);
+
+  const held = await db.all<{ asset_type: string; symbol: string }>(
+    "SELECT DISTINCT asset_type, symbol FROM trades WHERE asset_type IN ('BIST','ETF','KRIPTO','DOVIZ')",
+  );
+  const rawList = (await db.get<{ value: string }>("SELECT value FROM settings WHERE key=?", SYMS_KEY))?.value ?? "";
+  const done = new Set(rawList.split(",").filter(Boolean));
+  const missing = held.filter((h) => !done.has(`${h.asset_type}:${h.symbol}`));
+  if (missing.length) {
+    /* backfillPriceHistory tutulan TÜM sembolleri tazeler; yeni sembol varsa hepsini yeniden
+       çekmek 8-10 istek eder ve idempotenttir (upsert) — ayrı bir "yalnız şunlar" yolu açmaya
+       değmez. Liste ancak başarıdan SONRA yazılır: hata olursa bir dahaki sefere tekrar denenir. */
+    await backfillPriceHistory("2y");
+    for (const h of held) done.add(`${h.asset_type}:${h.symbol}`);
+    await db.run(
+      "INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT (key) DO UPDATE SET value=excluded.value",
+      SYMS_KEY, [...done].join(","),
+    );
+  }
+  return { benchmarks: bench.reduce((n, b) => n + b.days, 0), symbols: missing.map((m) => `${m.asset_type}:${m.symbol}`) };
 }

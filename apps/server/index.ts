@@ -8,7 +8,7 @@ import cron from "node-cron";
 import { txShares, keyOf, cashDelta, statementAmount, REC_AMOUNT_BEGIN, type Card, type CardTx, type TradeSide } from "@finans/engine";
 import { db, initDb, nowLocal, todayLocal, TENANT_TABLES, GLOBAL_SETTING_KEYS, type TxClient } from "./db.js";
 import { refreshAll, backfillPriceHistory } from "./prices.js";
-import { refreshBenchmarks } from "./benchmarks.js";
+import { refreshBenchmarks, autoBackfill } from "./benchmarks.js";
 import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, purgeStaleEmailTokens, SESSION_COOKIE, type SessionUser } from "./auth.js";
 import { sendMail, resetEmail, verifyEmail, mailConfigured, verifyMailConfig, mailFromWarning } from "./mail.js";
 import { mountAi, type Invoke } from "./ai/index.js";
@@ -1229,6 +1229,13 @@ mountAi(api, { invoke, rateLimited });
 
 app.route("/api", api);
 
+/* Yasal sayfalar (Faz 27) — GUARD'IN DIŞINDA ve SPA'nın dışında bilinçli olarak duruyorlar:
+   gizlilik politikası giriş yapmadan okunabilmeli (Google OAuth doğrulaması da anonim olarak
+   çeker). Uzantısız temiz URL için açık rota şart: aşağıdaki `serveStatic({root})` "/gizlilik"
+   diye bir dosya bulamaz ve istek catch-all'a düşüp index.html (SPA) döndürürdü. */
+app.get("/gizlilik", serveStatic({ path: "../web/dist/gizlilik.html" }));
+app.get("/kosullar", serveStatic({ path: "../web/dist/kosullar.html" }));
+
 /* prod: derlenmiş arayüzü sun (apps/web/dist) — pnpm bu paketi kendi dizininden
    çalıştırdığı için yol apps/server'a göre relatif */
 app.use("/*", serveStatic({ root: "../web/dist" }));
@@ -1294,9 +1301,13 @@ const runScheduledJobs = () => {
   purgeStaleEmailTokens().catch(() => {}); // tüketilmiş/süresi geçmiş aktivasyon-sıfırlama token'ları
 };
 
-/* Referans endeksler günde bir yeter (günlük kapanış) ve 5 günlük pencereyle çekilir:
-   uygulama birkaç gün kapalı kaldıysa (Render uykusu, deploy) boşluk kendiliğinden kapansın. */
-cron.schedule("20 3 * * *", () => { refreshBenchmarks("5d").catch((e) => console.warn("[benchmark] tazeleme hatası:", e)); });
+/* Piyasa geçmişi bakımı günde bir: referansları tazeler ve YENİ alınan sembollerin geçmişini
+   doldurur (bkz. autoBackfill). Boşluk yoksa istek de yok. */
+cron.schedule("20 3 * * *", () => {
+  autoBackfill()
+    .then((r) => { if (r.symbols.length) console.log(`[backfill] yeni sembol dolduruldu: ${r.symbols.join(", ")}`); })
+    .catch((e) => console.warn("[backfill] günlük bakım hatası:", e));
+});
 cron.schedule("*/15 * * * *", runScheduledJobs);
 
 /* ---- uyanık tutma (Faz 23) ----
@@ -1339,6 +1350,13 @@ if (!getProvider()) console.warn("[ai] Asistan kapalı — AI_API_KEY (ve gereki
 else console.log(`[ai] Asistan hazır: ${getProvider()!.label}`);
 if (isProd && !process.env.APP_URL) console.warn("[auth] UYARI: prod'da APP_URL ayarlanmadı — aktivasyon/şifre-sıfırlama linkleri istek host'undan türetilir; güvenilir sabit URL için APP_URL env'ini ayarla.");
 serve({ fetch: app.fetch, port }, () => console.log(`finans → http://localhost:${port}`));
+
+/* Açılışta bir kez, SUNUMU BLOKLAMADAN: yeni bir sunucuya kurulduğunda (boş Neon) fiyat geçmişi
+   ve referanslar kendiliğinden 2 yıl geriye dolsun. Elle bir uç çağırmayı beklemek, özelliğin
+   "gelmemiş" görünmesi demekti. İş bittiyse (bayrak + dolu tablo) ikinci çalıştırmada istek atmaz. */
+autoBackfill()
+  .then((r) => console.log(`[backfill] hazır — referans ${r.benchmarks} satır${r.symbols.length ? `, yeni sembol: ${r.symbols.join(", ")}` : ""}`))
+  .catch((e) => console.warn("[backfill] açılış bakımı başarısız (grafik kısa kalır):", e));
 
 /* Başlangıç catch-up'ı: Render free tier trafik yokken süreci uyutur; uyanışta node-cron ilk 15-dk
    tıkına dek beklerdi → kullanıcı bayat fiyat/işlenmemiş otonom kalem görürdü. Sunar sunmaz bir kez
