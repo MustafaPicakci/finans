@@ -38,6 +38,11 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ["**/*.{js,css,html,svg,png,ico}"],
+        /* Yasal sayfalar SPA değildir; servis çalışanının varsayılan navigasyon yedeği bu
+           adreslere de index.html döndürür ve sayfa yerine uygulama açılır. Bir kez PWA'yı
+           yüklemiş kullanıcıda (ve Google'ın bağlantıyı denetlediği tarayıcıda) gizlilik
+           politikası görünmez olurdu — denylist ile navigasyonu ağa bırak. */
+        navigateFallbackDenylist: [/^\/gizlilik$/, /^\/kosullar$/],
         /* /api/all: önce ağ dene, olmazsa son başarılı kopyayı göster — offline'da salt-okunur görünüm.
            Timeout 30sn: Render ücretsiz katmanı atıllıkta uyur, soğuk başlangıç 30-60sn sürebilir;
            kısa timeout (eski 5sn) mutasyon sonrası ESKİ anlık görüntüyü sessizce gösteriyordu.

@@ -38,9 +38,34 @@ Kayıt herkese açıktır ve **e-posta doğrulaması zorunludur**:
 - **Sonraki kullanıcılar**: kayıt sonrası e-postalarına gönderilen aktivasyon bağlantısına tıklamalıdır; doğrulanana kadar giriş engellenir. Bağlantı gelmediyse giriş ekranından **"Doğrulama e-postasını tekrar gönder"** ile yenisi istenebilir (24 saat geçerli).
 - Her kullanıcının verisi `user_id` ile izole; piyasa fiyatları (`prices`) global paylaşılır.
 
-> **Önemli:** Çok-kullanıcı için **çalışan SMTP** şarttır (`apps/server/.env.example`'daki `SMTP_HOST/PORT/USER/PASS` + `APP_URL`). SMTP yapılandırılmazsa aktivasyon e-postası gönderilemez ve owner dışındaki kullanıcılar giriş yapamaz (uygulama açılışta uyarı loglar). Geliştirmede SMTP boşsa aktivasyon bağlantısı sunucu konsoluna yazılır.
->
-> **Prod'da Gmail SMTP yeterli değil:** Gmail gönderimi kabul etse de (`250 OK`), aktivasyon postası "hesabını aktive et + buton + başka siteye link" kalıbında olduğundan alıcı sunucular tarafından phishing sayılıp sessizce düşürülebilir — pratikte kurumsal alan adlarına ulaşmadı. Gerçek kullanıcı almadan önce bir transactional sağlayıcıya geç (**Resend / Brevo / Postmark**), kendi domain'ini doğrula (**SPF + DKIM**, tercihen DMARC) ve `MAIL_FROM`'u o domain'den ver (`no-reply@<domain>`). Kod değişmez — [mail.ts](apps/server/mail.ts) generic SMTP olduğu için yalnız env değişir.
+> **Önemli:** Çok-kullanıcı için **çalışan bir e-posta yolu** şarttır (+ `APP_URL`). Yapılandırılmazsa aktivasyon e-postası gönderilemez ve owner dışındaki kullanıcılar giriş yapamaz (uygulama açılışta uyarı loglar). Geliştirmede yol boşsa aktivasyon bağlantısı sunucu konsoluna yazılır.
+
+### E-posta gönderim yolu (Faz 28)
+
+Yol **açıkça** seçilir: `MAIL_PROVIDER` = `smtp` (varsayılan) · `gmail` · `resend`. Seçilen yolun env'leri eksikse sunucu açılışta hangi değişkenin eksik olduğunu söyler. Ayrıntılı env örnekleri: [`apps/server/.env.example`](apps/server/.env.example).
+
+| Yol | Port | Domain ister mi | Kime ulaşır |
+|---|---|---|---|
+| `smtp` | 587/465 | hayır | herkese — **ama PaaS'te port kapalı olabilir** |
+| `gmail` | 443 | hayır | herkese |
+| `resend` | 443 | evet (domainsiz kullanılabilir ama…) | domain varsa herkese; **yoksa yalnız kendi adresine** |
+
+> **PaaS'te SMTP çalışmaz — bu bir ayar hatası değildir.** Render, **ücretsiz** web servislerinde giden SMTP portlarını (25/465/587) Eylül 2025'ten beri engelliyor (port 25 tüm planlarda kapalı, EC2 üzerinde çalıştıkları için). Log'da yalnız `connection timeout` görünür ve saatlerce parola/host denenir — hiçbiri çözmez. Kod bu ipucunu artık açıkça loglar. Çözüm: `MAIL_PROVIDER=gmail` ya da `resend` (ikisi de 443), veya ücretli Render planı (465/587 açılır).
+
+**Hangisini seçmeli:**
+
+- **Kendi domain'in varsa → `resend`.** En iyi teslim edilebilirlik. Domain'i Resend'de doğrula (DKIM + SPF, tercihen DMARC), `MAIL_FROM="Finans <no-reply@<domain>>"` ver. Ücretsiz katman 3.000 posta/ay, 100/gün.
+- **Domain'in yoksa → `gmail`.** Posta Google'ın kendi sunucusundan çıkar, DKIM/SPF hizalanır, **herkese ulaşır**. Kurulum: [`scripts/gmail-token.mjs`](apps/server/scripts/gmail-token.mjs) başındaki yorum → `pnpm --filter @finans/server gmail-token`.
+  - Yetki `gmail.send` ile sınırlıdır: uygulama posta kutusunu **okuyamaz**. Uygulama parolasından (tüm kutuya SMTP+IMAP erişimi) daha dar bir yetkidir.
+  - ⚠️ OAuth ekranını Google Cloud'da **"In Production"a al**. "Testing"de kalırsa Google refresh token'ı **7 günde bir** iptal eder ve gönderim sessizce durur. Yayınlamak, doğrulanmış bir domain üzerinde ana sayfa + gizlilik politikası + kullanım koşulları ister (uygulama bu iki sayfayı `/gizlilik` ve `/kosullar` adreslerinde sunar).
+  - ⚠️ Bedeli: şahsi adresin kaydolan herkese görünür, günlük sınır 500 alıcı, ve şahsi Gmail transactional gönderim için tasarlanmadığından hesap işaretlenebilir.
+- **`resend`'i domainsiz kullanma tuzağı:** `MAIL_FROM` boşken Resend'in paylaşımlı test göndereni (`onboarding@resend.dev`) devreye girer ve postalar **yalnız Resend hesabının kendi adresine** ulaşır. Şifre sıfırlama için yeter, **başka kullanıcıyı aktive etmeye yetmez** — "çalışıyor" görünüp çok-kullanıcılı akışı sessizce bozar. Uygulama bunu açılışta uyarı olarak söyler.
+
+> **Şahsi Gmail'den gönderimin bilinen riski:** aktivasyon postası "hesabını aktive et + buton + başka siteye link" kalıbında olduğundan alıcı sunucular phishing sayıp sessizce düşürebilir — pratikte kurumsal bir alan adına ulaşmadı. Gerçek kullanıcı almadan önce kendi domain'ine geçmek en sağlamı; kod değişmez, yalnız `MAIL_PROVIDER` + `MAIL_FROM` değişir.
+
+### Yasal sayfalar (Faz 28)
+
+`/gizlilik` ve `/kosullar` — [`apps/web/public/`](apps/web/public/) altında duran, React'ten bağımsız statik sayfalar. **Auth guard'ının dışındadırlar**: gizlilik politikası giriş yapmadan okunabilmeli (Google OAuth doğrulaması da anonim çeker). Temiz URL için [index.ts](apps/server/index.ts)'te açık rota tanımlıdır — `serveStatic({root})` uzantısız yolu bulamaz ve istek SPA catch-all'una düşerdi. Ayrıca `navigateFallbackDenylist` ile service worker'ın bu adreslere `index.html` döndürmesi engellenir (yoksa PWA yüklemiş kullanıcıda sayfalar görünmez olurdu).
 
 ## Canlı fiyat kaynakları ve dürüst kısıtlar
 

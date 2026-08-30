@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gizlilik Politikası — Finans</title>
+<meta name="description" content="Finans kişisel finans panelinin hangi veriyi topladığı, nasıl sakladığı ve kullanıcının bu veri üzerindeki hakları.">
+<style>
+  :root{--bg:#fff;--fg:#0D1322;--muted:#5a6478;--line:#e4e7ee;--accent:#5B4DFF;--card:#f7f8fa}
+  @media (prefers-color-scheme:dark){
+    :root{--bg:#0D0D11;--fg:#e8eaf0;--muted:#9aa3b5;--line:#22242e;--accent:#8f85ff;--card:#15161d}
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:16px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
+  .wrap{max-width:760px;margin:0 auto;padding:32px 20px 72px}
+  a{color:var(--accent)}
+  h1{font-size:26px;margin:0 0 4px}
+  h2{font-size:18px;margin:36px 0 10px;padding-top:18px;border-top:1px solid var(--line)}
+  h2:first-of-type{border-top:0;padding-top:0}
+  .lead{color:var(--muted);margin:0 0 28px;font-size:14px}
+  .brand{font-weight:700;font-size:15px;margin-bottom:22px}
+  ul{padding-left:20px}
+  li{margin:6px 0}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:15px;display:block;overflow-x:auto}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-weight:600;white-space:nowrap}
+  .box{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:16px 0}
+  footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);color:var(--muted);font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">₺ finans</div>
+  <h1>Gizlilik Politikası</h1>
+  <p class="lead">Son güncelleme: 30 Ağustos 2026</p>
+
+  <p>Finans, kişisel finans takibi için yapılmış bir web uygulamasıdır. Bu sayfa, uygulamanın
+  hangi verileri topladığını, bunları nerede sakladığını, kimlerle paylaştığını ve bu veriler
+  üzerindeki haklarını anlatır. Uygulamayı kullanarak burada anlatılanları kabul etmiş olursun.</p>
+
+  <h2>1. Toplanan veriler</h2>
+  <table>
+    <tr><th>Veri</th><th>Neden</th></tr>
+    <tr><td>E-posta adresin</td><td>Hesabının kimliği; giriş, hesap aktivasyonu ve şifre sıfırlama için</td></tr>
+    <tr><td>Parolan</td><td>Yalnızca <strong>scrypt</strong> ile geri döndürülemez biçimde özetlenmiş (hash) hâlde saklanır. Parolanın kendisi hiçbir zaman kaydedilmez.</td></tr>
+    <tr><td>Girdiğin finansal kayıtlar</td><td>Uygulamanın işlevi: hesaplar ve bakiyeler, gelir/gider işlemleri, kredi kartı harcamaları, krediler, mevduatlar, düzenli gelir-giderler, hesaplar arası virmanlar, portföy işlemleri</td></tr>
+    <tr><td>Oturum kaydı</td><td>Giriş yaptığında sunucuda tutulan oturum jetonu (30 gün geçerli, çıkış yapınca iptal edilir)</td></tr>
+  </table>
+
+  <div class="box">
+    <strong>Toplamadıklarımız:</strong> Uygulama banka hesaplarına bağlanmaz, banka kimlik
+    bilgilerini istemez ve saklamaz. Tüm finansal kayıtlar senin elle girdiğin ya da yapıştırdığın
+    verilerdir. Reklam ağı, izleme pikseli veya analitik izleyicisi kullanılmaz. Konum, rehber ve
+    cihaz tanımlayıcısı toplanmaz.
+  </div>
+
+  <h2>2. Çerezler</h2>
+  <p>Yalnızca <strong>oturum çerezi</strong> kullanılır — giriş yapmış olduğunu hatırlamak için.
+  Reklam veya izleme çerezi yoktur. Ayrıca bazı görüntü tercihleri (tema, seçili para birimi,
+  asistan sohbeti) yalnızca <strong>kendi tarayıcının belleğinde</strong> (localStorage) tutulur;
+  sunucuya gönderilmez. Asistan sohbeti çıkış yaptığında tarayıcından silinir.</p>
+
+  <h2>3. Verinin saklandığı yer</h2>
+  <p>Veriler PostgreSQL veri tabanında, uygulamanın barındırıldığı bulut sağlayıcısında saklanır.
+  Aktarım HTTPS ile şifrelenir. Her kullanıcının verisi veri tabanı düzeyinde kendi hesabına
+  bağlıdır; bir kullanıcı başka bir kullanıcının kayıtlarını göremez.</p>
+
+  <h2>4. Üçüncü taraflarla paylaşım</h2>
+  <p>Kişisel verilerin satılmaz, kiralanmaz, pazarlama amacıyla paylaşılmaz. Yalnızca uygulamanın
+  çalışması için gereken şu servislere, gereken en az veri gider:</p>
+  <table>
+    <tr><th>Servis</th><th>Giden veri</th></tr>
+    <tr><td>Bulut barındırma ve veri tabanı</td><td>Uygulamanın tüm verisi (barındırma sağlayıcısı olarak)</td></tr>
+    <tr><td>E-posta sağlayıcısı</td><td>E-posta adresin ve gönderilen mesajın içeriği — yalnız aktivasyon ve şifre sıfırlama postaları için</td></tr>
+    <tr><td>Fiyat sağlayıcıları</td><td>Yalnızca <strong>varlık sembolleri</strong> (ör. THYAO, BTC). Kim olduğun, kaç adet tuttuğun veya bakiyen gönderilmez.</td></tr>
+    <tr><td>Yapay zekâ sağlayıcısı <em>(yalnız Asistan sekmesini kullanırsan)</em></td><td>Yazdığın mesaj ve tanım kayıtların (hesap/kart/kategori/portföy adları, tutulan semboller). Sorduğun soruya göre ilgili işlem kayıtların da gönderilebilir. Asistanı hiç kullanmazsan bu servise hiçbir veri gitmez.</td></tr>
+  </table>
+  <p>Ayrıca yasal bir yükümlülük doğduğunda (mahkeme kararı vb.) veri paylaşılabilir.</p>
+
+  <h2>5. Google hesabı erişimi</h2>
+  <p>Uygulama, e-posta gönderimi için uygulama sahibinin Google hesabını
+  <strong><code>gmail.send</code></strong> yetkisiyle kullanabilir. Bu yetki <strong>yalnızca posta
+  göndermeye</strong> izin verir. Uygulama hiçbir Gmail iletisini <strong>okuyamaz</strong>,
+  listeleyemez, değiştiremez veya silemez; bu yetkiler hiç istenmemiştir. Bu erişim yalnızca
+  aktivasyon ve şifre sıfırlama postalarını göndermek için kullanılır, başka hiçbir amaçla
+  kullanılmaz ve üçüncü taraflara aktarılmaz.</p>
+  <p>Google API'lerinden alınan bilgilerin kullanımı,
+  <a href="https://developers.google.com/terms/api-services-user-data-policy" rel="noopener">Google API Hizmetleri Kullanıcı Verileri Politikası</a>'na
+  ve onun Sınırlı Kullanım gerekliliklerine uygundur.</p>
+
+  <h2>6. Saklama süresi</h2>
+  <p>Verilerin, sen hesabını silene kadar saklanır. Hesabını sildiğinde tüm kayıtların
+  veri tabanından kalıcı olarak kaldırılır; bu işlem geri alınamaz. Oturumlar 30 gün sonra
+  kendiliğinden geçersiz olur. E-posta doğrulama ve şifre sıfırlama bağlantıları sırasıyla
+  24 saat ve 1 saat sonra geçersizleşir.</p>
+
+  <h2>7. Haklarının uygulamadaki karşılığı</h2>
+  <p>KVKK kapsamındaki haklarını uygulama içinden, kimseye başvurmadan kullanabilirsin.
+  <strong>Hesabım</strong> sayfasında:</p>
+  <ul>
+    <li><strong>Verilerimi indir</strong> — tüm kayıtlarını makine okunur biçimde dışa aktarır (erişim ve taşınabilirlik hakkı).</li>
+    <li><strong>Hesabımı sil</strong> — parola onayıyla hesabını ve bağlı tüm verini kalıcı olarak siler (silme hakkı).</li>
+    <li>Her kaydı uygulama içinden düzeltebilir veya silebilirsin (düzeltme hakkı).</li>
+  </ul>
+
+  <h2>8. Güvenlik</h2>
+  <p>Parolalar scrypt ile özetlenir, karşılaştırma sabit zamanlıdır. Tüm veri uçları oturum
+  denetiminin arkasındadır. Giriş denemeleri ve API istekleri hız sınırlamasına tabidir.
+  Bağlantı HTTPS ile şifrelenir; güvenlik başlıkları ve içerik güvenliği politikası uygulanır.
+  Yine de hiçbir sistem mutlak güvenlik sunamaz; hassas verilerini girerken bunu göz önünde bulundur.</p>
+
+  <h2>9. Çocuklar</h2>
+  <p>Uygulama 18 yaşından küçüklere yönelik değildir ve bilerek onlardan veri toplamaz.</p>
+
+  <h2>10. Değişiklikler</h2>
+  <p>Bu politika değişirse bu sayfadaki "son güncelleme" tarihi yenilenir. Önemli değişikliklerde
+  kayıtlı kullanıcılara e-posta ile bilgi verilir.</p>
+
+  <h2>11. İletişim</h2>
+  <p>Verilerinle ilgili her soru ve talep için: <strong>[İLETİŞİM E-POSTASI]</strong></p>
+
+  <footer>
+    <a href="/">← Uygulamaya dön</a> · <a href="/kosullar">Kullanım Koşulları</a>
+  </footer>
+</div>
+</body>
+</html>
