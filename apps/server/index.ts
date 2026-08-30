@@ -8,7 +8,7 @@ import cron from "node-cron";
 import { txShares, keyOf, cashDelta, statementAmount, REC_AMOUNT_BEGIN, type Card, type CardTx, type TradeSide } from "@finans/engine";
 import { db, initDb, nowLocal, todayLocal, TENANT_TABLES, GLOBAL_SETTING_KEYS, type TxClient } from "./db.js";
 import { refreshAll } from "./prices.js";
-import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, SESSION_COOKIE, type SessionUser } from "./auth.js";
+import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, purgeStaleEmailTokens, SESSION_COOKIE, type SessionUser } from "./auth.js";
 import { sendMail, resetEmail, verifyEmail, mailConfigured, verifyMailConfig, mailFromWarning } from "./mail.js";
 import { mountAi, type Invoke } from "./ai/index.js";
 import { getProvider } from "./ai/provider.js";
@@ -1267,6 +1267,7 @@ const runScheduledJobs = () => {
   refreshAll().catch(() => {});
   materializeDueRecurring().catch(() => {});
   materializeDueStatements().catch(() => {});
+  purgeStaleEmailTokens().catch(() => {}); // tüketilmiş/süresi geçmiş aktivasyon-sıfırlama token'ları
 };
 cron.schedule("*/15 * * * *", runScheduledJobs);
 
@@ -1292,6 +1293,11 @@ if (isProd && keepaliveUrl) {
 const port = Number(process.env.PORT || 8787);
 /* şema hazır olsun, sonra sun */
 await initDb();
+/* Token'lar artık hash'li saklanıyor; açılıştaki bu temizlik hem tabloyu küçük tutar hem de
+   hash'lemeden önce yazılmış eski DÜZ METİN satırları (artık eşleşmiyorlar) diskten siler. */
+await purgeStaleEmailTokens()
+  .then((n) => { if (n) console.log(`[auth] ${n} eski e-posta token'ı temizlendi`); })
+  .catch((e) => console.warn("[auth] token temizliği başarısız:", e));
 /* E-posta yapılandırması açılışta kontrol edilir (Faz 19): bozuk SMTP ayarı ilk kayıt denemesinde
    değil, ilk saniyede belli olsun — "kimse aktivasyon alamıyor" sessizce keşfedilecek bir durum
    olmamalı. Hiçbiri bloklamaz, yalnız loglar. */

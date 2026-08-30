@@ -68,7 +68,14 @@ export async function revokeUserSessions(userId: number): Promise<void> {
   await db.run("DELETE FROM sessions WHERE user_id = ?", userId);
 }
 
-/* ---- e-posta token'ları (Faz 6: aktivasyon + şifre sıfırlama) ---- */
+/* ---- e-posta token'ları (Faz 6: aktivasyon + şifre sıfırlama) ----
+   Oturumlarla AYNI kural: DB'de yalnız SHA-256 hash'i durur, ham token yalnız e-postadaki
+   bağlantıda taşınır. Sebebi tek cümleyle: bir 'reset' token'ı geçerli olduğu sürece PAROLANIN
+   YERİNE geçer — DB'yi okuyabilen biri (dump, yedek, sağlayıcı konsolu) onu kopyalayıp
+   /?reset=<token> ile hesabı devralabilirdi, scrypt'i hiç kırmadan. E-postanın gönderilip
+   gönderilmemesi bu riski değiştirmez: token gönderimden ÖNCE ve gönderim başarısız olsa da
+   yazılır (index.ts /auth/forgot), üstelik kimse tıklamadığı için süresi dolana dek used=false
+   bekler. Ham token 32 bayt rastgele olduğundan hash öncesi ayrıca salt gerekmez. */
 export type EmailTokenKind = "verify" | "reset";
 
 export async function createEmailToken(userId: number, kind: EmailTokenKind, ttlMs: number): Promise<string> {
@@ -77,18 +84,30 @@ export async function createEmailToken(userId: number, kind: EmailTokenKind, ttl
   const expires = new Date(now.getTime() + ttlMs);
   await db.run(
     "INSERT INTO email_tokens (token, user_id, kind, expires_at, used, created_at) VALUES (?,?,?,?,?,?)",
-    token, userId, kind, expires.toISOString(), false, now.toISOString(),
+    hashToken(token), userId, kind, expires.toISOString(), false, now.toISOString(),
   );
-  return token;
+  return token; // ham token → yalnız e-posta bağlantısına
 }
 
 /** Token'ı doğrular ve TÜKETİR (tek kullanımlık); geçerliyse user_id, değilse null döner. */
 export async function consumeEmailToken(token: string, kind: EmailTokenKind): Promise<number | null> {
   if (!token) return null;
+  const th = hashToken(token);
   const row = await db.get<{ user_id: number; expires_at: string; used: boolean }>(
-    "SELECT user_id, expires_at, used FROM email_tokens WHERE token = ? AND kind = ?", token, kind,
+    "SELECT user_id, expires_at, used FROM email_tokens WHERE token = ? AND kind = ?", th, kind,
   );
   if (!row || row.used || row.expires_at <= new Date().toISOString()) return null;
-  await db.run("UPDATE email_tokens SET used = true WHERE token = ?", token);
+  await db.run("UPDATE email_tokens SET used = true WHERE token = ?", th);
   return row.user_id;
+}
+
+/** Tüketilmiş/süresi geçmiş token satırlarını siler. İki işi var: (1) tablo sonsuza dek büyümesin,
+ *  (2) hash'lemeden ÖNCE yazılmış eski HAM token satırları temizlensin — onlar artık hash ile
+ *  aranacağı için zaten eşleşmez (yani geçersiz), ama düz metin olarak durmalarının bir faydası yok.
+ *  İdempotent; açılışta bir kez ve zamanlanmış işlerde çağrılır. */
+export async function purgeStaleEmailTokens(): Promise<number> {
+  const r = await db.run(
+    "DELETE FROM email_tokens WHERE used = true OR expires_at <= ?", new Date().toISOString(),
+  );
+  return r.changes;
 }
