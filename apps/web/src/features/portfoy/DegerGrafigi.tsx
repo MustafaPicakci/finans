@@ -127,6 +127,9 @@ export function DegerGrafigi({ trades, priceHistory, benchmarks = [], rates, ccy
   const up = (d?.value ?? 0) >= 0;
   const gainUp = (d?.gain ?? 0) >= 0;
   const twrPct = twr.at(-1)?.value ?? null;
+  /* Kuruş altı hareketi "para yatırdın" diye göstermemek için eşik: rakam zaten tam sayı yazılıyor.
+     Sıfır olması bir kusur DEĞİL — dönemde alım-satım yapmadıysan değişimin tamamı kârdır. */
+  const noFlow = Math.abs(d?.contributed ?? 0) < 0.5;
 
   const emptyHint = all.length === 0
     ? "Fiyat geçmişi birikince burada bir grafik görünecek — fiyatları birkaç gün yeniledikçe dolar."
@@ -209,7 +212,11 @@ export function DegerGrafigi({ trades, priceHistory, benchmarks = [], rates, ccy
       {points.length < 2 || !d ? (
         <Empty>{emptyHint}</Empty>
       ) : (<>
-        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", margin: "0 2px 10px" }}>
+        {/* Bu iki rakam SEÇİLİ DÖNEMİN farkıdır, ömür boyu toplam değil. Bunu yazmak şart:
+            dönem içinde hiç alım-satım yoksa para hareketi sıfırdır ve etiketsiz bir
+            "YATIRDIĞIN PARA ₺0", "hiç yatırım yapmamışım" diye okunuyordu. */}
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "baseline", margin: "0 2px 10px" }}>
+          <span style={{ fontSize: 10.5, color: T.mut3, letterSpacing: .3 }}>SEÇİLİ DÖNEMDE</span>
           <div>
             <div style={{ fontSize: 10.5, color: T.mut3, letterSpacing: .3 }}>KÂR / ZARAR</div>
             <div style={{ ...css.mono, fontSize: 14, fontWeight: 700, color: gainUp ? T.pos : T.neg }}>
@@ -220,10 +227,10 @@ export function DegerGrafigi({ trades, priceHistory, benchmarks = [], rates, ccy
           <div>
             {/* Etiket işarete göre değişir: negatif bir "eklenen para" okunmuyordu */}
             <div style={{ fontSize: 10.5, color: T.mut3, letterSpacing: .3 }}>
-              {d.contributed >= 0 ? "YATIRDIĞIN PARA" : "ÇEKTİĞİN PARA"}
+              {noFlow ? "PARA GİRİŞ-ÇIKIŞI" : d.contributed > 0 ? "YATIRDIĞIN PARA" : "ÇEKTİĞİN PARA"}
             </div>
             <div style={{ ...css.mono, fontSize: 14, fontWeight: 700, color: T.mut }}>
-              {fmtMoney(Math.abs(d.contributed), ccy)}
+              {noFlow ? "yok" : fmtMoney(Math.abs(d.contributed), ccy)}
             </div>
           </div>
         </div>
@@ -282,6 +289,9 @@ export function DegerGrafigi({ trades, priceHistory, benchmarks = [], rates, ccy
           (alışlar ekler; satış ve temettü çıkarır). Değer eğrisi bunun üstündeyse kârdasın, altındaysa zararda —
           yani grafiğin yükselmesi tek başına kazandığın anlamına gelmez, para da eklemiş olabilirsin.
           Dönem özetindeki <b>kâr/zarar</b> ile <b>yatırdığın/çektiğin para</b> tam olarak bu ikisini ayırır.
+          Bu iki rakam <b>seçili dönemin farkıdır</b>, ömür boyu toplam değil: o aralıkta hiç alım-satım
+          yapmadıysan para hareketi <b>yok</b> yazar ve değişimin tamamı kârdır — daha eski alımların
+          grafiğin başladığı noktaya zaten dahildir.
           <br /><br />
           <b>Getiri %</b> modunda portföy çizgisi <b>TWR</b>'dir: para ekleyip çekmenin etkisi arındırılır,
           geriye yalnız yatırım kararlarının getirisi kalır. Varlık çizgileri ise <b>saf fiyat getirisidir</b>
