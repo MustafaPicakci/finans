@@ -217,6 +217,16 @@ CREATE TABLE IF NOT EXISTS price_history (
   currency text NOT NULL DEFAULT 'TRY',
   PRIMARY KEY (symbol, asset_type, date)
 );
+/* Faz 27 — referans endeksler (BIST 100, S&P 500, NASDAQ, gram altın, USD/TRY).
+   GLOBAL ve kullanıcıdan bağımsız; hepsi TL'ye çevrilmiş halde saklanır (bkz. benchmarks.ts).
+   price_history'ye yazılmadı: AssetType kapalı bir birleşim ve TradeForm'un tür açılırını
+   besliyor — oraya "ENDEKS" eklemek S&P 500'ü alınabilir bir varlık gibi gösterirdi. */
+CREATE TABLE IF NOT EXISTS benchmark_history (
+  key text NOT NULL,
+  date text NOT NULL,
+  price double precision NOT NULL,
+  PRIMARY KEY (key, date)
+);
 /* Faz 7 — vadeli mevduat (TRY): basit faiz, yıllık oran, opsiyonel stopaj; açılışta bağlı hesaptan
    düşülebilir (account_id). user_id ikinci sorgudaki TENANT_TABLES döngüsüyle eklenir. */
 CREATE TABLE IF NOT EXISTS deposits (

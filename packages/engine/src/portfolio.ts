@@ -245,7 +245,7 @@ const RANGE_DAYS: Record<Exclude<HistoryRange, "TÜM">, number> = {
 };
 
 /** `points`'i son N güne kısar (kronolojik sırayı korur). `today` verilmezse bugün. */
-export function sliceValueHistory(points: ValuePoint[], range: HistoryRange, today = new Date()): ValuePoint[] {
+export function sliceValueHistory<P extends ValuePoint>(points: P[], range: HistoryRange, today = new Date()): P[] {
   if (range === "TÜM") return points;
   const from = new Date(today);
   from.setDate(from.getDate() - RANGE_DAYS[range]);
@@ -258,10 +258,10 @@ export function sliceValueHistory(points: ValuePoint[], range: HistoryRange, tod
  * **son** noktası alınır (kapanış mantığı). İlk ve son nokta her zaman korunur — aralık başı/sonu
  * kayarsa "dönem değişimi" yanlış çıkardı.
  */
-export function bucketValueHistory(points: ValuePoint[], maxPoints: number): ValuePoint[] {
+export function bucketValueHistory<P extends ValuePoint>(points: P[], maxPoints: number): P[] {
   if (maxPoints < 2 || points.length <= maxPoints) return points;
   const size = points.length / maxPoints;
-  const out: ValuePoint[] = [];
+  const out: P[] = [];
   for (let i = 0; i < maxPoints; i++) {
     const end = Math.min(points.length - 1, Math.floor((i + 1) * size) - 1);
     const p = points[Math.max(end, 0)];
@@ -279,46 +279,167 @@ export function historyChange(points: ValuePoint[]): { abs: number; pct: number 
   return { abs: last - first, pct: first !== 0 ? ((last - first) / Math.abs(first)) * 100 : null };
 }
 
+type DayWalk = { date: string; value: number; contributed: number; covered: boolean };
+
 /**
- * Fiyat geçmişine göre portföy değerinin gün gün seyri (TRY) — sadece en az bir sembolün
- * fiyatının kaydedildiği günler için üretilir (fiyat geçmişi birikmeden geriye dönük
- * uydurma veri yok). Her sembol için o günden önceki (dahil) en yakın bilinen fiyat
- * kullanılır (forward-fill); hiç fiyatı olmayan sembol o güne katkı vermez.
- * USD-doğal semboller **güncel** FX ile TRY'ye çevrilir (tarihsel FX tutulmuyor —
- * "geçmiş günler bugünkü kurla değerlenir", takvimdeki mevcut yaklaşımla tutarlı).
+ * Fiyat geçmişini gün gün yürür; her gün için portföy değeri (TRY), o güne dek konan net para
+ * ve kapsam bayrağını üretir. Değer grafiği ve kâr/katkı ayrışması aynı yürüyüşü paylaşır —
+ * iki kopya olsaydı biri TEMETTÜ gibi yeni bir olay türünde sessizce ayrışırdı.
+ *
+ * Her sembol için o günden önceki (dahil) en yakın bilinen fiyat kullanılır (forward-fill);
+ * fiyatı hiç bilinmeyen AÇIK pozisyon o güne 0 katkı verir ve günü `covered:false` yapar.
+ * USD-doğal semboller **güncel** FX ile TRY'ye çevrilir (tarihsel FX tutulmuyor — takvimdeki
+ * mevcut yaklaşımla tutarlı).
+ *
+ * Adet, katkı ve fiyat imleçleri gün ilerledikçe ARTIMLI güncellenir: her gün için tüm
+ * işlemleri ve fiyat geçmişini baştan taramak, geçmiş yıllar doldurulunca hissedilir olurdu.
  */
-export function portfolioValueHistory(trades: Trade[], priceHistory: PriceHistoryEntry[], rates: Rates): ValuePoint[] {
+function walkValueHistory(trades: Trade[], priceHistory: PriceHistoryEntry[], rates: Rates): DayWalk[] {
   const sortedTrades = [...trades].sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
   const curOf = new Map<string, Currency>(trades.map((t) => [`${t.asset_type}:${t.symbol}`, t.currency ?? "TRY"]));
   const histBySymbol = new Map<string, { date: string; price: number }[]>();
   priceHistory.forEach((h) => {
     const k = `${h.asset_type}:${h.symbol}`;
-    if (!histBySymbol.has(k)) histBySymbol.set(k, []);
-    histBySymbol.get(k)!.push({ date: h.date, price: h.price });
+    let arr = histBySymbol.get(k);
+    if (!arr) histBySymbol.set(k, (arr = []));
+    arr.push({ date: h.date, price: h.price });
   });
   histBySymbol.forEach((arr) => arr.sort((a, b) => a.date.localeCompare(b.date)));
 
   const dates = [...new Set(priceHistory.map((h) => h.date))].sort();
+  const qty = new Map<string, number>();
+  const cursor = new Map<string, number>(); // sembol → histBySymbol içindeki son geçerli indeks
+  let ti = 0, contributed = 0;
 
   return dates.map((date) => {
-    const qty = new Map<string, number>();
-    for (const t of sortedTrades) {
-      if (t.date > date) break;
+    for (; ti < sortedTrades.length && sortedTrades[ti].date <= date; ti++) {
+      const t = sortedTrades[ti];
       const k = `${t.asset_type}:${t.symbol}`;
       qty.set(k, (qty.get(k) || 0) + qtyDelta(t));
+      contributed += convert(-cashDelta(t), t.currency ?? "TRY", "TRY", rates);
     }
-    let value = 0;
+    let value = 0, covered = true;
     qty.forEach((q, k) => {
-      if (q <= 0) return;
+      if (q <= 0) return; // kapalı pozisyon kapsamı etkilemez
       const hist = histBySymbol.get(k);
-      if (!hist) return;
-      let price: number | null = null;
-      for (const h of hist) {
-        if (h.date > date) break;
-        price = h.price;
-      }
-      if (price != null) value += convert(q * price, curOf.get(k) ?? "TRY", "TRY", rates);
+      let i = cursor.get(k) ?? -1;
+      while (hist && i + 1 < hist.length && hist[i + 1].date <= date) i++;
+      cursor.set(k, i);
+      if (!hist || i < 0) { covered = false; return; } // fiyatı bilinmeyen AÇIK pozisyon
+      value += convert(q * hist[i].price, curOf.get(k) ?? "TRY", "TRY", rates);
     });
-    return { date, value };
+    return { date, value, contributed, covered };
   });
+}
+
+/** Portföy değerinin gün gün seyri (TRY). Kapsamı eksik günler de döner — geriye dönük
+    uyumluluk; kapsam ayrımı isteyen `portfolioValueDecomposition` + `coveredOnly` kullanır. */
+export function portfolioValueHistory(trades: Trade[], priceHistory: PriceHistoryEntry[], rates: Rates): ValuePoint[] {
+  return walkValueHistory(trades, priceHistory, rates).map(({ date, value }) => ({ date, value }));
+}
+
+/* ————— KÂR mı, PARA EKLEME mi? (Faz 27) —————
+   Değer grafiği tek başına "portföyüm 40 bin ₺ arttı" der ama bunun ne kadarının KÂR, ne
+   kadarının yeni para koymak olduğunu söylemez — grafiğe bakıp kendi performansını göremezsin.
+   Çözüm ek veri gerektirmiyor: portföye konan net para zaten `cashDelta`'nın tersidir
+   (ALIŞ hesaptan çıkar = portföye girer). Kümülatif katkı çizilince değerle arasındaki
+   boşluk doğrudan kâr/zarardır.
+
+   TEMETTÜ'nün katkıyı AZALTMASI kasıtlıdır: 100 ₺ koyup 5 ₺ temettü aldıysan ve pozisyon
+   hâlâ 100 ₺ ise net koyduğun para 95 ₺'dir, kâr 5 ₺'dir — temettü katkı sayılsaydı
+   kâr sıfır görünürdü. BEDELSİZ'de para hareketi yok, katkı değişmez. */
+
+/** Bir günün değeri, o güne dek konan net para ve ikisinin farkı (kâr/zarar). */
+export type ValueDecompPoint = ValuePoint & {
+  /** o güne dek portföye konan NET para (TRY): ALIŞ +, SATIŞ −, TEMETTÜ − */
+  contributed: number;
+  /** `value − contributed` — değerin para koymakla açıklanmayan kısmı */
+  gain: number;
+  /** o gün AÇIK olan her pozisyonun fiyatı biliniyor mu (bkz. `coveredOnly`) */
+  covered: boolean;
+};
+
+/** Değer + katkı + kâr ayrışması, gün gün. `portfolioValueHistory` ile aynı yürüyüş. */
+export function portfolioValueDecomposition(trades: Trade[], priceHistory: PriceHistoryEntry[], rates: Rates): ValueDecompPoint[] {
+  return walkValueHistory(trades, priceHistory, rates)
+    .map((d) => ({ date: d.date, value: d.value, contributed: d.contributed, gain: d.value - d.contributed, covered: d.covered }));
+}
+
+/**
+ * Kapsamı eksik günleri ATAR. Kural bilinçli: fiyatı bilinmeyen açık pozisyon o güne 0 katkı
+ * verir, yani seri portföyü olduğundan küçük gösterir. Tek bir kaynak (TEFAS) geriye
+ * doldurulamadığında bu sessiz eksiklik grafikte **sahte bir sıçramaya** dönüşür — fonların
+ * fiyatı başladığı gün toplam birden yukarı zıplar ve kâr gibi okunur. Eksik günü hiç
+ * çizmemek, yanlış çizmekten iyidir; kaç gün düştüğü arayüzde söylenir.
+ */
+export function coveredOnly(points: ValueDecompPoint[]): ValueDecompPoint[] {
+  return points.filter((p) => p.covered);
+}
+
+/* ————— ÇOKLU SERİ ve GETİRİ (%) MODU (Faz 27) —————
+   Tek eksene ₺ değeri ile endeks seviyesi konamaz (14.641 puanlık BIST ile 250.000 ₺'lik
+   portföy aynı grafikte okunmaz), bu yüzden karşılaştırma **yüzde** modunda yaşar: her seri
+   pencerenin ilk gününe göre 0'dan başlar.
+
+   İki seri türünün matematiği bilinçli olarak FARKLIDIR:
+   - Portföy → TWR (zaman ağırlıklı getiri). Basit "değer/değer" oranı, ayın ortasında para
+     eklediğinde bunu getiri gibi gösterirdi — kıyaslama anlamsızlaşırdı.
+   - Tek sembol / referans → saf FİYAT getirisi. Sembolün değer serisini yüzdeye çevirmek
+     yanlış olurdu: üstüne alım yapmak "kazanç" gibi görünürdü. */
+
+/** Bir sembolün pozisyon DEĞERİ (TRY) gün gün — ₺ modunda tek varlık çizgisi için. */
+export function symbolValueHistory(trades: Trade[], priceHistory: PriceHistoryEntry[], rates: Rates, key: string): ValuePoint[] {
+  return portfolioValueHistory(trades.filter((t) => `${t.asset_type}:${t.symbol}` === key), priceHistory, rates);
+}
+
+/** Bir sembolün ham FİYAT serisi (kendi para biriminde) — yüzde modunda rebase edilir. */
+export function symbolPriceSeries(priceHistory: PriceHistoryEntry[], key: string): ValuePoint[] {
+  return priceHistory
+    .filter((h) => `${h.asset_type}:${h.symbol}` === key)
+    .map((h) => ({ date: h.date, value: h.price }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/** Serinin ilk noktasına göre kümülatif % değişim (ilk nokta = 0). */
+export function rebasePct(points: ValuePoint[]): ValuePoint[] {
+  const base = points.find((p) => p.value !== 0)?.value;
+  if (base == null) return points.map((p) => ({ date: p.date, value: 0 }));
+  return points.map((p) => ({ date: p.date, value: (p.value / base - 1) * 100 }));
+}
+
+/**
+ * Zaman ağırlıklı getiri (TWR): para giriş/çıkışının etkisi ARINDIRILMIŞ kümülatif % getiri.
+ * Günlük getiri = (değer − o günkü net akış) / önceki değer; çarpımları zincirlenir. Böylece
+ * "ayın 15'inde 50 bin ₺ ekledim" hareketi performans gibi görünmez ve seri S&P/BIST ile
+ * gerçekten kıyaslanabilir olur. Değeri 0 olan günler zinciri kırmaz, sadece atlanır
+ * (pozisyon tamamen kapanıp yeniden açıldığında bölme tanımsız olurdu).
+ *
+ * DÜRÜST KISIT: akış, ARALIĞIN SONUNDA olmuş sayılır. Alım-satımın yapıldığı günde bir fiyat
+ * anlık görüntüsü yoksa o günün getirisi ayrı bir alt döneme bölünemez ve eklenen paranın
+ * kazancı dönem başı sermayenin getirisi gibi sayılır (testte: %21 yerine %32). `price_history`
+ * günlük yazıldığı için akış günü pratikte hemen her zaman değerlenmiştir; kısıt yine de burada.
+ */
+export function twrSeries(points: ValueDecompPoint[]): ValuePoint[] {
+  let idx = 1;
+  return points.map((p, i) => {
+    if (i > 0) {
+      const prev = points[i - 1];
+      const flow = p.contributed - prev.contributed; // o gün konan/çekilen net para
+      if (prev.value > 0) idx *= (p.value - flow) / prev.value;
+    }
+    return { date: p.date, value: (idx - 1) * 100 };
+  });
+}
+
+/** Adedi > 0 olan (yani hâlâ elde tutulan) semboller — grafikteki varlık çipleri bundan çıkar. */
+export function heldSymbols(trades: Trade[]): { key: string; symbol: string; asset_type: AssetType }[] {
+  const qty = new Map<string, number>();
+  for (const t of trades) {
+    const k = `${t.asset_type}:${t.symbol}`;
+    qty.set(k, (qty.get(k) || 0) + qtyDelta(t));
+  }
+  return [...qty.entries()]
+    .filter(([, q]) => q > 1e-9)
+    .map(([key]) => ({ key, symbol: key.split(":")[1], asset_type: key.split(":")[0] as AssetType }))
+    .sort((a, b) => a.symbol.localeCompare(b.symbol, "tr"));
 }

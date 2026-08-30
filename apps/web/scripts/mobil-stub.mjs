@@ -53,6 +53,17 @@ for (let i = 120; i >= 0; i -= 2) {
   price_history.push({ symbol: "ASELS", asset_type: "BIST", date: d(-i), price: 62 + (120 - i) * 0.16, currency: "TRY" });
   price_history.push({ symbol: "TP2", asset_type: "FON", date: d(-i), price: 1.82 + (120 - i) * 0.0018, currency: "TRY" });
 }
+/* Faz 27 referans endeksleri — hepsi TL cinsinden (sunucuda o günün kuruyla çevrilir).
+   Farklı eğimler bilinçli: grafikte serilerin ayrıştığı görülebilsin. */
+const benchmark_history = [];
+for (let i = 120; i >= 0; i -= 2) {
+  const t = 120 - i;
+  benchmark_history.push({ key: "BIST100", date: d(-i), price: 10500 + t * 24 });
+  benchmark_history.push({ key: "SP500", date: d(-i), price: 268000 + t * 900 });
+  benchmark_history.push({ key: "NASDAQ", date: d(-i), price: 915000 + t * 1800 });
+  benchmark_history.push({ key: "GRAMALTIN", date: d(-i), price: 4380 + t * 6 });
+  benchmark_history.push({ key: "USDTRY", date: d(-i), price: 41.2 + t * 0.05 });
+}
 const transactions = [
   { id: 1, date: d(-1), name: "Migros market alışverişi", amount: -1247.9, category_id: 1, account_id: 1 },
   { id: 2, date: d(-2), name: "Metro ulaşım", amount: -180, category_id: 2, account_id: 3 },
@@ -66,7 +77,7 @@ const recurring = [
   { id: 3, kind: "expense", name: "Netflix aboneliği", day: 20, from_month: null, to_month: null, account_id: null, card_id: 1, category_id: null, auto: true },
 ];
 const all = {
-  accounts, categories, cards, card_txs, trades, prices, price_history, transactions, recurring,
+  accounts, categories, cards, card_txs, trades, prices, price_history, benchmark_history, transactions, recurring,
   recurring_amounts: [
     { recurring_id: 1, from_month: "0000-01", amount: 68500 },
     { recurring_id: 2, from_month: "0000-01", amount: 24000 },

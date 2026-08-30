@@ -33,6 +33,86 @@ async function yahoo(sym: string): Promise<number | null> {
   }
 }
 
+/**
+ * Yahoo'nun GÜNLÜK GEÇMİŞİ — `yahoo()` ile aynı uç, farkı yalnız `range`. Bu yüzden geriye
+ * doldurma ayrı bir veri kaynağı/sözleşme getirmiyor: aynı format bozulursa iki fonksiyon
+ * birlikte güncellenir.
+ * `range`: "1d" (bugün), "1mo", "1y", "2y", "5y", "max". Kapanışı null olan günler (tatil,
+ * yayınlanmamış bar) atlanır.
+ */
+export async function yahooHistory(sym: string, range = "1y"): Promise<{ date: string; price: number }[]> {
+  try {
+    const r = await fetch(
+      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=${encodeURIComponent(range)}&interval=1d`,
+      { headers: UA, signal: AbortSignal.timeout(30_000) },
+    );
+    if (!r.ok) return [];
+    const j: any = await r.json();
+    const res = j?.chart?.result?.[0];
+    const ts: number[] = res?.timestamp ?? [];
+    const close: (number | null)[] = res?.indicators?.quote?.[0]?.close ?? [];
+    const out: { date: string; price: number }[] = [];
+    for (let i = 0; i < ts.length; i++) {
+      const c = close[i];
+      if (typeof c !== "number" || !isFinite(c)) continue; // tatil / eksik bar
+      const d = new Date(ts[i] * 1000);
+      const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      out.push({ date, price: c });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Elde tutulan sembollerin GEÇMİŞ fiyatlarını `price_history`'ye doldurur (Faz 27).
+ * Neden gerekti: fiyat geçmişi yalnız uygulama çalıştığı günden itibaren birikiyordu, yani
+ * değer grafiği ve getiri karşılaştırması birkaç haftalıktı — "1Y" düğmesi anlamsızdı.
+ *
+ * KAPSAM DIŞI: `FON` (TEFAS'ın aracısı günde tek gün veriyor, 1 yıl ≈ 250 çağrı = kota) ve
+ * `ALTIN` (truncgil yalnız anlık). Bu yüzden geriye doldurma portföy TOPLAMINI uzatmaz —
+ * kapsam kuralı (`coveredOnly`) fon fiyatı bilinmeyen günleri zaten elemeye devam eder.
+ * Uzayan şey tek tek SEMBOL serileri ve referans karşılaştırmasıdır.
+ *
+ * Para birimi mevcut kuralı izler: sembolün doğal birimi USD ise ham USD saklanır, TRY ise
+ * O GÜNÜN kuruyla çevrilir (bugünkü kurla çevirmek geçmişi bugüne göre yeniden yazardı).
+ */
+export async function backfillPriceHistory(range = "2y"): Promise<{ symbol: string; asset_type: string; days: number }[]> {
+  const held = await db.all<{ asset_type: string; symbol: string; currency: string }>(
+    "SELECT DISTINCT asset_type, symbol, currency FROM trades WHERE asset_type IN ('BIST','ETF','KRIPTO','DOVIZ')",
+  );
+  const fx = new Map<string, number>();
+  for (const p of await yahooHistory("USDTRY=X", range)) fx.set(p.date, p.price);
+
+  const out: { symbol: string; asset_type: string; days: number }[] = [];
+  for (const h of held) {
+    const ysym =
+      h.asset_type === "BIST" ? `${h.symbol}.IS`
+      : h.asset_type === "KRIPTO" ? `${h.symbol}-USD`
+      : h.asset_type === "DOVIZ" ? `${h.symbol}TRY=X`
+      : h.symbol; // ETF: doğrudan sembol
+    const usdNative = (h.asset_type === "KRIPTO" || h.asset_type === "ETF") && h.currency !== "USD";
+    const rows: [string, number][] = [];
+    for (const p of await yahooHistory(ysym, range)) {
+      let v = p.price;
+      if (usdNative) { // USD gelen ama TRY saklanan (eski) sembol
+        const rate = fx.get(p.date);
+        if (rate == null) continue;
+        v *= rate;
+      }
+      rows.push([p.date, v]);
+    }
+    if (rows.length) {
+      await db.tx(async (t) => {
+        for (const [date, price] of rows) await t.run(UPSERT_HISTORY, h.symbol, h.asset_type, date, price, h.currency);
+      });
+    }
+    out.push({ symbol: h.symbol, asset_type: h.asset_type, days: rows.length });
+  }
+  return out;
+}
+
 /* TEFAS'ın resmi API'si bot korumasının (F5) arkasında — bkz. docs/PLAN.md. Bunun yerine
    RapidAPI üzerindeki resmi olmayan bir aracı kullanılıyor (opsiyonel, RAPIDAPI_KEY /
    RAPIDAPI_KEY_2 gerekir). `funds/historical` (tarih aralığı) yerine `funds/returns-by-date`

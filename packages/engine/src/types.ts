@@ -1,3 +1,4 @@
+import type { BenchmarkPoint } from "./benchmarks.js";
 /** Hesap türü (Faz 16): nakit ve aracı kurum da birer hesaptır — para hiçbir noktada sistemden
     "çıkmasın" diye. ATM'den çekilen para kaybolmaz, `nakit` hesabına virmanlanır; Midas'a atılan
     para kaybolmaz, `araci` hesabına virmanlanır. Tür yalnız gruplama/ikon içindir, matematiği
@@ -68,4 +69,7 @@ export type AllData = {
   trades: Trade[]; portfolios: Portfolio[]; cards: Card[]; card_txs: CardTx[]; prices: Price[]; price_history: PriceHistoryEntry[];
   categories: Category[]; transactions: Transaction[]; deposits: Deposit[]; recurring_realized: RecurringRealized[]; statement_payments: StatementPayment[]; settings: Record<string, string>;
   recurring_amounts: RecurringAmount[]; account_entries: AccountEntry[]; transfers: Transfer[];
+  /** referans endeksler (global, TL'ye çevrilmiş) — bkz. benchmarks.ts.
+      Opsiyonel: Faz 27'den önceki bir yanıt (PWA önbelleği, eski sunucu) bu alanı taşımaz. */
+  benchmark_history?: BenchmarkPoint[];
 };

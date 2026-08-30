@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { positions, portfolioValueHistory, portfolioValueTry, convert, groupTradesByPortfolio, portfolioGroupValueTry, tradeLedger, summarizeTrades, sliceValueHistory, bucketValueHistory, historyChange, qtyDelta, cashDelta, pnlPct } from "./portfolio.js";
+import { positions, portfolioValueHistory, portfolioValueDecomposition, coveredOnly, twrSeries, rebasePct, heldSymbols, symbolPriceSeries, symbolValueHistory, portfolioValueTry, convert, groupTradesByPortfolio, portfolioGroupValueTry, tradeLedger, summarizeTrades, sliceValueHistory, bucketValueHistory, historyChange, qtyDelta, cashDelta, pnlPct } from "./portfolio.js";
 import type { Trade, Price, PriceHistoryEntry } from "./types.js";
 
 const trade = (over: Partial<Trade>): Trade => ({
@@ -177,6 +177,186 @@ describe("portfolioValueHistory", () => {
     const prices = [hist({ date: "2026-01-20", price: 130 })];
     const result = portfolioValueHistory(trades, prices, R);
     expect(result).toEqual([{ date: "2026-01-20", value: 4 * 130 }]);
+  });
+});
+
+describe("portfolioValueDecomposition — kâr mı, para ekleme mi? (Faz 27)", () => {
+  const hist = (over: Partial<PriceHistoryEntry>): PriceHistoryEntry => ({
+    symbol: "THYAO", asset_type: "BIST", date: "2026-01-01", price: 0, ...over,
+  });
+
+  it("ALIŞ katkıyı artırır; kâr = değer − katkı", () => {
+    const trades = [trade({ id: 1, date: "2026-01-01", qty: 10, price: 100 })];
+    const [d] = portfolioValueDecomposition(trades, [hist({ date: "2026-01-05", price: 120 })], R);
+    expect(d.contributed).toBe(1000);
+    expect(d.value).toBe(1200);
+    expect(d.gain).toBe(200);
+  });
+
+  it("komisyon konulan paraya dahildir (kârı azaltır)", () => {
+    const trades = [trade({ id: 1, date: "2026-01-01", qty: 10, price: 100, fee: 50 })];
+    const [d] = portfolioValueDecomposition(trades, [hist({ date: "2026-01-05", price: 120 })], R);
+    expect(d.contributed).toBe(1050);
+    expect(d.gain).toBe(150);
+  });
+
+  it("SATIŞ katkıyı azaltır — kâr, gerçekleşen + gerçekleşmeyenin toplamına eşit çıkar", () => {
+    const trades = [
+      trade({ id: 1, date: "2026-01-01", side: "ALIŞ", qty: 10, price: 100 }),
+      trade({ id: 2, date: "2026-01-15", side: "SATIŞ", qty: 6, price: 110 }),
+    ];
+    const [d] = portfolioValueDecomposition(trades, [hist({ date: "2026-01-20", price: 130 })], R);
+    expect(d.contributed).toBe(1000 - 660);
+    expect(d.value).toBe(4 * 130);
+    /* gerçekleşen 6×(110−100)=60, gerçekleşmeyen 4×(130−100)=120 → 180 */
+    expect(d.gain).toBe(180);
+  });
+
+  it("TEMETTÜ katkıyı azaltır, yani kâr olarak görünür", () => {
+    const trades = [
+      trade({ id: 1, date: "2026-01-01", side: "ALIŞ", qty: 10, price: 100 }),
+      trade({ id: 2, date: "2026-01-10", side: "TEMETTÜ", qty: 10, price: 0.5 }),
+    ];
+    const [d] = portfolioValueDecomposition(trades, [hist({ date: "2026-01-20", price: 100 })], R);
+    expect(d.contributed).toBe(995); // 1000 konuldu, 5 geri alındı
+    expect(d.value).toBe(1000);
+    expect(d.gain).toBe(5); // pozisyon başa baş; kârın tamamı temettü
+  });
+
+  it("BEDELSİZ katkıyı değiştirmez (para hareketi yok)", () => {
+    const trades = [
+      trade({ id: 1, date: "2026-01-01", side: "ALIŞ", qty: 10, price: 100 }),
+      trade({ id: 2, date: "2026-01-10", side: "BEDELSİZ", qty: 10, price: 0 }),
+    ];
+    const [d] = portfolioValueDecomposition(trades, [hist({ date: "2026-01-20", price: 60 })], R);
+    expect(d.contributed).toBe(1000);
+    expect(d.value).toBe(20 * 60);
+    expect(d.gain).toBe(200);
+  });
+
+  it("USD işlemin katkısı da TRY'ye çevrilir", () => {
+    const trades = [trade({ id: 1, date: "2026-01-01", asset_type: "ETF", symbol: "VOO", qty: 2, price: 100, currency: "USD" })];
+    const prices = [hist({ symbol: "VOO", asset_type: "ETF", date: "2026-01-05", price: 110 })];
+    const [d] = portfolioValueDecomposition(trades, prices, R);
+    expect(d.contributed).toBe(200 * 40);
+    expect(d.value).toBe(2 * 110 * 40);
+  });
+
+  it("fiyatı bilinmeyen AÇIK pozisyon o günü kapsam dışı yapar", () => {
+    const trades = [
+      trade({ id: 1, date: "2026-01-01", symbol: "THYAO", qty: 10, price: 100 }),
+      trade({ id: 2, date: "2026-01-01", symbol: "TP2", asset_type: "FON", qty: 100, price: 1 }),
+    ];
+    const prices = [
+      hist({ symbol: "THYAO", date: "2026-01-05", price: 120 }),
+      hist({ symbol: "TP2", asset_type: "FON", date: "2026-01-08", price: 1.2 }),
+    ];
+    const out = portfolioValueDecomposition(trades, prices, R);
+    expect(out.map((d) => [d.date, d.covered])).toEqual([["2026-01-05", false], ["2026-01-08", true]]);
+    /* kapsam dışı gün fonu 0 sayardı → 1200; çizilseydi 01-08'de sahte sıçrama olurdu */
+    expect(out[0].value).toBe(1200);
+    expect(coveredOnly(out).map((d) => d.date)).toEqual(["2026-01-08"]);
+  });
+
+  it("kapanmış pozisyonun fiyatı bilinmese de kapsamı bozmaz", () => {
+    const trades = [
+      trade({ id: 1, date: "2026-01-01", symbol: "ESKI", qty: 10, price: 100 }),
+      trade({ id: 2, date: "2026-01-02", symbol: "ESKI", side: "SATIŞ", qty: 10, price: 110 }),
+      trade({ id: 3, date: "2026-01-03", symbol: "THYAO", qty: 5, price: 200 }),
+    ];
+    const out = portfolioValueDecomposition(trades, [hist({ symbol: "THYAO", date: "2026-01-05", price: 220 })], R);
+    expect(out[0].covered).toBe(true);
+    expect(coveredOnly(out)).toHaveLength(1);
+  });
+
+  it("hiçbir gün tam kapsanmıyorsa coveredOnly boş döner", () => {
+    const trades = [trade({ id: 1, date: "2026-01-01", symbol: "TP2", asset_type: "FON", qty: 100, price: 1 })];
+    const out = portfolioValueDecomposition(trades, [hist({ symbol: "THYAO", date: "2026-01-05", price: 120 })], R);
+    expect(coveredOnly(out)).toEqual([]);
+  });
+});
+
+describe("çoklu seri / getiri (%) modu (Faz 27)", () => {
+  const hist = (over: Partial<PriceHistoryEntry>): PriceHistoryEntry => ({
+    symbol: "THYAO", asset_type: "BIST", date: "2026-01-01", price: 0, ...over,
+  });
+
+  it("twrSeries para eklemeyi getiri saymaz", () => {
+    const trades = [
+      trade({ id: 1, date: "2026-01-01", qty: 10, price: 100 }),
+      trade({ id: 2, date: "2026-01-02", qty: 10, price: 110 }), // ortada para EKLENDİ
+    ];
+    const prices = [
+      hist({ date: "2026-01-01", price: 100 }),
+      hist({ date: "2026-01-02", price: 110 }),
+      hist({ date: "2026-01-03", price: 121 }),
+    ];
+    const twr = twrSeries(portfolioValueDecomposition(trades, prices, R));
+    expect(twr.map((p) => Math.round(p.value * 100) / 100)).toEqual([0, 10, 21]);
+  });
+
+  it("basit değer oranı aynı veride yanıltıcıdır (TWR'nin var oluş sebebi)", () => {
+    const trades = [
+      trade({ id: 1, date: "2026-01-01", qty: 10, price: 100 }),
+      trade({ id: 2, date: "2026-01-02", qty: 10, price: 110 }),
+    ];
+    const prices = [
+      hist({ date: "2026-01-01", price: 100 }),
+      hist({ date: "2026-01-02", price: 110 }),
+      hist({ date: "2026-01-03", price: 121 }),
+    ];
+    const dec = portfolioValueDecomposition(trades, prices, R);
+    /* değer 1000 → 2420, yani "+%142" gibi görünür; oysa gerçek getiri %21 */
+    expect(rebasePct(dec).at(-1)!.value).toBeCloseTo(142, 0);
+    expect(twrSeries(dec).at(-1)!.value).toBeCloseTo(21, 6);
+  });
+
+  it("DÜRÜST KISIT: akışın olduğu günde fiyat anlık görüntüsü yoksa TWR şişer", () => {
+    const trades = [
+      trade({ id: 1, date: "2026-01-01", qty: 10, price: 100 }),
+      trade({ id: 2, date: "2026-01-02", qty: 10, price: 110 }), // bu günde price_history YOK
+    ];
+    const prices = [hist({ date: "2026-01-01", price: 100 }), hist({ date: "2026-01-03", price: 121 })];
+    const twr = twrSeries(portfolioValueDecomposition(trades, prices, R));
+    /* Ara değerleme olmadığı için eklenen 1.100 ₺'nin kazandığı 110 ₺, dönem başındaki
+       1.000 ₺'nin getirisi sayılır: %21 yerine %32. price_history günlük yazıldığından
+       pratikte akış günü neredeyse hep değerlenmiştir; kural yine de burada kayıtlı. */
+    expect(twr.at(-1)!.value).toBeCloseTo(32, 6);
+  });
+
+  it("rebasePct ilk noktayı 0 kabul eder", () => {
+    expect(rebasePct([{ date: "a", value: 50 }, { date: "b", value: 75 }, { date: "c", value: 25 }]))
+      .toEqual([{ date: "a", value: 0 }, { date: "b", value: 50 }, { date: "c", value: -50 }]);
+  });
+
+  it("symbolPriceSeries yalnız o sembolü, tarih sırasıyla verir", () => {
+    const ph = [
+      hist({ symbol: "TP2", asset_type: "FON", date: "2026-01-02", price: 2 }),
+      hist({ symbol: "THYAO", date: "2026-01-02", price: 110 }),
+      hist({ symbol: "THYAO", date: "2026-01-01", price: 100 }),
+    ];
+    expect(symbolPriceSeries(ph, "BIST:THYAO")).toEqual([
+      { date: "2026-01-01", value: 100 }, { date: "2026-01-02", value: 110 },
+    ]);
+  });
+
+  it("symbolValueHistory tek sembolün pozisyon değerini verir", () => {
+    const trades = [
+      trade({ id: 1, date: "2026-01-01", symbol: "THYAO", qty: 10, price: 100 }),
+      trade({ id: 2, date: "2026-01-01", symbol: "ASELS", qty: 5, price: 60 }),
+    ];
+    const prices = [hist({ symbol: "THYAO", date: "2026-01-05", price: 120 }), hist({ symbol: "ASELS", date: "2026-01-05", price: 70 })];
+    expect(symbolValueHistory(trades, prices, R, "BIST:THYAO")).toEqual([{ date: "2026-01-05", value: 1200 }]);
+  });
+
+  it("heldSymbols kapanmış pozisyonu listelemez", () => {
+    const out = heldSymbols([
+      trade({ id: 1, symbol: "THYAO", qty: 10, price: 100 }),
+      trade({ id: 2, symbol: "ESKI", qty: 10, price: 100 }),
+      trade({ id: 3, symbol: "ESKI", side: "SATIŞ", qty: 10, price: 120 }),
+      trade({ id: 4, symbol: "TP2", asset_type: "FON", qty: 100, price: 1 }),
+    ]);
+    expect(out.map((h) => h.key)).toEqual(["BIST:THYAO", "FON:TP2"]);
   });
 });
 

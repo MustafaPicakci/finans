@@ -231,7 +231,7 @@ export function Portfoy({ data, pos: allPos, rates, ccy, reload, onAdd }: {
 
     {/* Seçili portföyün değer seyri — aralık seçici ile (grafik grubun işlemlerinden hesaplanır) */}
     <DegerGrafigi
-      trades={selTrades} priceHistory={data.price_history} rates={rates} ccy={ccy} height={200}
+      trades={selTrades} priceHistory={data.price_history} benchmarks={data.benchmark_history} rates={rates} ccy={ccy} height={200}
       scopeLabel={sel === "all" ? null : sel === null ? "Gruplanmamış" : data.portfolios.find((p) => p.id === sel)?.name ?? null}
     />
 

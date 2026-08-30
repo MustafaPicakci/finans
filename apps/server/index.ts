@@ -7,7 +7,8 @@ import { logger } from "hono/logger";
 import cron from "node-cron";
 import { txShares, keyOf, cashDelta, statementAmount, REC_AMOUNT_BEGIN, type Card, type CardTx, type TradeSide } from "@finans/engine";
 import { db, initDb, nowLocal, todayLocal, TENANT_TABLES, GLOBAL_SETTING_KEYS, type TxClient } from "./db.js";
-import { refreshAll } from "./prices.js";
+import { refreshAll, backfillPriceHistory } from "./prices.js";
+import { refreshBenchmarks } from "./benchmarks.js";
 import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, purgeStaleEmailTokens, SESSION_COOKIE, type SessionUser } from "./auth.js";
 import { sendMail, resetEmail, verifyEmail, mailConfigured, verifyMailConfig, mailFromWarning } from "./mail.js";
 import { mountAi, type Invoke } from "./ai/index.js";
@@ -259,10 +260,17 @@ api.use("*", async (c, next) => {
   await next();
 });
 
-/* ---- tek seferde tüm veri (kullanıcıya scope'lu; prices/price_history GLOBAL) ---- */
+/** Bugünden 2 yıl öncesi (YYYY-MM-DD) — referans serilerinin gönderim penceresi. */
+function twoYearsAgo(): string {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() - 2);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/* ---- tek seferde tüm veri (kullanıcıya scope'lu; prices/price_history/benchmark_history GLOBAL) ---- */
 api.get("/all", async (c) => {
   const uid = c.get("user").id;
-  const [accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, account_entries, transfers, autoPrices, userPrices, price_history, globalSettings, userSettings] =
+  const [accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, account_entries, transfers, autoPrices, userPrices, price_history, benchmark_history, globalSettings, userSettings] =
     await Promise.all([
       db.all("SELECT * FROM accounts WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM recurring WHERE user_id=? ORDER BY day, id", uid),
@@ -297,6 +305,12 @@ api.get("/all", async (c) => {
           ORDER BY ph.date`,
         uid,
       ),
+      /* Referans endeksler GLOBAL ve KÜÇÜKTÜR (5 seri × ~500 gün) — price_history'nin aksine
+         kullanıcıya göre daraltılamaz, çünkü karşılaştırmanın anlamı zaten "tutmadığın şeye
+         göre nasılsın". Yine de 2 yılla sınırlanıyor: grafiğin en geniş penceresi 1Y. */
+      db.all<{ key: string; date: string; price: number }>(
+        "SELECT key, date, price FROM benchmark_history WHERE date >= ? ORDER BY date", twoYearsAgo(),
+      ),
       db.all<{ key: string; value: string }>("SELECT key, value FROM settings"),
       db.all<{ key: string; value: string }>("SELECT key, value FROM user_settings WHERE user_id=?", uid),
     ]);
@@ -305,7 +319,7 @@ api.get("/all", async (c) => {
   for (const up of userPrices) pm.set(`${up.asset_type}:${up.symbol}`, { ...up, source: "manual" });
   return c.json({
     accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, account_entries, transfers,
-    prices: [...pm.values()], price_history,
+    prices: [...pm.values()], price_history, benchmark_history,
     // global (fx/tefas) + kullanıcı ayarları (horizon/cash_funds); kullanıcı çakışmada kazanır
     settings: Object.fromEntries([...globalSettings, ...userSettings].map((s) => [s.key, s.value])),
   });
@@ -1095,6 +1109,16 @@ api.post("/prices/refresh", async (c) => {
   if (rateLimited(`refresh:${c.get("user").id}`, 6, 60_000)) return c.json({ error: "Çok sık yenileme, biraz bekle" }, 429);
   return c.json(await refreshAll());
 });
+/* Faz 27 — geriye doldurma: Yahoo'nun günlük geçmişinden `price_history` + referans endeksler.
+   Sık çağrılacak bir uç DEĞİL (tek seferlik / yılda bir); N sembol × 1 istek yaptığından
+   rate-limit dar tutuldu. Veri global olduğundan sonuç tüm kullanıcılara yarar. */
+api.post("/prices/backfill", async (c) => {
+  if (rateLimited(`backfill:${c.get("user").id}`, 2, 60 * 60_000)) return c.json({ error: "Geriye doldurma saatte 2 kez çalıştırılabilir" }, 429);
+  const range = String((await c.req.json().catch(() => ({})) as any)?.range ?? "2y");
+  if (!/^(1mo|3mo|6mo|1y|2y|5y|max)$/.test(range)) return c.json({ error: "geçersiz aralık" }, 400);
+  const [symbols, benchmarks] = await Promise.all([backfillPriceHistory(range), refreshBenchmarks(range)]);
+  return c.json({ ok: true, range, symbols, benchmarks });
+});
 /* elle fiyat KULLANICIYA ÖZEL (user_prices) — global otomatik fiyatı etkilemez, başka kullanıcıya sızmaz.
    Global price_history'e yazılmaz (bir kullanıcının eli global geçmişi kirletmesin). */
 api.put("/prices", async (c) => {
@@ -1269,6 +1293,10 @@ const runScheduledJobs = () => {
   materializeDueStatements().catch(() => {});
   purgeStaleEmailTokens().catch(() => {}); // tüketilmiş/süresi geçmiş aktivasyon-sıfırlama token'ları
 };
+
+/* Referans endeksler günde bir yeter (günlük kapanış) ve 5 günlük pencereyle çekilir:
+   uygulama birkaç gün kapalı kaldıysa (Render uykusu, deploy) boşluk kendiliğinden kapansın. */
+cron.schedule("20 3 * * *", () => { refreshBenchmarks("5d").catch((e) => console.warn("[benchmark] tazeleme hatası:", e)); });
 cron.schedule("*/15 * * * *", runScheduledJobs);
 
 /* ---- uyanık tutma (Faz 23) ----
