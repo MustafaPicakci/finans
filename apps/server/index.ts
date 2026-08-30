@@ -1229,7 +1229,7 @@ mountAi(api, { invoke, rateLimited });
 
 app.route("/api", api);
 
-/* Yasal sayfalar (Faz 27) — GUARD'IN DIŞINDA ve SPA'nın dışında bilinçli olarak duruyorlar:
+/* Yasal sayfalar (Faz 28) — GUARD'IN DIŞINDA ve SPA'nın dışında bilinçli olarak duruyorlar:
    gizlilik politikası giriş yapmadan okunabilmeli (Google OAuth doğrulaması da anonim olarak
    çeker). Uzantısız temiz URL için açık rota şart: aşağıdaki `serveStatic({root})` "/gizlilik"
    diye bir dosya bulamaz ve istek catch-all'a düşüp index.html (SPA) döndürürdü. */
