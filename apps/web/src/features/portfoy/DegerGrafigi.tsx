@@ -121,8 +121,28 @@ export function DegerGrafigi({ trades, priceHistory, benchmarks = [], rates, ccy
 
   /* Dönem ayrışması: değerdeki değişim = bu dönemde konan para + bu dönemde kazanılan. */
   const first = points[0], last = points.at(-1);
+  /* Rakamlar TRY hesaplanıp GÖRÜNTÜ para birimine çevrilir. Çevirmeyi atlamak, $ seçiliyken
+     TL büyüklüğünü dolar işaretiyle yazmak demekti. */
   const d = first && last
-    ? { value: last.value - first.value, contributed: last.contributed - first.contributed, gain: last.gain - first.gain }
+    ? {
+        value: toCcy(last.value - first.value),
+        contributed: toCcy(last.contributed - first.contributed),
+        gain: toCcy(last.gain - first.gain),
+      }
+    : null;
+  /* Dönem farkının yanına ÖMÜR BOYU rakam: "bu ay hareket yok" ile "hiç para koymadım"
+     karışmasın (dönem özeti tek başına 0 gösterip ikincisi gibi okunuyordu). Son fiyat
+     gününe kadarki tüm işlemleri kapsar — grafiğin başlangıcından öncekiler dahil. */
+  const lastAll = all.at(-1) ?? null, lastCov = cov.at(-1) ?? null;
+  /* Katkı fiyattan BAĞIMSIZDIR (saf işlem matematiği) → her zaman gösterilebilir. Kâr ise
+     değerlemeye dayanır: son gün kapsam dışıysa (fiyatı bilinmeyen açık pozisyon) `value`
+     eksik çıkar ve kâr uçuk bir eksi olur — ilk denemede stub'da "−₺254.368" böyle çıktı.
+     Bu yüzden kâr YALNIZ son gün tam kapsanmışsa yazılır; ikisi de aynı güne aittir. */
+  const life = lastAll
+    ? {
+        contributed: toCcy(lastAll.contributed),
+        gain: lastCov && lastCov.date === lastAll.date ? toCcy(lastCov.gain) : null,
+      }
     : null;
   const up = (d?.value ?? 0) >= 0;
   const gainUp = (d?.gain ?? 0) >= 0;
@@ -234,6 +254,22 @@ export function DegerGrafigi({ trades, priceHistory, benchmarks = [], rates, ccy
             </div>
           </div>
         </div>
+
+        {life && (
+          <div style={{ fontSize: 11, color: T.mut3, margin: "-6px 2px 10px" }}>
+            {/* Tutarlar MONO fontta: display fontu ₺ glifini taşımıyor, £ çiziyor (ikinci kez
+                aynı tuzağa düşüldü — para yazan her yer mono olmalı). */}
+            başından beri:{" "}
+            <b style={{ ...css.mono, color: T.mut }}>
+              {Math.abs(life.contributed) < 0.5 ? "para girişi yok"
+                : `${fmtMoney(Math.abs(life.contributed), ccy)} ${life.contributed > 0 ? "yatırdın" : "net çektin"}`}
+            </b>
+            {life.gain != null && <>
+              {" · "}kâr/zarar{" "}
+              <b style={{ ...css.mono, color: life.gain >= 0 ? T.pos : T.neg }}>{money(life.gain)}</b>
+            </>}
+          </div>
+        )}
 
         <div style={{ height }}>
           <ResponsiveContainer width="100%" height="100%">
