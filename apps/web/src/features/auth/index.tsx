@@ -95,7 +95,10 @@ export function Auth({ onAuthed, urlAuth }: {
   return (
     <div style={{ minHeight: "100dvh", background: T.bg, color: T.text, display: "grid", placeItems: "center", padding: 16 }}>
       <style>{themeCSS}</style>
-      <div style={{ ...css.card, width: "100%", maxWidth: 380 }}>
+      {/* Kart ve tanıtım TEK grid çocuğu: ayrı çocuk olsalar grid iki satıra bölünür ve
+          aralarında ekran boyuna göre değişen bir boşluk açılırdı. */}
+      <div style={{ width: "100%", maxWidth: 380 }}>
+      <div style={{ ...css.card, width: "100%" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 9, fontWeight: 680, fontSize: 18, letterSpacing: "-0.02em", marginBottom: 4 }}>
           <span style={{ width: 30, height: 30, borderRadius: 9, background: T.acc, color: T.accInk, display: "grid", placeItems: "center", fontSize: 16, fontWeight: 800, fontFamily: T.mono }}>₺</span>
           finans
@@ -143,8 +146,41 @@ export function Auth({ onAuthed, urlAuth }: {
           {(mode === "forgot" || mode === "reset") && (<button onClick={() => go("login")} style={linkBtn}>← Girişe dön</button>)}
         </div>
       </div>
+
+      <Tanitim />
+      </div>
     </div>
   );
 }
+
+/* Faz 28 — giriş ekranındaki herkese açık tanıtım. Google'ın OAuth marka doğrulaması üç şey
+   istiyor ve üçü de burada karşılanıyor: ana sayfa (1) giriş duvarının ARKASINDA olmamalı,
+   (2) uygulamanın ne yaptığını anlatmalı, (3) gizlilik politikası ile kullanım koşullarına
+   link vermeli. Önceden `/` yalnız bir form olduğundan üçü de karşılanmıyordu.
+   Kullanıcı için de kazanç: bağlantıyı ilk kez açan biri neye kaydolduğunu görüyor. */
+function Tanitim() {
+  return (
+    <div style={{ marginTop: 22, color: T.mut, fontSize: 13, lineHeight: 1.65 }}>
+      <div style={{ fontWeight: 650, color: T.text, fontSize: 14, marginBottom: 6 }}>Finans nedir?</div>
+      <p style={{ margin: "0 0 12px" }}>
+        Kişisel finans panelin. Banka hesaplarına <strong>bağlanmaz</strong>; kayıtlarını sen
+        girersin, uygulama da onlardan bütün resmi çıkarır.
+      </p>
+      <ul style={{ margin: "0 0 14px", paddingLeft: 18, display: "grid", gap: 3 }}>
+        <li>Nakit hesapları, gelir ve giderler</li>
+        <li>Kredi taksitleri ve kredi kartı ekstreleri</li>
+        <li>Günlük nakit akışı takvimi — hangi gün ne kadar kalıyor</li>
+        <li>Canlı fiyatlı portföy: BIST, fonlar, altın, döviz, kripto, ETF</li>
+      </ul>
+      <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 12, fontSize: 12.5 }}>
+        <a href="/gizlilik" style={legalLink}>Gizlilik Politikası</a>
+        <span style={{ opacity: 0.5, margin: "0 7px" }}>·</span>
+        <a href="/kosullar" style={legalLink}>Kullanım Koşulları</a>
+      </div>
+    </div>
+  );
+}
+
+const legalLink: React.CSSProperties = { color: T.acc, textDecoration: "none", fontWeight: 600 };
 
 const linkBtn: React.CSSProperties = { background: "none", border: "none", color: T.acc, cursor: "pointer", fontWeight: 600, fontSize: 13, fontFamily: T.disp };

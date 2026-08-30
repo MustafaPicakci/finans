@@ -3,7 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>Finans</title>
+    <title>Finans — Kişisel Finans Paneli</title>
+    <meta name="description" content="Kişisel finans paneli: nakit hesapları, gelir-gider takibi, kredi taksitleri, kredi kartı ekstreleri, günlük nakit akışı takvimi ve canlı fiyatlı yatırım portföyü. Banka hesaplarına bağlanmaz; kayıtları sen girersin." />
     <meta name="theme-color" content="#F4F3F0" />
     <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
@@ -15,7 +16,30 @@
     <style>body{margin:0;background:#F4F3F0}</style>
   </head>
   <body>
-    <div id="root"></div>
+    <!-- Faz 28 — JavaScript'siz çekilen HTML'de de uygulamanın ne olduğu görünsün.
+         React `createRoot().render()` ilk çizimde bu içeriği temizler, yani kullanıcı bunu
+         hiç görmez; ama sayfayı JS çalıştırmadan indiren bir istemci (Google'ın OAuth marka
+         doğrulaması, önizleme botları) boş bir kabuk yerine açıklamayı bulur. -->
+    <div id="root">
+      <main style="max-width:640px;margin:0 auto;padding:40px 20px;font-family:system-ui,sans-serif;line-height:1.65;color:#0D1322">
+        <h1 style="font-size:22px;margin:0 0 10px">₺ finans — Kişisel Finans Paneli</h1>
+        <p style="margin:0 0 12px">
+          Nakit hesaplarını, gelir ve giderlerini, kredi taksitlerini, kredi kartı ekstrelerini
+          ve yatırım portföyünü tek ekrandan takip etmeni sağlayan kişisel finans uygulaması.
+          Günlük nakit akışı takvimiyle hangi gün ne kadar paran kalacağını gösterir.
+        </p>
+        <p style="margin:0 0 12px">
+          Banka hesaplarına <strong>bağlanmaz</strong> ve banka kimlik bilgisi istemez —
+          kayıtları sen girersin.
+        </p>
+        <p style="margin:0 0 20px">Kullanmak için hesap oluşturman gerekir.</p>
+        <p style="font-size:14px">
+          <a href="/gizlilik">Gizlilik Politikası</a> ·
+          <a href="/kosullar">Kullanım Koşulları</a>
+        </p>
+        <noscript><p><strong>Uygulamayı kullanmak için JavaScript gerekir.</strong></p></noscript>
+      </main>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
