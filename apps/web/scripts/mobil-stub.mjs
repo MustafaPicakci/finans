@@ -106,6 +106,16 @@ createServer(async (req, res) => {
   if (url.pathname === "/api/all") return json(all);
   if (url.pathname === "/api/ai/status") return json({ enabled: true, model: "gemini/gemini-3.6-flash (2 anahtar)" });
   if (url.pathname === "/api/ai/history") return json({ plans: [] });
+  /* Asistanın ONAY KARTI yerleşimi de görülebilsin: sohbet ucu ne gönderilirse gönderilsin
+     sabit iki adımlık bir plan döner (model yok, ağ yok). */
+  if (url.pathname === "/api/ai/chat") return json({
+    reply: "Anladım. Aşağıdaki iki kaydı oluşturacağım, onayına sunuyorum.",
+    planId: "stub-plan",
+    pending: [
+      { tool: "kart_harcamasi", summary: "Akbank Axess kartına 1.250,00 ₺ market harcaması (3 taksit), 6 Eyl", args: {} },
+      { tool: "gelir_gider", summary: "Garanti Vadesiz hesabından 480,00 ₺ ulaşım gideri, bugün", args: {} },
+    ],
+  });
   if (url.pathname.startsWith("/api/")) return json({ ok: true });
   try {
     const p = url.pathname === "/" ? "/index.html" : url.pathname;

@@ -182,7 +182,7 @@ export default function App() {
       <style>{themeCSS}</style>
       <style>{`
         * { box-sizing: border-box; }
-        input:focus, select:focus { border-color:${T.acc} !important; box-shadow: 0 0 0 3px color-mix(in srgb, ${T.acc} 18%, transparent); }
+        input:focus, select:focus, textarea:focus { border-color:${T.acc} !important; box-shadow: 0 0 0 3px color-mix(in srgb, ${T.acc} 18%, transparent); }
         button:active{transform:scale(0.97)}
         ::-webkit-scrollbar{height:9px;width:9px} ::-webkit-scrollbar-thumb{background:${T.line};border-radius:6px;border:2px solid transparent;background-clip:padding-box}
         ::-webkit-scrollbar-thumb:hover{background:${T.mut3}}
@@ -259,7 +259,13 @@ export default function App() {
           .ui-row > .row-end{order:3;flex:0 0 auto!important}
           .ui-row > .row-break{order:4;flex-basis:100%;height:0;display:block}
           .ui-row > *{order:5}
-          input,select{max-width:100%}
+          input,select,textarea{max-width:100%}
+          /* Asistan sohbeti mobilde KENDİ içinde kayar. Sayfa akışında büyüseydi (eski hâl)
+             birkaç mesaj sonra yazma kutusu ekranın çok altında kalıyor, kullanıcı her
+             cümle için sayfayı dibe kaydırmak zorunda kalıyordu. Üst sınır vh ile değil
+             min(...) ile: klavye açıkken 48vh hâlâ ekranın yarısını yiyip kutuyu klavyenin
+             altına itiyordu. */
+          .asistan-govde{max-height:min(46vh,320px);overflow-y:auto;overscroll-behavior:contain}
           /* Üst çubuk: sekme alt başlığı dar ekranda üç satıra sarıp başlığı ikonlardan
              koparıyordu; başlık tek başına yeterli. */
           .topbar-sub{display:none}

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api, type AiAction, type AiPlan, type AiResult } from "../../api";
 import { T, css } from "../../theme";
+import { Aciklama } from "../../ui";
 import { useDictation } from "./dictation";
 
 /* ————— Asistan (Faz 22) —————
@@ -56,7 +57,7 @@ export function Asistan({ reload, initialText, onConsumed }: {
   const [err, setErr] = useState("");
   const [status, setStatus] = useState<{ enabled: boolean; model: string | null } | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   /* Dikte kutuyu DOLDURUR, göndermez: kullanıcı gördüğü metni düzeltip kendi gönderir
      (ses yanlış anlaşılırsa da onay kartına değil, metin kutusuna düşer). */
@@ -69,7 +70,18 @@ export function Asistan({ reload, initialText, onConsumed }: {
     api.aiStatus().then((s) => { setStatus(s); if (s.enabled) loadHistory(); })
       .catch(() => setStatus({ enabled: false, model: null }));
   }, [loadHistory]);
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, pending, busy]);
+  /* "nearest": sohbet mobilde KENDİ içinde kaydığından (bkz. .asistan-govde) sayfayı da
+     zıplatmadan yalnız o kutuyu dibe getirir. */
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }); }, [msgs, pending, busy]);
+  /* Yazma kutusu içeriğe göre büyür (en çok ~5 satır). Tek satırlık input mobilde
+     ~17 karakter gösteriyordu: uzun bir cümle yazınca ya da dikte edince yazdığını
+     göremiyordun. Yükseklik her değişimde sıfırlanıp yeniden ölçülür (silerken de küçülsün). */
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
+  }, [input]);
   useEffect(() => {
     try { localStorage.setItem(CHAT_KEY, JSON.stringify(msgs.slice(-MAX_SAVED))); } catch { /* kota dolu: sohbet uçucu kalır */ }
   }, [msgs]);
@@ -172,7 +184,10 @@ export function Asistan({ reload, initialText, onConsumed }: {
         </div>
       )}
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 10, flex: 1 }}>
+      {/* Sohbet gövdesi: mobilde kendi içinde kayar (App.tsx'teki .asistan-govde). Sayfa
+          akışında büyüseydi uzun bir konuşmadan sonra yazma kutusu ekranın metrelerce
+          altında kalıyordu — kullanıcı "chat alanı çok küçük" derken gördüğü buydu. */}
+      <div className="asistan-govde" style={{ display: "flex", flexDirection: "column", gap: 10, flex: 1 }}>
         {msgs.map((m, i) => (
           <div key={i} style={{
             alignSelf: m.role === "user" ? "flex-end" : "flex-start", maxWidth: "86%",
@@ -181,35 +196,80 @@ export function Asistan({ reload, initialText, onConsumed }: {
           }}>{m.content}</div>
         ))}
         {busy && <div style={{ fontSize: 12.5, color: T.mut3 }}>düşünüyor…</div>}
-
-        {pending.length > 0 && (
-          <div style={{ border: `1px solid ${T.acc}`, borderRadius: 14, padding: 14, background: T.panel2 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: T.acc, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 10 }}>
-              Onayını bekleyen {pending.length} işlem
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-              {pending.map((p, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13.2, lineHeight: 1.5 }}>
-                  <span style={{ color: T.mut3, fontFamily: T.mono, fontSize: 11.5, paddingTop: 2 }}>{i + 1}.</span>
-                  <span style={{ flex: 1 }}>{p.summary}</span>
-                  <button title="Bu işlemi çıkar" onClick={() => setPending((ps) => ps.filter((_, j) => j !== i))}
-                    style={{ background: "none", border: "none", color: T.mut3, cursor: "pointer", fontSize: 15, lineHeight: 1 }}>×</button>
-                </div>
-              ))}
-            </div>
-            <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-              <button onClick={apply} disabled={busy} style={{ ...css.btn, opacity: busy ? 0.6 : 1 }}>Onayla ve uygula</button>
-              <button onClick={() => setPending([])} disabled={busy} style={css.ghost}>Vazgeç</button>
-            </div>
-          </div>
-        )}
         <div ref={endRef} />
       </div>
 
+      {/* Onay kartı sohbetin DIŞINDA: gövde mobilde kendi içinde kaydığından kart oraya
+          konsaydı 320px'lik pencerede kırpılır, "Onayla" düğmesi kaydırmadan görünmezdi.
+          Görülmeden verilen onay, onay değildir (Faz 24, kural 4 ile aynı gerekçe). */}
+      {pending.length > 0 && (
+        <div style={{ border: `1px solid ${T.acc}`, borderRadius: 14, padding: 14, background: T.panel2 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: T.acc, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 10 }}>
+            Onayını bekleyen {pending.length} işlem
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+            {pending.map((p, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13.2, lineHeight: 1.5 }}>
+                <span style={{ color: T.mut3, fontFamily: T.mono, fontSize: 11.5, paddingTop: 2 }}>{i + 1}.</span>
+                <span style={{ flex: 1 }}>{p.summary}</span>
+                <button title="Bu işlemi çıkar" onClick={() => setPending((ps) => ps.filter((_, j) => j !== i))}
+                  style={{ background: "none", border: "none", color: T.mut3, cursor: "pointer", fontSize: 15, lineHeight: 1 }}>×</button>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
+            <button onClick={apply} disabled={busy} style={{ ...css.btn, opacity: busy ? 0.6 : 1 }}>Onayla ve uygula</button>
+            <button onClick={() => setPending([])} disabled={busy} style={css.ghost}>Vazgeç</button>
+          </div>
+        </div>
+      )}
+
       {err && <div style={{ color: T.neg, fontSize: 13 }}>{err}</div>}
 
+      {dict.listening && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: T.mut }}>
+          <span style={{ width: 8, height: 8, borderRadius: 999, background: T.neg, flexShrink: 0, animation: "dictPulse 1.2s ease-in-out infinite" }} />
+          <span style={{ flex: 1, minWidth: 0, fontStyle: dict.interim ? "italic" : "normal", color: dict.interim ? T.mut : T.mut3 }}>
+            {dict.interim || "dinliyor… konuşmayı bitirince mikrofona tekrar bas"}
+          </span>
+        </div>
+      )}
+      {dict.error && <div style={{ color: T.neg, fontSize: 12.5 }}>{dict.error}</div>}
+
+      {/* Yazma kutusu tam satır, düğmeler kendi kümesinde: dar ekranda küme alt satıra
+          iner (flex-basis 220px + wrap), böylece kutu 17 karaktere sıkışmaz. */}
+      <form onSubmit={(e) => { e.preventDefault(); dict.stop(); send(input); }}
+        style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <textarea ref={inputRef} value={input} rows={1} onChange={(e) => setInput(e.target.value)} disabled={busy}
+          onKeyDown={(e) => {
+            // Enter gönderir, Shift+Enter satır atlar (mobil klavyede "gönder" tuşu da buraya düşer)
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); dict.stop(); send(input); }
+          }}
+          enterKeyHint="send"
+          placeholder={dict.listening ? "konuşabilirsin…" : "Örn: bugün 5.000 TL maaş yattı, Garanti'ye"}
+          style={{
+            ...css.input, fontFamily: T.disp, flex: "1 1 220px", minWidth: 0,
+            resize: "none", overflowY: "auto", lineHeight: 1.5, maxHeight: 132,
+          }} />
+        <div style={{ display: "flex", gap: 8, flexShrink: 0, marginLeft: "auto" }}>
+          {dict.supported && (
+            <button type="button" onClick={() => { dict.toggle(); inputRef.current?.focus(); }} disabled={busy}
+              title={dict.listening ? "Dikteyi durdur" : "Sesle yaz"}
+              aria-label={dict.listening ? "Dikteyi durdur" : "Sesle yaz"} aria-pressed={dict.listening}
+              style={{
+                ...css.ghost, padding: "9px 14px", flexShrink: 0, opacity: busy ? 0.6 : 1,
+                background: dict.listening ? T.negSoft : T.panel2,
+                color: dict.listening ? T.neg : T.mut,
+                borderColor: dict.listening ? T.neg : T.line,
+              }}><MicIcon stop={dict.listening} /></button>
+          )}
+          <button type="submit" disabled={busy || !input.trim()} style={{ ...css.btn, flexShrink: 0, opacity: busy || !input.trim() ? 0.6 : 1 }}>Gönder</button>
+        </div>
+      </form>
+
       {/* Uygulama geçmişi — SUNUCUDAN gelir (ai_actions), sekmenin belleğinden değil:
-          sayfayı yenilesen de başka cihazdan baksan da geri alma imkânı kaybolmaz. */}
+          sayfayı yenilesen de başka cihazdan baksan da geri alma imkânı kaybolmaz.
+          Yazma kutusunun ALTINDA: üstünde durunca mobilde kutuyu ekrandan aşağı itiyordu. */}
       {history.length > 0 && (
         <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 12, display: "flex", flexDirection: "column", gap: 7 }}>
           <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", color: T.mut3 }}>
@@ -232,38 +292,17 @@ export function Asistan({ reload, initialText, onConsumed }: {
         </div>
       )}
 
-      {dict.listening && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: T.mut }}>
-          <span style={{ width: 8, height: 8, borderRadius: 999, background: T.neg, flexShrink: 0, animation: "dictPulse 1.2s ease-in-out infinite" }} />
-          <span style={{ flex: 1, minWidth: 0, fontStyle: dict.interim ? "italic" : "normal", color: dict.interim ? T.mut : T.mut3 }}>
-            {dict.interim || "dinliyor… konuşmayı bitirince mikrofona tekrar bas"}
-          </span>
-        </div>
-      )}
-      {dict.error && <div style={{ color: T.neg, fontSize: 12.5 }}>{dict.error}</div>}
-
-      <form onSubmit={(e) => { e.preventDefault(); dict.stop(); send(input); }} style={{ display: "flex", gap: 8 }}>
-        <input ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)} disabled={busy}
-          placeholder={dict.listening ? "konuşabilirsin…" : "Örn: bugün 5.000 TL maaş yattı, Garanti'ye"}
-          style={{ ...css.input, fontFamily: T.disp, flex: 1, minWidth: 0 }} />
-        {dict.supported && (
-          <button type="button" onClick={() => { dict.toggle(); inputRef.current?.focus(); }} disabled={busy}
-            title={dict.listening ? "Dikteyi durdur" : "Sesle yaz"}
-            aria-label={dict.listening ? "Dikteyi durdur" : "Sesle yaz"} aria-pressed={dict.listening}
-            style={{
-              ...css.ghost, padding: "9px 12px", flexShrink: 0, opacity: busy ? 0.6 : 1,
-              background: dict.listening ? T.negSoft : T.panel2,
-              color: dict.listening ? T.neg : T.mut,
-              borderColor: dict.listening ? T.neg : T.line,
-            }}><MicIcon stop={dict.listening} /></button>
-        )}
-        <button type="submit" disabled={busy || !input.trim()} style={{ ...css.btn, flexShrink: 0, opacity: busy || !input.trim() ? 0.6 : 1 }}>Gönder</button>
-      </form>
+      {/* Bilgilendirme mobilde altı satır yer kaplayıp sohbeti yukarı sıkıştırıyordu.
+          Özü (veri sağlayıcıya gider) görünür kalır — gizlilik uyarısı katlanmaz —
+          ayrıntı ⓘ arkasına iner (Faz 24, kural 3). */}
       <div style={{ fontSize: 11.5, color: T.mut3, lineHeight: 1.5 }}>
-        Asistan senin yetkilerinle çalışır: yalnız kendi verine erişir, hesap silme gibi yıkıcı işlemleri yapamaz.
         Mesajların ve hesap/kart/kategori adların (bakiyelerle birlikte) yanıtı üretmesi için seçili model sağlayıcısına gönderilir.
-        {dict.supported && " Mikrofon, cihazın/tarayıcının kendi konuşma tanımasını kullanır — ses bu uygulamanın sunucusuna gitmez, yalnız yazıya dökülen metni sen gönderirsin."}
       </div>
+      <Aciklama label="asistan ne yapabilir?" k="asistan-yetki">
+        Asistan senin yetkilerinle çalışır: yalnız kendi verine erişir, hesap silme gibi yıkıcı işlemleri yapamaz.
+        Hiçbir kayıt sen onaylamadan yazılmaz; uyguladıklarını yukarıdaki listeden geri alabilirsin.
+        {dict.supported && " Mikrofon, cihazın/tarayıcının kendi konuşma tanımasını kullanır — ses bu uygulamanın sunucusuna gitmez, yalnız yazıya dökülen metni sen gönderirsin."}
+      </Aciklama>
     </div>
   );
 }
