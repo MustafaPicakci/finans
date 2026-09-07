@@ -1,9 +1,33 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+/* Dev'de "/" tanıtım sayfasını göstersin (Faz 30).
+   Prod'da bu dallanmayı Hono yapıyor (apps/server/index.ts): anonim → landing,
+   girişli → uygulama. Vite dev sunucusu o koddan habersiz olduğu için "/" hep
+   index.html döndürüyordu — yani landing yalnız prod build'de görülebiliyordu ve
+   üzerinde çalışırken her seferinde build almak gerekiyordu. Bu eklenti aynı
+   kuralı dev'de de uygular; oturum çerezi varsa dokunmaz, SPA'yı bırakır. */
+const landingDev = () => ({
+  name: "finans-landing-dev",
+  configureServer(server: { config: { root: string }; middlewares: { use: (fn: (req: any, res: any, next: () => void) => void) => void } }) {
+    server.middlewares.use((req, res, next) => {
+      const [path, query] = (req.url || "").split("?");
+      const girisli = /(^|;\s*)finans_session=/.test(req.headers.cookie || "");
+      const paylasim = new URLSearchParams(query || "").has("ekle");
+      if (path !== "/" || girisli || paylasim) return next();
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("Cache-Control", "no-store");
+      res.end(readFileSync(resolve(server.config.root, "public/landing.html"), "utf8"));
+    });
+  },
+});
 
 export default defineConfig({
   plugins: [
+    landingDev(),
     react(),
     VitePWA({
       registerType: "autoUpdate",

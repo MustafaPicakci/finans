@@ -1236,10 +1236,46 @@ app.route("/api", api);
 app.get("/gizlilik", serveStatic({ path: "../web/dist/gizlilik.html" }));
 app.get("/kosullar", serveStatic({ path: "../web/dist/kosullar.html" }));
 
+/* Tanıtım sayfası (Faz 30) — "/" OTURUMA GÖRE dallanır: anonim ziyaretçi landing'i,
+   girişli kullanıcı doğrudan uygulamayı görür.
+
+   Neden ayrı bir /landing adresi değil de "/"?  Ana sayfa SEO'nun en değerli URL'i;
+   tanıtımı /hakkinda'ya koymak onu boşa harcardı.  Neden uygulamayı /app'e taşıyıp
+   "/"yi tümden landing yapmadık?  Manifest'teki `start_url` "/" — telefonuna PWA'yı
+   KURMUŞ kullanıcıların kısayolu oraya bakıyor; "/"yi koşulsuz landing yapmak onları
+   her açılışta tanıtım sayfasına düşürürdü.  Oturum kontrolü ikisini de çözer:
+   Googlebot (çerezsiz) landing'i çeker, kurulu PWA sahibi uygulamaya girer.
+
+   Çerezsiz istekte `getSessionUser` DB'ye hiç gitmez (auth.ts: `if (!token) return null`),
+   yani anonim trafiğin ek sorgu maliyeti yok.  `Vary: Cookie` şart: aksi hâlde araya
+   giren bir önbellek landing'i girişli kullanıcıya (veya tersini) servis edebilirdi. */
+const serveApp = serveStatic({ path: "../web/dist/index.html" });
+const serveLanding = serveStatic({ path: "../web/dist/landing.html" });
+
+app.get("/", async (c, next) => {
+  c.header("Vary", "Cookie");
+  c.header("Cache-Control", "no-store");
+  /* Paylaşım hedefi de "/" adresine gelir (manifest'teki `share_target.action`).
+     Kurulu PWA'da servis çalışanı bu gezinmeyi zaten index.html ile karşılar, ama
+     çalışan henüz etkin değilse ya da kaldırılmışsa istek buraya düşer: landing
+     döndürseydik paylaşılan SMS metni sessizce kaybolurdu. Parametre varsa
+     koşulsuz uygulamaya ver — giriş yapılmamışsa uygulama zaten giriş ekranını
+     gösterir ve metin `?ekle=` olarak URL'de durmaya devam eder. */
+  if (c.req.query("ekle") !== undefined) return serveApp(c, next);
+  const user = await getSessionUser(getCookie(c, SESSION_COOKIE));
+  return user ? serveApp(c, next) : serveLanding(c, next);
+});
+
+/* Landing'in "Uygulamayı aç" düğmeleri buraya gider — "/" oturumsuzken landing
+   döndürdüğü için uygulamaya HER ZAMAN açılan bir adres gerekiyor.  Aşağıdaki
+   catch-all bunu zaten karşılardı; rota yine de açıkça yazıldı ki ileride
+   dist/ altına "app" adlı bir dosya/dizin girerse sessizce gölgelenmesin. */
+app.get("/app", serveApp);
+
 /* prod: derlenmiş arayüzü sun (apps/web/dist) — pnpm bu paketi kendi dizininden
    çalıştırdığı için yol apps/server'a göre relatif */
 app.use("/*", serveStatic({ root: "../web/dist" }));
-app.get("*", serveStatic({ path: "../web/dist/index.html" }));
+app.get("*", serveApp);
 
 /* ---- otonom gerçekleştirme: auto=true + hedefli düzenli kalemleri günü gelince gerçek kayda çevir ----
    Yalnız cari + (kaçmışsa) önceki ay, occurrence günü geçmiş ve son ~45 gün içindekiler
