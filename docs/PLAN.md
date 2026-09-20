@@ -542,6 +542,82 @@ Sunucu tarafı izole test DB'sinde uçtan uca: ALIŞ 100×50 → bakiye 95.000, 
 
 Göç: gerçek yerel DB'nin **veri dâhil kopyası** üzerinde `trades_side_check` drop+add ile güncellendi; sunucu **iki kez** başlatıldı (idempotent, hata yok), mevcut 22 işlem (21 ALIŞ + 1 SATIŞ) el değmeden kaldı ve üç hesabın defter farkı 0. `pnpm build` üç pakette de temiz.
 
+> **Not (Faz 34'te eklendi):** bu faz günlüğü Faz 21'den sonra bir süre tutulmadı — Faz 22-33
+> (asistan, paylaşım hedefi, dikte, referans endeksler, birleşik kayıt listesi, iki seviyeli
+> portföy paneli, çok dönemli getiriler, Toplam Varlık grafiği) yalnız [../CLAUDE.md](../CLAUDE.md)
+> ve [../README.md](../README.md) içinde yaşıyor. Yaşayan kayıt orasıdır; burası kararların
+> GEREKÇESİNİ tutar. Geriye dönük doldurulmadı, çünkü sonradan yazılan bir gerekçe o anki
+> kararın gerekçesi değil, bugünkü tahmindir.
+
+## Faz 34 — Asistan sohbetleri sunucuda, onay bağlayıcı ✅
+
+Görünürdeki istek "sohbetler cihaza bağlı olmasın"dı (telefondan "Paylaş → Finans" ile gelen
+harcama SMS'i masaüstünden görünmüyordu, PWA yeniden kurulunca konuşma uçuyordu). Taşımaya
+bakarken **asıl gerekçe olan iki kusur** çıktı ve fazın ağırlığı oraya kaydı:
+
+- **Onay bağlayıcı değildi.** `POST /ai/execute` uygulanacak işlemleri **istemciden** alıyordu;
+  sunucu yalnız plan kimliğini doğruluyordu, argümanları değil. Onay kartında "Migros · 850 ₺"
+  yazarken gönderilen gövdenin 8.500 olmasını hiçbir şey engellemiyordu — panelin kendi kuralını
+  ("görülmeden verilen onay, onay değildir") sunucu değil istemci uyguluyordu. Plan artık
+  `ai_plans`'ta durur ve `execute` **yalnız `planId`** alır; onay kartından ✕ ile çıkarılan
+  satırların yalnız **sıra numaraları** (`skip`) gönderilir. Onaylanan ile uygulanan tanım
+  olarak aynıdır.
+- **Tek kullanımlılık süreç içi bir `Map`'teydi.** Render ücretsiz katmanı 15 dk atıllıkta
+  uyutuyor; süreç yeniden başlayınca kilit buharlaşıyor ve aynı plan **ikinci kez**
+  uygulanabiliyordu. Yani korumanın kendisi, tam da korunmak için yazıldığı senaryoda yoktu
+  (ağ tekrarı + uyuyan sunucu). Artık tek bir atomik
+  `UPDATE ai_plans SET consumed_at=… WHERE consumed_at IS NULL RETURNING`: iki eşzamanlı
+  istekten yalnız biri satırı alır. Ömür 30 dk → 24 saat, çünkü eski sınır `Map`'i budamak
+  içindi; plan kalıcı olunca onay kartı yenilemeden sonra da yerinde durabiliyor (süresi
+  dolan plan sessizce kaybolmaz, "süresi doldu" der).
+
+**Sohbet**: `ai_conversations` + `ai_messages`. Geçmişi artık **sunucu okur** — eskiden istemci
+her istekte tüm konuşmayı geri yolluyordu ve "assistant" rolünde uydurma tur enjekte edebiliyordu.
+Sekme sohbet **listesiyle** açılır, sıra son **konuşma** zamanına göredir (`updated_at`; açılış
+tarihine göre sıralamak "dün başlayıp bugün devam ettiğim sohbet"i dibe atardı) ve sayfalama
+id değil `(updated_at, id)` **keyset**'idir — ikinci ölçüt olmasaydı aynı saniyedeki iki sohbet
+sayfa sınırında atlanırdı (testte doğrulandı). Liste varsayılanının bedeli her kullanımda bir
+tık; iki kenar durumla ödendi: **hiç sohbet yoksa** doğrudan boş sohbet açılır, **sekme
+değiştirip dönmek** ise bileşeni söktüğü için (`tab === "asistan" && <Asistan/>`) modül kapsamlı
+bir işaretçiyle kaldığın sohbete döner. localStorage olsaydı ertesi gün de listeyi atlardı,
+`useState` olsaydı sekme dönüşünü kurtaramazdı.
+
+**Geri alma iki yerde ve bu bilinçli.** `ai_actions.conversation_id` ile işlem sohbete bağlanır,
+sonuç dökümü sohbete mesaj olarak yazılır (`ai_messages.plan_id`) ve düğme o mesajın altında
+durur. Sohbetin altındaki liste de kaldı ama artık **o sohbete kapsamlı ve sınırsız** (eski
+global `GET /ai/history` son 5 planla sınırlıydı; daha eski bir planı geri almak imkânsızdı).
+İkisi çakışmaz çünkü farklı soruya cevap verir: panel **hâlâ geri alınabilenlerin** listesidir
+(geri alınınca satır düşer — bulunabilirlik sorunu), sohbet ise **ne olduğunun** kaydıdır (geri
+alınmış mesaj "geri alındı" yazmaya devam eder). Sohbet silinince `ai_actions` **silinmez**
+(`ON DELETE SET NULL` — denetim kaydıdır) ama o planın düğmesi bir daha görünmez; silme onayı
+bunu açıkça yazar.
+
+Başlık ilk cümleden türer ve sohbet başlığında **satır içinde** düzenlenir (portföy grubu adıyla
+aynı kural: tanım kayıtları listede değil detayında düzenlenir — liste satırı sohbeti AÇAN bir
+dokunma hedefi). `GrupBasligi`'nden tek farkı okuma hâlinin **metin** olması: grup adları kısadır
+ama otomatik başlık tam bir cümledir ve neredeyse her zaman kırpılır, `input` ise
+`text-overflow: ellipsis` yapamadığı için kırpma sessizleşiyordu. Yeniden adlandırma `updated_at`'i
+**oynatmaz** — kozmetik bir düzeltme sohbeti listenin tepesine fırlatmamalı.
+
+Ayrıca: sohbetler KVKK `GET /api/export`'una eklendi (sunucuda duruyorsa kullanıcının
+indirebildiği veridir), `/api/all`'a **konulmadı** (`price_history` dersi: bu satırların hepsi
+her sayfa açılışında anlamlı değil), sohbet öncesi uygulanmış işlemler açılışta **bir kez**
+"Önceki işlemler (arşiv)" sohbetine taşınır — ölçüt `settings.ai_actions_archived` bayrağıdır,
+"bağsız satır var mı" OLAMAZ çünkü kullanıcının sildiği sohbet bir sonraki açılışta arşiv
+olarak geri gelirdi.
+
+Doğrulama: `pnpm build` üç pakette temiz, 242 engine + 29 sunucu testi yeşil. `consumePlan`
+birim testi **kaldırıldı** (değişmez SQL'e taşındı; sahte bir depoya karşı yazılacak test yalnız
+sahteyi doğrulardı), yerine saf `planGecerli` / `konusmaBasligi` / `formatResults` testleri.
+Gerçek DB + gerçek model ile uçtan uca: gövdeye **sahte `actions`** (8.500 ₺) konarak gönderilen
+onay sunucunun kendi planını (137,50 ₺) uyguladı; aynı plan ikinci kez → 409; 24 saatten eski
+plan → "süresi doldu" + onay kartı olarak hiç gelmiyor; `skip:[0]` ile iki işlemli plandan yalnız
+ikincisi yazıldı (DB'den teyit); **kiracı izolasyonu** B kullanıcısıyla dört uçta da 404 ve
+B'nin A'ya ait `planId`'yi uygulama denemesi reddedildi. Göç gerçek yerel DB'de koştu: 19 plan
+arşiv sohbetine taşındı, çok adımlı planlar tek mesajda doğru gruplandı. Mobil 390px'te dört
+ekran da (liste, sohbet, onay kartı, geri alma paneli) taşmasız — `mobil-stub.mjs` asistan
+uçlarını da konuşacak şekilde genişletildi.
+
 ---
 
 ## Doğrulama
@@ -557,7 +633,7 @@ Göç: gerçek yerel DB'nin **veri dâhil kopyası** üzerinde `trades_side_chec
 
 ## Sıralama
 
-Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Faz 0–13 tamamlandı (Faz 5 yayına, 10–13 ürün derinleşmesine kadar).
+Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Faz 0–34 tamamlandı (Faz 5 yayına, 10–13 ürün derinleşmesine, 21+ asistan ve portföy derinleşmesine kadar); yukarıdaki nota bakın — 22-33'ün günlüğü burada değil, CLAUDE.md/README'de.
 
 **Sıradaki iş — numaralı faz değil, açık kalan kalemler (öncelik sırasıyla):**
 1. **E-posta teslim edilebilirliği** (prod engelleyici, bkz. Faz 10) — Resend/Brevo + kendi domain + SPF/DKIM/DMARC; sadece env değişikliği. Bu bitmeden çok-kullanıcı kâğıt üzerinde kalır.
