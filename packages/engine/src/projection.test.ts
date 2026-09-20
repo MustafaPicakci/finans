@@ -187,6 +187,54 @@ describe("project", () => {
     expect(days[0].assets).toBe(1200);
   });
 
+  /* ————— NET VARLIK (worth) —————
+     Özet'teki hero rakamı ile projeksiyon eğrisi AYNI tanımı kullanmalı; ayrı tanım
+     "aynı soruya iki cevap veren iki ekran" demekti. En sert kural borcun çift
+     sayılmaması: ekstre/taksit ödendiği gün hem nakitten çıkar hem borçtan düşer. */
+
+  it("gün 0'da worth = nakit + portföy − kart borcu − kredi borcu (hero ile aynı tanım)", () => {
+    const data = baseData({
+      accounts: [{ id: 1, name: "Vadesiz", balance: 5000 }],
+      trades: [{ id: 1, date: "2026-01-01", asset_type: "BIST", symbol: "THYAO", side: "ALIŞ", qty: 10, price: 100, fee: 0, currency: "TRY" }],
+      prices: [{ symbol: "THYAO", asset_type: "BIST", price: 120, source: "manual", updated_at: "2026-01-01" }],
+      cards: [{ id: 1, name: "Kart", limit_amount: 10000, statement_day: 15, due_day: 5 }],
+      card_txs: [{ id: 1, card_id: 1, date: "2026-01-10", name: "Market", amount: 300, installments: 1 }],
+      loans: [{ id: 1, name: "Kredi", amount: 1000, first_date: "2026-02-10", total: 3 }],
+    });
+    const d0 = project(data, 3)[0];
+    expect(d0.total).toBe(5000 + 1200);       // borç DÜŞÜLMEMİŞ toplam varlık
+    expect(d0.debt).toBe(300 + 3000);         // ödenmemiş ekstre + kalan 3 taksit
+    expect(d0.worth).toBe(6200 - 3300);       // = 2900
+  });
+
+  it("kart ekstresi ve kredi taksiti ödenince net varlık DEĞİŞMEZ (nakitten borca geçiş)", () => {
+    const data = baseData({
+      accounts: [{ id: 1, name: "Vadesiz", balance: 5000 }],
+      trades: [{ id: 1, date: "2026-01-01", asset_type: "BIST", symbol: "THYAO", side: "ALIŞ", qty: 10, price: 100, fee: 0, currency: "TRY" }],
+      prices: [{ symbol: "THYAO", asset_type: "BIST", price: 120, source: "manual", updated_at: "2026-01-01" }],
+      cards: [{ id: 1, name: "Kart", limit_amount: 10000, statement_day: 15, due_day: 5 }],
+      card_txs: [{ id: 1, card_id: 1, date: "2026-01-10", name: "Market", amount: 300, installments: 1 }],
+      loans: [{ id: 1, name: "Kredi", amount: 1000, first_date: "2026-02-10", total: 3 }],
+    });
+    const days = project(data, 3);
+    const odemeGunu = days.find((d) => d.k === "2026-02-05")!;   // ekstre son ödeme
+    expect(odemeGunu.bal).toBe(4700);                            // nakit azaldı
+    expect(odemeGunu.debt).toBe(3000);                           // kart borcu kapandı
+    expect(odemeGunu.worth).toBe(2900);                          // net varlık aynı
+
+    const taksitGunu = days.find((d) => d.k === "2026-02-10")!;  // ilk kredi taksiti
+    expect(taksitGunu.bal).toBe(3700);
+    expect(taksitGunu.debt).toBe(2000);                          // 3 taksitten 2'si kaldı
+    expect(taksitGunu.worth).toBe(2900);
+  });
+
+  it("borç yoksa debt sıfır, worth toplam varlığa eşittir", () => {
+    const data = baseData({ accounts: [{ id: 1, name: "Vadesiz", balance: 1000 }] });
+    const days = project(data, 1);
+    expect(days[0].debt).toBe(0);
+    expect(days[0].worth).toBe(days[0].total);
+  });
+
   it("USD-doğal varlık güncel FX ile TRY'ye çevrilerek toplam varlığa girer", () => {
     const data = baseData({
       accounts: [{ id: 1, name: "Vadesiz", balance: 1000 }],

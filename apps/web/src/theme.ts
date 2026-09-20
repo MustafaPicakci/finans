@@ -138,6 +138,14 @@ export const fmtPct = (x: number, dec = 1, zatenYuzde = false) => {
   return `${isaret}%${Math.abs(v).toFixed(dec).replace(".", ",")}`;
 };
 
+/**
+ * PAY yüzdesi (ağırlık / dağılım): `fmtPct`'ten farkı **işaretsiz** olmasıdır. Bir payın
+ * "+%38,2" yazılması artış sanılır — oysa o bir değişim değil, bütünün içindeki paydır
+ * ve hiçbir zaman negatif olmaz. Dört çağrı yeri bunu elle kuruyordu (üç farklı ondalıkla,
+ * biri Türkçe virgülü unutarak); yeni pay gösteren her yer bu fonksiyonu çağırsın.
+ */
+export const fmtPay = (x: number, dec = 1) => `%${(x * 100).toFixed(dec).replace(".", ",")}`;
+
 export const css: Record<string, CSSProperties> = {
   card: { background: T.panel, border: `1px solid ${T.line}`, borderRadius: 20, padding: 22, boxShadow: "var(--shadow-sm)" },
   label: { fontSize: 11.5, color: T.mut, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6, fontWeight: 600 },

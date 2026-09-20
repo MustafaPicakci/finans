@@ -5,7 +5,7 @@ import type { AllData, Day, Trade } from "./index.js";
 
 const day = (i: number, bal: number): Day => {
   const date = new Date(2026, 7, 4 + i); date.setHours(0, 0, 0, 0);
-  return { date, k: "", net: 0, bal, assets: 0, cashFunds: 0, deposits: 0, total: bal, ev: [] };
+  return { date, k: "", net: 0, bal, assets: 0, cashFunds: 0, deposits: 0, total: bal, debt: 0, worth: bal, ev: [] };
 };
 const trade = (o: Partial<Trade>): Trade => ({
   id: 1, date: "2026-07-01", asset_type: "FON", symbol: "TPP", side: "ALIŞ",

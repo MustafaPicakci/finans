@@ -4,7 +4,7 @@ import {
   type AllData, type Currency, type Position, type PriceHistoryEntry, type Rates,
 } from "@finans/engine";
 import { api } from "../../api";
-import { T, css, fmtMoney, fmtPct, TYPE_COLORS } from "../../theme";
+import { T, css, fmtMoney, fmtPct, fmtPay, TYPE_COLORS } from "../../theme";
 import { Empty, useSayfalama, DahaFazla } from "../../ui";
 import { PozisyonAyrinti } from "./PozisyonAyrinti";
 
@@ -174,7 +174,7 @@ export function VarlikTablosu({ data, pos, ccy, rates, reload, onSymbol }: {
                     {p.value != null ? fmtMoney(Math.round(convert(p.value, p.currency, ccy, rates)), ccy) : "—"}
                   </td>
                   <td style={{ ...td, textAlign: "right", ...css.mono, fontWeight: 600 }}>
-                    %{(s.agirlik * 100).toFixed(2).replace(".", ",")}
+                    {fmtPay(s.agirlik, 2)}
                   </td>
                   <td style={{ ...td, textAlign: "right" }}><Getiri v={s.getiri.gunluk} /></td>
                   <td style={{ ...td, textAlign: "right" }}><Getiri v={s.getiri.haftalik} /></td>

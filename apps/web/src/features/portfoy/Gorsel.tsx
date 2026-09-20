@@ -5,7 +5,7 @@ import {
   type Currency, type Position, type PriceHistoryEntry, type Rates, type Trade, type HistoryRange,
 } from "@finans/engine";
 import { parseD, fmtD } from "@finans/engine";
-import { T, css, fmtMoney, fmtPct, TYPE_COLORS } from "../../theme";
+import { T, css, fmtMoney, fmtPct, fmtPay, TYPE_COLORS } from "../../theme";
 
 /* ————— PORTFÖY EKRANININ GÖRSEL PARÇALARI (Faz 31) —————
    Ekran eskiden baştan sona düz metindi: aynı puntoda satırlar, her pozisyonun içinde bir
@@ -83,7 +83,7 @@ export function AlokasyonSeridi({ pos, rates, ccy }: { pos: Position[]; rates: R
     <div style={{ marginTop: 14 }}>
       <div style={{ display: "flex", height: 8, borderRadius: 999, overflow: "hidden", gap: 2 }}>
         {dilimler.map((d) => (
-          <div key={d.type} title={`${d.type} · %${(d.oran * 100).toFixed(1).replace(".", ",")}`}
+          <div key={d.type} title={`${d.type} · ${fmtPay(d.oran)}`}
             style={{ width: `${d.oran * 100}%`, background: TYPE_COLORS[d.type] || T.mut3, minWidth: 2 }} />
         ))}
       </div>
@@ -92,7 +92,7 @@ export function AlokasyonSeridi({ pos, rates, ccy }: { pos: Position[]; rates: R
           <span key={d.type} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, color: T.mut }}>
             <span style={{ width: 7, height: 7, borderRadius: 999, background: TYPE_COLORS[d.type] || T.mut3, flexShrink: 0 }} />
             {d.type}
-            <span style={{ ...css.mono, color: T.text, fontWeight: 600 }}>%{(d.oran * 100).toFixed(0)}</span>
+            <span style={{ ...css.mono, color: T.text, fontWeight: 600 }}>{fmtPay(d.oran, 0)}</span>
             <span style={{ ...css.mono, color: T.mut3 }}>{fmtMoney(Math.round(convert(d.v, "TRY", ccy, rates)), ccy)}</span>
           </span>
         ))}
@@ -388,7 +388,7 @@ export function VarlikTreemap({ pos, priceHistory, rates, ccy, height = 260 }: {
           const dar = k.w < 18 || k.h < 14; // küçük kutuda yalnız sembol sığar
           return (
             <div key={`${v.p.type}:${v.p.sym}`}
-              title={`${v.p.sym} · ağırlık %${(v.agirlik * 100).toFixed(1).replace(".", ",")} · ${fmtMoney(Math.round(convert(v.tryDeger, "TRY", ccy, rates)), ccy)}`}
+              title={`${v.p.sym} · ağırlık ${fmtPay(v.agirlik)} · ${fmtMoney(Math.round(convert(v.tryDeger, "TRY", ccy, rates)), ccy)}`}
               style={{
                 position: "absolute", left: `${k.x}%`, top: `${k.y}%`, width: `${k.w}%`, height: `${k.h}%`,
                 background: bg, color: yazi, border: `2px solid ${T.panel}`, borderRadius: 8,

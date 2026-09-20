@@ -1,6 +1,6 @@
 import React from "react";
 import {
-  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, CartesianGrid,
+  AreaChart, Area, ComposedChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, CartesianGrid,
   PieChart, Pie, Cell,
 } from "recharts";
 import {
@@ -8,7 +8,7 @@ import {
   type AllData, type Day, type Position, type Rates,
 } from "@finans/engine";
 import { api } from "../../api";
-import { T, css, tl, TYPE_COLORS } from "../../theme";
+import { T, css, tl, fmtPay, TYPE_COLORS } from "../../theme";
 import { Money, Empty, Aciklama } from "../../ui";
 import type { TradePrefill } from "../../AddSheet";
 
@@ -56,6 +56,17 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAcc
   const chart = days
     .filter((_, i) => i % Math.max(1, Math.floor(days.length / 240)) === 0)
     .map((d) => ({ x: fmtD(d.date, { day: "numeric", month: "short" }), bal: Math.round(eff(d)) }));
+  /* Toplam varlık serisi: Nakit Haritası ile AYNI örnekleme (aynı ufuk, aynı x ekseni). */
+  const varlik = days
+    .filter((_, i) => i % Math.max(1, Math.floor(days.length / 240)) === 0)
+    .map((d) => ({
+      x: fmtD(d.date, { day: "numeric", month: "short" }),
+      total: Math.round(d.total), worth: Math.round(d.worth),
+    }));
+  const VARLIK_ETIKET: Record<string, string> = { total: "Toplam varlık", worth: "Net varlık" };
+  const varlikNegatif = varlik.some((r) => r.worth < 0);
+  const varlikSon = varlik.at(-1);
+  const worthDelta = varlikSon && varlik[0] ? varlikSon.worth - varlik[0].worth : 0;
   const upcoming = days.filter((d) => d.ev.length).slice(0, 20)
     .flatMap((d) => d.ev.map((e) => ({ ...e, date: d.date }))).slice(0, 6);
   const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -63,16 +74,21 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAcc
   const runwayDay = days.find((d) => eff(d) < 0);
   const runwayIn = runwayDay ? Math.round((runwayDay.date.getTime() - today.getTime()) / 86_400_000) : null;
   const depositsValue = data.deposits.reduce((s, d) => s + depositValueOn(d, today), 0);
+  /* Dağılım BÜYÜKTEN KÜÇÜĞE: "paramın çoğu nerede" sorusu listenin ilk satırında cevaplanmalı;
+     sabit sıra (nakit → türler → vadeli) bunu tesadüfe bırakıyordu. */
   const alloc = [
     { name: "Nakit", value: Math.max(0, cash) },
     ...Object.entries(pos.reduce((m, p) => {
       if (p.value) m[p.type] = (m[p.type] || 0) + convert(p.value, p.currency, "TRY", rates); return m;
     }, {} as Record<string, number>)).map(([name, value]) => ({ name, value })),
     { name: "Vadeli", value: depositsValue },
-  ].filter((a) => a.value > 0);
-  /* Hero sparkline: yakın vadeli likit nakit eğilimi (net varlık geçmişi tutulmadığından dekoratif ama anlamlı) */
+  ].filter((a) => a.value > 0).sort((a, b) => b.value - a.value);
+  const allocTotal = alloc.reduce((s, a) => s + a.value, 0);
+  /* Hero sparkline NET VARLIK izler — üstündeki rakamın ta kendisi. Eskiden likit nakit
+     eğrisiydi: "Net Varlık" başlığının altında nakit eğrisi çizmek, kart borcu eriyip
+     portföy dururken düşen bir çizgi gösterebiliyordu. `worth` projection.ts'te. */
   const sparkVals = days.length >= 2
-    ? days.filter((_, i) => i % Math.max(1, Math.floor(days.length / 56)) === 0).map(eff)
+    ? days.filter((_, i) => i % Math.max(1, Math.floor(days.length / 56)) === 0).map((d) => d.worth)
     : [];
   const sp = sparkPath(sparkVals, 560, 90, 6);
 
@@ -231,6 +247,82 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAcc
       </div>
     </div>
 
+    {/* ————— TOPLAM VARLIK (Faz 33) —————
+        Özet'te büyüklüğe dair tek grafik Nakit Haritası'ydı ve o LİKİDİTE sorusunu
+        cevaplar ("param yeter mi") — portföy, vadeli ve borç oraya hiç girmez. "Ne
+        kadarım var, nereye gidiyor" sorusunun hiçbir grafiği yoktu: hero tek bir rakam
+        veriyor, altındaki sparkline ise (düzeltilene dek) nakit eğrisiydi.
+
+        İKİ seri: dolu alan = TOPLAM VARLIK (nakit + portföy + vadeli), çizgi = NET VARLIK
+        (borç düşülmüş). İkisi de motorda hesaplanır (`Day.total` / `Day.worth`) ve net
+        varlık hero'daki rakamla tanımı gereği AYNIDIR — ayrı bir tanım uydurmak aynı
+        soruya iki cevap veren iki ekran demekti (bkz. Faz 31'in `portfolioFlow` notu).
+        Aradaki boşluk BORCUN kendisidir; kapandıkça borç erimiş demektir.
+
+        Denenip BIRAKILAN tasarım — nakit/portföy/vadeli yığını: (1) nakit bandı, hemen
+        üstteki Nakit Haritası'nın zaten çizdiği eğrinin üçüncü kopyasıydı; (2) portföy
+        (marka moru) ile vadeli (--cat-5) neredeyse aynı mor — ölçüldü: #5B5BD6 / #5A4EC2,
+        yığında ayırt edilemiyordu; (3) marka moru bu panelde "sıradaki eylem"e ayrılmıştır
+        (Faz 24 kural 2). Dağılımı zaten hemen altındaki Varlık Dağılımı halkası, üstelik
+        oranlarıyla söylüyor.
+
+        Eğrinin eğimi PİYASA DEĞİLDİR: portföy bugünkü fiyatla taşınır, ileriye dönük fiyat
+        tahmini yoktur — eğimi yapan şey para akışı, borcun erimesi ve vadeli faizidir. */}
+    {varlik.length > 1 && (
+      <div style={{ ...css.card, paddingBottom: 6 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>Toplam Varlık</div>
+          {varlikSon && (
+            <div style={{
+              background: T.panel2, border: `1px solid ${T.line}`, borderRadius: 20,
+              padding: "4px 12px", fontSize: 12, ...css.mono,
+            }}>
+              {data.settings.horizon || "6"} ay sonra net:{" "}
+              <span style={{ color: worthDelta >= 0 ? T.pos : T.neg }}>{tl.format(varlikSon.worth)}</span>
+            </div>
+          )}
+        </div>
+        <Aciklama k="toplam-varlik" label="bu grafik neyi gösteriyor?">
+          Dolu alan <b>toplam varlığın</b>: nakit + portföy + vadeli mevduat. Üstündeki çizgi
+          <b> net varlığın</b> — aynı toplamdan kart ve kredi borcu düşülmüş hâli, yani en üstteki
+          rakamla aynı tanım. <b>Aradaki boşluk borcundur</b>; kapandıkça borç erimiş demektir.
+          Borç ödemek net varlığı değiştirmez (nakit azalır, borç da azalır) — çizgiyi yukarı
+          taşıyan şey birikimdir. Portföy <b>bugünkü fiyatla</b> taşınır; ileriye dönük bir fiyat
+          tahmini yoktur.
+        </Aciklama>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 8, fontSize: 11.5, color: T.mut }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+            <span style={{ width: 9, height: 9, borderRadius: 3, background: T.acc, opacity: 0.55, flexShrink: 0 }} />Toplam varlık
+          </span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+            <span style={{ width: 13, height: 2, borderRadius: 2, background: T.text, flexShrink: 0 }} />Net varlık
+          </span>
+          <span style={{ color: T.mut3 }}>aradaki boşluk = borç</span>
+        </div>
+        <div style={{ height: 220, marginTop: 8 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={varlik} margin={{ top: 8, right: 4, left: 4, bottom: 0 }}>
+              <defs>
+                <linearGradient id="tv" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={T.acc} stopOpacity={0.4} />
+                  <stop offset="100%" stopColor={T.acc} stopOpacity={0.04} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid stroke={T.line} strokeDasharray="2 6" vertical={false} />
+              <XAxis dataKey="x" tick={{ fill: T.mut, fontSize: 10, fontFamily: T.mono }} tickLine={false} axisLine={{ stroke: T.line }} minTickGap={40} />
+              <YAxis tick={{ fill: T.mut, fontSize: 10, fontFamily: T.mono }} tickLine={false} axisLine={false} width={52}
+                tickFormatter={(v: number) => (Math.abs(v) >= 1000 ? `${Math.round(v / 1000)}k` : String(v))} />
+              <Tooltip contentStyle={{ background: T.panel2, border: `1px solid ${T.line}`, borderRadius: 8, fontFamily: T.mono, fontSize: 12 }}
+                labelStyle={{ color: T.mut }} formatter={(v: number, n: string) => [tl.format(v), VARLIK_ETIKET[n] ?? n]} />
+              {varlikNegatif && <ReferenceLine y={0} stroke={T.neg} strokeDasharray="4 4" />}
+              <Area type="monotone" dataKey="total" stroke={T.acc} strokeWidth={2} fill="url(#tv)" />
+              <Line type="monotone" dataKey="worth" stroke={T.text} strokeWidth={2} dot={false} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+    )}
+
     {/* İki kart masaüstünde YAN YANA, mobilde SEKMELİ tek kart (duo-*, App.tsx).
         Alt alta iki tam kart mobilde ~400px yiyordu ve ikisi de "bir bakışta" bilgi;
         aynı anda ikisine birden bakılmıyor. Masaüstünde sekme çubuğu hiç render edilmez. */}
@@ -249,21 +341,30 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAcc
       <div className="duo-pane" data-on={duo === "alokasyon"} style={css.card}>
         <div className="duo-baslik" style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Varlık Dağılımı</div>
         {alloc.length === 0 ? <Empty>Hesap bakiyesi veya işlem ekleyin.</Empty> : (
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div style={{ width: 130, height: 130 }}>
+          /* Lejant ORAN + tutar verir. Yalnız tutar varken "ne kadarı nerede" sorusu
+             satırları kafadan toplamayı gerektiriyordu; oran pastanın zaten çizdiği
+             bilginin okunabilir hâli. Pay işaretsizdir (fmtPay) — "+%38,2" artış sanılır.
+             Dizilim sarmalı: 130px pasta + üç sütunluk satır dar kartta taşıyordu. */
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ width: 112, height: 112, flexShrink: 0 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie data={alloc} dataKey="value" innerRadius={38} outerRadius={60} strokeWidth={0}>
+                  <Pie data={alloc} dataKey="value" innerRadius={32} outerRadius={52} strokeWidth={0}>
                     {alloc.map((a) => <Cell key={a.name} fill={TYPE_COLORS[a.name] || T.mut} />)}
                   </Pie>
+                  <Tooltip contentStyle={{ background: T.panel2, border: `1px solid ${T.line}`, borderRadius: 8, fontFamily: T.mono, fontSize: 12 }}
+                    formatter={(v: number, n: string) => [`${tl.format(Math.round(v))} · ${fmtPay(allocTotal > 0 ? v / allocTotal : 0)}`, n]} />
                 </PieChart>
               </ResponsiveContainer>
             </div>
-            <div style={{ flex: 1, display: "grid", gap: 4 }}>
+            <div style={{ flex: "1 1 150px", minWidth: 0, display: "grid", gap: 5 }}>
               {alloc.map((a) => (
-                <div key={a.name} style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-                  <span><span style={{ color: TYPE_COLORS[a.name] || T.mut }}>●</span> {a.name}</span>
-                  <span style={css.mono}>{tl.format(Math.round(a.value))}</span>
+                <div key={a.name} style={{ display: "flex", alignItems: "baseline", gap: 8, fontSize: 12 }}>
+                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <span style={{ color: TYPE_COLORS[a.name] || T.mut }}>●</span> {a.name}
+                  </span>
+                  <span style={{ ...css.mono, fontWeight: 600 }}>{fmtPay(allocTotal > 0 ? a.value / allocTotal : 0)}</span>
+                  <span style={{ ...css.mono, color: T.mut3, fontSize: 11 }}>{tl.format(Math.round(a.value))}</span>
                 </div>
               ))}
             </div>

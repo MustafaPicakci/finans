@@ -9,8 +9,14 @@ import { depositValueOn } from "./deposits.js";
 /** `cashFunds` = o gün elde tutulan para piyasası fonlarının TRY değeri (assets'in bir alt kümesi);
     nakit gibi likit sayılır. Etkin nakit = `bal + cashFunds`.
     `deposits` = o gün vadeli mevduatların TRY değeri (anapara + biriken net faiz); vade sonuna dek
-    kilitli sayıldığından `bal`'a (harcanabilir nakit) girmez, yalnız `total`'a (net varlık) eklenir. */
-export type Day = { date: Date; k: string; net: number; bal: number; assets: number; cashFunds: number; deposits: number; total: number; ev: { n: string; a: number }[] };
+    kilitli sayıldığından `bal`'a (harcanabilir nakit) girmez, yalnız `total`'a eklenir.
+    `total` = o günkü TOPLAM VARLIK (bal + assets + deposits), borç düşülmemiş hâli.
+    `debt` = o gün hâlâ duran borç: ödenmemiş kart ekstreleri + kredilerin kalan taksit tutarı.
+    `worth` = NET VARLIK (`total - debt`) — App.tsx'teki hero rakamıyla **aynı tanım**: gün 0'da
+    `cash + portföy + vadeli − kart borcu − kredi borcu`. Aynı soruya iki ekranın iki farklı cevap
+    vermemesi için tanım tek yerde (burada) durur. Borç, projeksiyonda ödeme nakitten çıktığı GÜN
+    düşer — yoksa ödenen ekstre hem bakiyeden hem borçtan iki kez sayılırdı. */
+export type Day = { date: Date; k: string; net: number; bal: number; assets: number; cashFunds: number; deposits: number; total: number; debt: number; worth: number; ev: { n: string; a: number }[] };
 
 /** Nakit projeksiyonu (hepsi TRY). `rates` USD-doğal varlıkları TRY'ye çevirmek için — verilmezse USD çevrilmez.
     Para piyasası (nakit sayılan) fon sembolleri `settings.cash_funds`'tan (virgülle ayrık) okunur. */
@@ -58,9 +64,13 @@ export function project(data: AllData, months: number, rates: Rates = { usdTry: 
      (ödeme zaten transactions'a yazıldı → başlangıç bakiyesinde; tekrar düşmek çift sayım olurdu) */
   const paidStmts = new Set((data.statement_payments ?? []).map((p) => `${p.card_id}:${p.due}`));
   const stmtMap = new Map<string, { n: string; a: number }[]>();
+  /* kalan kart borcu: bugün itibarıyla ödenmemiş ekstrelerin toplamı (cardInfos zaten
+     `due >= bugün` olanları verir) — döngüde her ekstre kendi son ödeme gününde düşülür */
+  let cardDebt = 0;
   cardInfos(data.cards, data.card_txs, start, paidStmts).forEach((ci) => {
     ci.statements.forEach((s) => {
       if (s.paid) return;
+      cardDebt += s.amount;
       const k = keyOf(s.due);
       if (!stmtMap.has(k)) stmtMap.set(k, []);
       stmtMap.get(k)!.push({ n: `${ci.card.name} ekstresi`, a: -s.amount });
@@ -80,7 +90,8 @@ export function project(data: AllData, months: number, rates: Rates = { usdTry: 
       if (loanActiveOn(l, d) && hits(d, loanPayDay(l)))
         ev.push({ n: `${l.name} (kalan ${loanRemaining(l, d)})`, a: -l.amount });
     });
-    (stmtMap.get(keyOf(d)) || []).forEach((e) => ev.push(e));
+    /* ekstre ödemesi aynı gün hem nakitten çıkar hem borçtan düşer (a negatif) */
+    (stmtMap.get(keyOf(d)) || []).forEach((e) => { ev.push(e); cardDebt += e.a; });
     (oneMap.get(keyOf(d)) || []).forEach((e) => ev.push(e));
     const net = ev.reduce((s, e) => s + e.a, 0);
     bal += net;
@@ -88,7 +99,12 @@ export function project(data: AllData, months: number, rates: Rates = { usdTry: 
     const { assets, cashFunds } = assetsOn(k);
     /* vadeli mevduat: o günkü değeri (anapara + biriken net faiz); kilitli varlık → yalnız total'a */
     const deposits = data.deposits.reduce((s, dep) => s + depositValueOn(dep, d), 0);
-    days.push({ date: new Date(d), k, net, bal, assets, cashFunds, deposits, total: bal + assets + deposits, ev });
+    /* kredi borcu tarihten hesaplanır (loanRemaining): taksit ödendiği gün hem bakiyeden
+       hem kalan borçtan düşer, biten kredi kendiliğinden sıfırlanır */
+    const loanDebt = data.loans.reduce((s, l) => s + l.amount * loanRemaining(l, d), 0);
+    const debt = cardDebt + loanDebt;
+    const total = bal + assets + deposits;
+    days.push({ date: new Date(d), k, net, bal, assets, cashFunds, deposits, total, debt, worth: total - debt, ev });
   }
   return days;
 }
