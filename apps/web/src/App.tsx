@@ -206,6 +206,14 @@ export default function App() {
         /* grid item'ların varsayılan min-width:auto'su, içindeki taşan içeriği (örn. kaydırılabilir ay şeridi)
            sütunu genişletip sayfayı sağa taşırabilir — grid item'ları büzülebilir kılıyoruz. */
         .tab-grid > *, .hero-grid > *, .grid2 > *, .grid3 > * { min-width: 0; }
+        /* İkili kart: masaüstünde iki kart yan yana görünür, sekme çubuğu gizli. Mobilde
+           çubuk belirir ve yalnız seçili pane render edilir (Özet, ozet/index.tsx).
+           Taban kuralı MEDYA SORGULARINDAN ÖNCE durmalı: medya sorgusu özgüllük katmaz,
+           eşit özgüllükte SONRAKİ kural kazanır — taban "display:none" aşağıdayken mobil
+           "display:flex"i eziyordu, yani çubuk hiç çıkmıyordu. Görünen sonuç: mobilde
+           Varlık Dağılımı kartı başlıksız kalıyor (.duo-baslik gizli) ve Yaklaşan
+           Hareketler'e ulaşmanın hiçbir yolu kalmıyordu. */
+        .duo-tabs{display:none}
         @media (max-width:900px){ .hero-grid,.grid2,.grid3{grid-template-columns:1fr} }
         /* KPI'lar mobilde 2×2 kalır. grid2'nin tek sütuna inmesi bunlar için yanlıştı:
            dört kart tam genişlikte ~600px yiyip Özet'i yedi ekran boyuna çıkarıyordu.
@@ -224,9 +232,6 @@ export default function App() {
         .add-fab{display:none}
         .mobile-only{display:none!important}
         .row-break{display:none} /* yalnız mobil sarmalamada iş görür (bkz. Row) */
-        /* İkili kart: masaüstünde ikisi de yan yana görünür, sekme çubuğu gizli.
-           Mobilde çubuk belirir ve yalnız seçili olan render edilir (Özet, ozet/index.tsx). */
-        .duo-tabs{display:none}
         @media (max-width:900px){
           .desktop-only{display:none!important}
           .sidebar{display:none!important}
