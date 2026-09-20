@@ -5,7 +5,7 @@ import {
 } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, fmtMoney } from "../../theme";
-import { Empty, Row, SilDugmesi, FiltreSeridi } from "../../ui";
+import { Empty, Row, SilDugmesi, FiltreSeridi, useSayfalama, DahaFazla } from "../../ui";
 import { EditSheet, type EditTarget } from "../../EditSheet";
 
 /* ————— KAYITLAR —————
@@ -50,7 +50,7 @@ export function Kayitlar({ data, reload }: { data: AllData; reload: () => void }
   const [sorgu, setSorgu] = useState("");
   const [tur, setTur] = useState<KayitTuru | "hepsi">("hepsi");
   const [donem, setDonem] = useState(3);
-  const [limit, setLimit] = useState(60);
+
   const [editing, setEditing] = useState<EditTarget | null>(null);
 
   const hepsi = useMemo(() => tumKayitlar(data), [data]);
@@ -58,11 +58,10 @@ export function Kayitlar({ data, reload }: { data: AllData; reload: () => void }
     () => kayitSuz(hepsi, { tur, from: sinceOf(donem), sorgu }),
     [hepsi, tur, donem, sorgu],
   );
-  /* Uzun listede tarayıcıyı boğmamak için parça parça gösterilir. Süzgeç değişince
-     baştan başlar — aksi halde arama sonucu 60'ta kalır ve "daha fazla" düğmesi
-     alakasız görünürdü. */
-  React.useEffect(() => { setLimit(60); }, [tur, donem, sorgu]);
-  const gosterilen = suzulmus.slice(0, limit);
+  /* Uzun listede tarayıcıyı boğmamak için parça parça gösterilir; süzgeç değişince
+     baştan başlar (`anahtar`). Satır tek katmanlı olduğundan dilim geniş. */
+  const s2 = useSayfalama(suzulmus, 60, `${tur}|${donem}|${sorgu}`);
+  const gosterilen = s2.gorunen;
   const gruplar = useMemo(() => kayitlariAyaGoreGrupla(gosterilen), [gosterilen]);
 
   /** Kaydı kendi düzenleme formunda açar — kayıt türü ne olursa olsun aynı sayfada kalınır. */
@@ -154,12 +153,7 @@ export function Kayitlar({ data, reload }: { data: AllData; reload: () => void }
         </div>
       ))}
 
-      {suzulmus.length > gosterilen.length && (
-        <button style={{ ...css.ghost, marginTop: 12, padding: "7px 12px", fontSize: 12.5 }}
-          onClick={() => setLimit((l) => l + 120)}>
-          Daha eski kayıtlar ({suzulmus.length - gosterilen.length})
-        </button>
-      )}
+      <DahaFazla s={s2} ad="kayıt" />
     </div>
 
     {editing && <EditSheet data={data} target={editing} reload={reload} onClose={() => setEditing(null)} />}

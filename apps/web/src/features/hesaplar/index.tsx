@@ -8,7 +8,7 @@ import {
 } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, tl } from "../../theme";
-import { Field, AmountField, Empty, Row, Aciklama, SilDugmesi } from "../../ui";
+import { Field, AmountField, Empty, Row, Aciklama, SilDugmesi, useSayfalama, DahaFazla } from "../../ui";
 import { EditSheet, type EditTarget } from "../../EditSheet";
 
 /* ————— HESAPLAR EKRANI —————
@@ -55,9 +55,9 @@ export function Hesaplar({ data, reload }: { data: AllData; reload: () => void }
 function Transferler({ data, reload, onEdit }: {
   data: AllData; reload: () => void; onEdit: (t: EditTarget) => void;
 }) {
-  const [limit, setLimit] = useState(8);
+  const s2 = useSayfalama(data.transfers, 12);
   const name = (id: number) => data.accounts.find((a) => a.id === id)?.name ?? "(silinmiş hesap)";
-  const shown = data.transfers.slice(0, limit);
+  const shown = s2.gorunen;
   return (
     <div style={css.card}>
       <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Transferler (Virman)</div>
@@ -67,8 +67,10 @@ function Transferler({ data, reload, onEdit }: {
         Başkasına gönderdiğin para transfer değil <b>giderdir</b> (Gelir/Gider kalemi olarak gir).
       </Aciklama>
       {data.transfers.length === 0 && <Empty>Henüz transfer yok.</Empty>}
+      {/* `last` = alt çizgiyi kaldırır; yalnız TÜM liste görünüyorsa son satır gerçekten sondur,
+          aksi halde altında "daha fazla" denetimi var ve çizgi gerekiyor. */}
       {shown.map((t, i) => (
-        <Row key={t.id} last={i === shown.length - 1 && data.transfers.length <= limit}>
+        <Row key={t.id} last={i === shown.length - 1 && s2.toplam === s2.gosterilen}>
           <span className="row-lead" style={{ ...css.mono, fontSize: 11.5, color: T.mut, width: 74 }}>
             {fmtD(new Date(t.date + "T00:00:00"), { day: "2-digit", month: "short", year: "2-digit" })}
           </span>
@@ -84,11 +86,7 @@ function Transferler({ data, reload, onEdit }: {
             sonuc={<>Virmanın <b>iki bacağı birden</b> geri alınır: {tl.format(Math.round(t.amount))} kaynak hesaba döner, hedef hesaptan düşer.</>} />
         </Row>
       ))}
-      {data.transfers.length > shown.length && (
-        <button style={{ ...css.ghost, marginTop: 10, padding: "5px 10px", fontSize: 12 }} onClick={() => setLimit((l) => l + 25)}>
-          Daha eski transferler ({data.transfers.length - shown.length})
-        </button>
-      )}
+      <DahaFazla s={s2} ad="transfer" />
     </div>
   );
 }
@@ -215,7 +213,12 @@ function Mutabakat({ data, account, reload, onDone }: {
      "abc" yazılıp onaylanırsa bakiye sessizce 0'a çekilirdi. Girdi sayısal görünmeli. */
   const entered = /^-?\s*[\d.,]+$/.test(real.trim());
   const diff = entered ? reconcileDiff(account, num(real)) : 0;
-  const since = entriesSinceRecon(data.account_entries, account).slice(0, 8);
+  /* SLICE KALDIRILDI: liste `slice(0, 8)` ile kesiliyordu ama etiket kesilmiş uzunluğu
+     yazıyordu — 30 hareket varken "8 hareket" diyordu. Kullanıcı eksik kaydı ararken tam da
+     bu sayıya bakıyor, yani rakam yalnız eksik değil YANLIŞTI. Sayım tam liste üzerinden,
+     gösterim sayfalı. */
+  const since = entriesSinceRecon(data.account_entries, account);
+  const sinceS = useSayfalama(since, 8);
   const save = async () => {
     if (!entered || busy) return;
     setBusy(true);
@@ -253,13 +256,14 @@ function Mutabakat({ data, account, reload, onDone }: {
           <div style={{ fontSize: 11.5, color: T.mut3, marginBottom: 4 }}>
             Son doğrulamadan bu yana ({since.length} hareket) — eksik kayıt bunların arasında olabilir:
           </div>
-          {since.map((e) => (
+          {sinceS.gorunen.map((e) => (
             <div key={e.id} style={{ display: "flex", gap: 8, fontSize: 12, padding: "3px 0", color: T.mut }}>
               <span style={{ ...css.mono, width: 70 }}>{e.date}</span>
               <span style={{ flex: 1 }}>{e.note}</span>
               <span style={{ ...css.mono, color: e.amount < 0 ? T.neg : T.pos }}>{e.amount > 0 ? "+" : ""}{tl.format(Math.round(e.amount))}</span>
             </div>
           ))}
+          <DahaFazla s={sinceS} ad="hareket" />
         </div>
       )}
     </div>
@@ -275,11 +279,11 @@ const KIND_LABEL: Record<AccountEntry["kind"], string> = {
   islem: "işlem", portfoy: "portföy", mevduat: "vadeli", duzeltme: "düzeltme", acilis: "açılış", virman: "transfer",
 };
 function HesapHareketleri({ data, account }: { data: AllData; account: AllData["accounts"][number] }) {
-  const [limit, setLimit] = useState(20);
   const rows = accountLedger(data.account_entries, account.id);
+  const s3 = useSayfalama(rows, 20);
   const drift = ledgerDrift(data.account_entries, account);
   const sum = ledgerSummary(rows);
-  const shown = rows.slice(0, limit);
+  const shown = s3.gorunen;
   return (
     <div style={{ background: T.panel2, borderRadius: 12, padding: "10px 12px", margin: "2px 0 10px" }}>
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 12, color: T.mut, marginBottom: 8 }}>
@@ -310,11 +314,7 @@ function HesapHareketleri({ data, account }: { data: AllData; account: AllData["
           </span>
         </div>
       ))}
-      {rows.length > shown.length && (
-        <button style={{ ...css.ghost, marginTop: 8, padding: "5px 10px", fontSize: 12 }} onClick={() => setLimit((l) => l + 50)}>
-          Daha eski hareketler ({rows.length - shown.length})
-        </button>
-      )}
+      <DahaFazla s={s3} ad="hareket" />
     </div>
   );
 }
@@ -333,12 +333,15 @@ function VadeliMevduat({ data, reload, onEdit }: { data: AllData; reload: () => 
     await api.del("deposits", d.id);
     reload();
   };
+  const mevduatS = useSayfalama(data.deposits, 20);
   return (
     <div style={css.card}>
       <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Vadeli Mevduat</div>
       <Aciklama k="vadeli-mevduat" label="vadeli mevduat nasıl işler?">Anapara + faiz vade sonuna kadar net varlığa işleyerek girer; para vade sonuna dek kilitli sayılır (harcanabilir nakde girmez). "+ Ekle" → Vadeli mevduat ile açabilirsin.</Aciklama>
       {data.deposits.length === 0 && <Empty>Vadeli mevduatın yok.</Empty>}
-      {data.deposits.map((d, i) => {
+      {/* Vadesi dolan mevduat "Hesaba geçir"/sil ile kapatılana dek listede kalır, yani yavaş
+          da olsa birikir — diğer listelerle aynı davranış. */}
+      {mevduatS.gorunen.map((d, i) => {
         const mat = depositMaturity(d);
         const matured = depositMatured(d, today);
         const daysLeft = depositDaysRemaining(d, today);
@@ -379,6 +382,7 @@ function VadeliMevduat({ data, reload, onEdit }: { data: AllData; reload: () => 
           </Row>
         );
       })}
+      <DahaFazla s={mevduatS} ad="mevduat" yon="fazla" />
     </div>
   );
 }

@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { todayStr, parseD, fmtD, keyOf, num, ymOf, recActiveOn, recOccurrenceDate, recurringAmountIndex, recAmountOn, loanPayDay, loanRemaining, type AllData, type Recurring, type OneOff } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, tl } from "../../theme";
-import { Field, AmountField, Money, Empty, Row, SilDugmesi, Aciklama } from "../../ui";
+import { Field, AmountField, Money, Empty, Row, SilDugmesi, Aciklama, useSayfalama, DahaFazla } from "../../ui";
 import type { KalemPrefill } from "../forms";
 import { KategoriAlani } from "../forms/KategoriAlani";
 import { EditSheet, type EditTarget } from "../../EditSheet";
@@ -47,6 +47,7 @@ export function Plan({ data, reload, onRealize }: { data: AllData; reload: () =>
   const realize = (o: OneOff) =>
     onRealize({ name: o.name, amount: Math.abs(o.amount), type: o.amount < 0 ? "gider" : "gelir", oneoffId: o.id });
   const totalDebt = data.loans.reduce((s, l) => s + l.amount * loanRemaining(l, now), 0);
+  const oneoffS = useSayfalama(data.oneoffs, 25);
 
   return (<>
     <div style={css.card}>
@@ -157,10 +158,12 @@ export function Plan({ data, reload, onRealize }: { data: AllData; reload: () =>
         İleri tarihli planlar; günü gelince <b>Gerçekleşti</b> ile deftere geçir — hesap bakiyesine işler, plandan düşer.
       </Aciklama>
       {data.oneoffs.length === 0 && <Empty>Tatil, prim, vergi iadesi gibi ileri tarihli tek seferlik gelir/giderler.</Empty>}
-      {data.oneoffs.map((o, i) => {
+      {/* Tek seferlik kalemler GERÇEKLEŞTİRİLMEDİKÇE listede kalır ve yıllar içinde birikir;
+          satır tek katmanlı olduğu için dilim geniş tutuldu (bkz. ui/useSayfalama). */}
+      {oneoffS.gorunen.map((o, i) => {
         const due = o.date <= today;
         return (
-          <Row key={o.id} last={i === data.oneoffs.length - 1}>
+          <Row key={o.id} last={i === oneoffS.gorunen.length - 1}>
             <div className="row-title" style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 14 }}>{o.name} {due && <span style={{ fontSize: 11, color: T.warn }}>· günü geldi</span>}</div>
               <div style={{ fontSize: 11, color: T.mut, ...css.mono }}>{fmtD(parseD(o.date), { day: "2-digit", month: "short", year: "numeric" })}</div>
@@ -174,6 +177,7 @@ export function Plan({ data, reload, onRealize }: { data: AllData; reload: () =>
           </Row>
         );
       })}
+      <DahaFazla s={oneoffS} ad="kalem" yon="fazla" />
     </div>
 
     <div style={css.card}>

@@ -272,3 +272,65 @@ export const Modal = ({ title, onClose, children }: { title: React.ReactNode; on
     document.body,
   );
 };
+
+/* ————— SAYFALAMA (Faz 32) —————
+   Uzun listeler tarayıcıyı boğuyordu ve her ekran bunu kendi başına çözüyordu: dört ayrı
+   yerde dört farklı sayfa boyutu, iki farklı düğme metni, kimisinde kaç kaydın gizlendiğini
+   söyleyen bir sayaç, kimisinde hiç. Daha kötüsü iki yerde liste sessizce KESİLİYORDU
+   (`slice(0, 8)`) — "daha fazla" düğmesi bile yoktu, yani kullanıcı kaydının kaybolduğunu
+   sanıyordu. Davranış ve dil artık burada, tek yerde.
+
+   SAYFA BOYUTU çağırana bırakılır çünkü satır yükseklikleri çok farklı: portföy hareketi üç
+   katmanlı (10 satır bile mobilde bir ekranı aşar), hesap defteri tek satırlık (20-60 rahat
+   okunur). Değişmemesi gereken şey boyut değil, DAVRANIŞ: kaç kaydın gizlendiği her zaman
+   yazılır ve geri dönüş her zaman mümkündür. */
+
+/** Liste dilimleme durumu. `anahtar` değişince (süzgeç vb.) başa sarar. */
+export function useSayfalama<T>(items: T[], sayfa: number, anahtar?: unknown) {
+  const [limit, setLimit] = React.useState(sayfa);
+  /* Liste uzunluğu ya da süzgeç değişince başa dön: 200 satır açıkken süzgeç daraltılınca
+     "200 göster" durumunda kalmak anlamsız; kayıt silinince de dilim kaymamalı. */
+  React.useEffect(() => { setLimit(sayfa); }, [items.length, sayfa, anahtar]);
+  return {
+    gorunen: React.useMemo(() => items.slice(0, limit), [items, limit]),
+    toplam: items.length,
+    gosterilen: Math.min(limit, items.length),
+    sayfa,
+    artir: () => setLimit((n) => n + sayfa),
+    sifirla: () => setLimit(sayfa),
+  };
+}
+
+/**
+ * "X / Y … gösteriliyor" + "Daha …" + "başa dön". Gösterecek bir şey yoksa hiç render etmez.
+ * `ad` listenin birimidir ("işlem", "kayıt", "hareket", "dönem", "kalem").
+ */
+export const DahaFazla = ({ s, ad, yon = "eski" }: {
+  s: ReturnType<typeof useSayfalama<unknown>>;
+  ad: string;
+  /** "eski": kronolojik liste (yeniden eskiye) · "fazla": sırası zamansal olmayan liste */
+  yon?: "eski" | "fazla";
+}) => {
+  if (s.toplam <= s.sayfa) return null; // tek sayfaya sığıyor — denetim gürültü olurdu
+  const kalan = s.toplam - s.gosterilen;
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+      flexWrap: "wrap", paddingTop: 12,
+    }}>
+      <span style={{ fontSize: 11.5, color: T.mut3 }}>
+        <span style={css.mono}>{s.gosterilen}</span> / <span style={css.mono}>{s.toplam}</span> {ad} gösteriliyor
+      </span>
+      <div style={{ display: "flex", gap: 6 }}>
+        {s.gosterilen > s.sayfa && (
+          <button type="button" style={{ ...css.ghost, fontSize: 12, padding: "6px 12px" }}
+            onClick={s.sifirla}>başa dön</button>
+        )}
+        {kalan > 0 && (
+          <button type="button" style={{ ...css.ghost, fontSize: 12, padding: "6px 12px" }}
+            onClick={s.artir}>Daha {yon} {ad} ({kalan})</button>
+        )}
+      </div>
+    </div>
+  );
+};

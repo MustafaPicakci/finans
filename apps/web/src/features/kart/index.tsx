@@ -1,8 +1,8 @@
-import React, { useRef, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import { parseD, fmtD, keyOf, num, cardInfos, stmtKey, txShares, type AllData, type Card } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, tl } from "../../theme";
-import { Field, AmountField, Hint, Empty, Row, Aciklama, SilDugmesi } from "../../ui";
+import { Field, AmountField, Hint, Empty, Row, Aciklama, SilDugmesi, useSayfalama, DahaFazla } from "../../ui";
 import type { AddKind } from "../forms";
 import { KategoriAlani } from "../forms/KategoriAlani";
 import { EditSheet, type EditTarget } from "../../EditSheet";
@@ -38,6 +38,13 @@ export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => 
   const paidSet = new Set(data.statement_payments.map((p) => stmtKey(p.card_id, p.due)));
   const infos = cardInfos(data.cards, data.card_txs, today, paidSet);
   const totalDebt = infos.reduce((s, c) => s + c.debt, 0);
+  /* Kart harcamaları uygulamanın EN HIZLI büyüyen listesidir (her alışveriş bir satır) ve
+     hiç sınırlanmıyordu. Sıralama hook'un dışında memolanır: her render'da yeni dizi
+     üretmek dilimi boşuna yeniden hesaplatırdı. Satır tek katmanlı → 20'lik dilim. */
+  const kartTxS = useSayfalama(
+    useMemo(() => [...data.card_txs].sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id), [data.card_txs]),
+    20,
+  );
   /* ödeme mini-formu: hangi (kart, vade) için açık + hesap/kategori seçimi */
   const [paying, setPaying] = useState<{ cardId: number; dueK: string; amount: number } | null>(null);
   const [pp, setPp] = useState({ account_id: "", category_id: "" });
@@ -269,12 +276,12 @@ export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => 
     {data.card_txs.length > 0 && (
       <div style={css.card}>
         <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Kart Harcamaları</div>
-        {[...data.card_txs].sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id).map((t, i, arr) => {
+        {kartTxS.gorunen.map((t, i, arr) => {
           const card = data.cards.find((c) => c.id === t.card_id);
           const shares = card ? txShares(t, card) : [];
           const remaining = shares.filter((s) => s.due >= today);
           return (
-            <Row key={t.id} last={i === arr.length - 1}>
+            <Row key={t.id} last={i === arr.length - 1 && kartTxS.toplam === kartTxS.gosterilen}>
               <span className="row-lead" style={{ ...css.mono, fontSize: 12, color: T.mut, width: 74 }}>{fmtD(parseD(t.date), { day: "2-digit", month: "short", year: "2-digit" })}</span>
               <span className="row-title" style={{ flex: 1, fontSize: 13, minWidth: 0 }}>
                 {t.name} <span style={{ color: T.mut, fontSize: 11 }}>{card?.name}</span>
@@ -293,6 +300,7 @@ export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => 
             </Row>
           );
         })}
+        <DahaFazla s={kartTxS} ad="harcama" />
       </div>
     )}
 
