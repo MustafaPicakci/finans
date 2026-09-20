@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   parseD, fmtD, ymOf, tradeLedger, summarizeTrades,
-  type AllData, type AssetType, type Currency, type Trade, type TradeEntry,
+  type AllData, type Currency, type Trade, type TradeEntry,
 } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, fmtMoney, TYPE_COLORS } from "../../theme";
@@ -56,7 +56,6 @@ export function Hareketler({ data, trades, scopeLabel, reload, symbol, onSymbol,
   govdesiz?: boolean;
 }) {
   const [side, setSide] = useState<Side>("hepsi");
-  const [type, setType] = useState<AssetType | "hepsi">("hepsi");
   const [range, setRange] = useState<Range>(0);
   const [editing, setEditing] = useState<EditTarget | null>(null);
 
@@ -65,9 +64,8 @@ export function Hareketler({ data, trades, scopeLabel, reload, symbol, onSymbol,
   const shown = useMemo(() => ledger.filter((e) => (
     (symbol == null || e.trade.symbol.toUpperCase() === symbol.toUpperCase()) &&
     (side === "hepsi" || e.trade.side === side) &&
-    (type === "hepsi" || e.trade.asset_type === type) &&
     (!since || e.trade.date >= since)
-  )).reverse(), [ledger, symbol, side, type, since]); // en yeni üstte
+  )).reverse(), [ledger, symbol, side, since]); // en yeni üstte
 
   /* ————— SAYFALAMA (Faz 32) —————
      SUNUCU TARAFI SAYFALAMA BURADA YAPILAMAZ ve bu bir kısıt değil, matematiğin gereği:
@@ -81,7 +79,7 @@ export function Hareketler({ data, trades, scopeLabel, reload, symbol, onSymbol,
      sayfalar bu sürekli zaman çizgisini bölerdi ve mobilde denetimlere ulaşmak için zaten
      listenin sonuna inmek gerekirdi. Eskiye gitmenin asıl aracı üstteki dönem/sembol
      süzgeçleri. */
-  const s2 = useSayfalama(shown, SAYFA, `${symbol}|${side}|${type}|${range}`);
+  const s2 = useSayfalama(shown, SAYFA, `${symbol}|${side}|${range}`);
   const gorunen = s2.gorunen;
 
   /* Özet para birimi başına ayrı — TRY ile USD'yi tek rakamda toplamak yanıltıcı olurdu
@@ -98,8 +96,8 @@ export function Hareketler({ data, trades, scopeLabel, reload, symbol, onSymbol,
     () => [...new Set(trades.map((t) => t.symbol.toUpperCase()))].sort(),
     [trades],
   );
-  const filtered = symbol != null || side !== "hepsi" || type !== "hepsi" || range !== 0;
-  const clear = () => { onSymbol(null); setSide("hepsi"); setType("hepsi"); setRange(0); };
+  const filtered = symbol != null || side !== "hepsi" || range !== 0;
+  const clear = () => { onSymbol(null); setSide("hepsi"); setRange(0); };
 
   const Kap = govdesiz
     ? ({ children }: { children: React.ReactNode }) => <>{children}</>
@@ -107,61 +105,60 @@ export function Hareketler({ data, trades, scopeLabel, reload, symbol, onSymbol,
 
   return (
     <Kap>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
-        <div style={{ fontWeight: 700, fontSize: 15 }}>
-          Hareketler
-          {scopeLabel && <span style={{ fontSize: 12, fontWeight: 400, color: T.mut, marginLeft: 8 }}>— {scopeLabel}</span>}
+      {/* Kart başlığı YALNIZ tek başına kullanıldığında. Sekme kartının içindeyken sekme
+          zaten "İşlem Geçmişi" diyordu; "Hareketler" başlığı aynı şeyi ikinci kez söyleyip
+          ekranın üstünden bir satır götürüyordu. */}
+      {!govdesiz && (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>
+            Hareketler
+            {scopeLabel && <span style={{ fontSize: 12, fontWeight: 400, color: T.mut, marginLeft: 8 }}>— {scopeLabel}</span>}
+          </div>
+          <div style={{ fontSize: 12, color: T.mut }}>{shown.length} işlem</div>
         </div>
-        <div style={{ fontSize: 12, color: T.mut }}>{shown.length} işlem</div>
-      </div>
+      )}
 
-      {/* Filtreler tek çukur şeritte (FiltreSeridi) — buradaki hiçbir düğme veri değiştirmez.
-          Eskiden bu kontroller kartın yüzeyinde, eylem düğmeleriyle aynı görünümdeydi. */}
-      <FiltreSeridi sag={filtered
-        ? <button type="button" style={{ ...css.ghost, padding: "5px 10px", fontSize: 11.5 }} onClick={clear}>temizle</button>
-        : undefined}>
+      {/* Filtreler TEK SATIR. Eskiden dört kontrol üç satıra yayılıyordu (390px'te) ve
+          ilk işlem satırı ekranın yarısından sonra başlıyordu. İki değişiklik:
+          • TÜR filtresi kaldırıldı — sembol seçilince tür zaten belli, ikisi büyük ölçüde
+            aynı işi yapıyordu; tür bazlı bakmak isteyen Kayıtlar sekmesini kullanır.
+          • Yön ve dönem düğme şeritleri açılır menüye indi: beş yön düğmesi tek başına
+            390px'i dolduruyordu, oysa TEMETTÜ/BEDELSİZ nadiren süzülür.
+          Sayaç şeridin sağına taşındı — böylece kendi satırını harcamıyor. */}
+      <FiltreSeridi sag={
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 11.5, color: T.mut3, whiteSpace: "nowrap" }}>{shown.length} işlem</span>
+          {filtered && (
+            <button type="button" style={{ ...css.ghost, padding: "5px 10px", fontSize: 11.5 }} onClick={clear}>temizle</button>
+          )}
+        </span>}>
         <select style={{ ...css.input, width: "auto", padding: "6px 8px", fontSize: 12.5 }} value={symbol ?? ""} onChange={(e) => onSymbol(e.target.value || null)}>
-          <option value="">Tüm semboller</option>
+          <option value="">Sembol: tümü</option>
           {symbols.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
-        <select style={{ ...css.input, width: "auto", padding: "6px 8px", fontSize: 12.5 }} value={type} onChange={(e) => setType(e.target.value as AssetType | "hepsi")}>
-          <option value="hepsi">Tüm türler</option>
-          {(["BIST", "FON", "ALTIN", "DOVIZ", "KRIPTO", "ETF"] as AssetType[]).map((t) => <option key={t} value={t}>{t}</option>)}
+        <select style={{ ...css.input, width: "auto", padding: "6px 8px", fontSize: 12.5 }} value={side} onChange={(e) => setSide(e.target.value as Side)}>
+          <option value="hepsi">İşlem: tümü</option>
+          {(["ALIŞ", "SATIŞ", "TEMETTÜ", "BEDELSİZ"] as Trade["side"][]).map((v) => <option key={v} value={v}>{v}</option>)}
         </select>
-        <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: `1px solid ${T.line}` }}>
-          {(["hepsi", "ALIŞ", "SATIŞ", "TEMETTÜ", "BEDELSİZ"] as Side[]).map((s) => (
-            <button key={s} type="button" onClick={() => setSide(s)} style={{
-              padding: "6px 9px", border: "none", cursor: "pointer", fontSize: 11.5, fontFamily: T.disp, fontWeight: side === s ? 700 : 500,
-              background: side === s ? (s === "hepsi" ? T.panel : SIDE_SOFT[s]) : T.panel2,
-              color: side === s ? (s === "hepsi" ? T.text : SIDE_INK[s]) : T.mut,
-            }}>{s === "hepsi" ? "Hepsi" : s}</button>
-          ))}
-        </div>
-        <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: `1px solid ${T.line}` }}>
-          {RANGES.map((r) => (
-            <button key={r.v} type="button" onClick={() => setRange(r.v)} style={{
-              padding: "6px 10px", border: "none", cursor: "pointer", fontSize: 12, fontFamily: T.disp,
-              fontWeight: range === r.v ? 700 : 500,
-              background: range === r.v ? T.panel : T.panel2, color: range === r.v ? T.acc : T.mut,
-            }}>{r.label}</button>
-          ))}
-        </div>
+        <select style={{ ...css.input, width: "auto", padding: "6px 8px", fontSize: 12.5 }} value={range} onChange={(e) => setRange(Number(e.target.value) as Range)}>
+          {RANGES.map((r) => <option key={r.v} value={r.v}>{r.v === 0 ? "Dönem: tümü" : r.label}</option>)}
+        </select>
       </FiltreSeridi>
 
       {/* dönem özeti — para birimi başına */}
       {summaries.map(({ ccy, s }) => (
         <div key={ccy} style={{
-          display: "flex", gap: 14, flexWrap: "wrap", alignItems: "baseline",
-          background: T.panel2, borderRadius: 8, padding: "8px 12px", marginBottom: 8, fontSize: 12, color: T.mut,
+          display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline",
+          background: T.panel2, borderRadius: 8, padding: "6px 10px", marginBottom: 6, fontSize: 11.5, color: T.mut,
         }}>
           {summaries.length > 1 && <b style={{ color: T.text }}>{ccy}</b>}
           <span>alış <span style={{ ...css.mono, color: T.text }}>{fmtMoney(Math.round(s.buy), ccy)}</span></span>
           <span>satış <span style={{ ...css.mono, color: T.text }}>{fmtMoney(Math.round(s.sell), ccy)}</span></span>
-          {s.fee > 0 && <span>komisyon <span style={{ ...css.mono, color: T.text }}>{fmtMoney(s.fee, ccy, true)}</span></span>}
+          {s.fee > 0 && <span>kom. <span style={{ ...css.mono, color: T.text }}>{fmtMoney(s.fee, ccy, true)}</span></span>}
           {/* Temettü gerçekleşen K/Z'nin İÇİNDE sayılır; ayrıca gösterilir çünkü satış kârından
               farklı bir getiri kalitesidir (pozisyonu küçültmeden gelen nakit). */}
           {s.dividend > 0 && <span>temettü <span style={{ ...css.mono, color: "var(--cat-5)" }}>{fmtMoney(Math.round(s.dividend), ccy)}</span></span>}
-          <span>gerçekleşen K/Z <span style={{ ...css.mono, color: s.realized > 0 ? T.pos : s.realized < 0 ? T.neg : T.text }}>
+          <span>K/Z <span style={{ ...css.mono, color: s.realized > 0 ? T.pos : s.realized < 0 ? T.neg : T.text }}>
             {s.realized > 0 ? "+" : ""}{fmtMoney(Math.round(s.realized), ccy)}
           </span></span>
         </div>
@@ -202,7 +199,8 @@ function HareketRow({ e, data, reload, onSymbol, onEdit }: {
   const ccy = (t.currency ?? "TRY") as Currency;
   const buy = t.side === "ALIŞ";
   const bonus = t.side === "BEDELSİZ", div = t.side === "TEMETTÜ";
-  const num = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(4).replace(/0+$/, "").replace(/\.$/, ""));
+  const num = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(4).replace(/0+$/, "").replace(/\.$/, "").replace(".", ","));
+  const [acik, setAcik] = useState(false);
   return (
     <div style={{ padding: "10px 0", borderBottom: `1px solid ${T.line}` }}>
       {/* Satır TEK SOL KENARA hizalı üç katmandır — kimlik, ayrıntı, etki. Eskiden ayrıntı
@@ -239,55 +237,61 @@ function HareketRow({ e, data, reload, onSymbol, onEdit }: {
           sonuc={<>Pozisyon ve ortalama maliyet yeniden hesaplanır.{t.account_id != null && " Tutar bağlı hesaba geri işlenir."}</>} />
       </div>
 
-      {/* 2. katman: ne zaman, ne kadar, hangi grupta — hepsi aynı sol kenardan başlar */}
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 3, fontSize: 12, color: T.mut }}>
+      {/* 2. KATMAN — her zaman görünür: ne zaman, ne kadar, (satışta) ne kazandırdı.
+          Gerçekleşen K/Z buraya ÇIKARILDI: eskiden 3. katmandaydı ve listeyi tararken
+          "bu satıştan ne kazandım" sorusu ancak satır satır okununca cevaplanıyordu. */}
+      <div onClick={() => setAcik((v) => !v)} title={acik ? "Ayrıntıyı kapat" : "Pozisyon etkisini gör"}
+        style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 3, fontSize: 12, color: T.mut, cursor: "pointer", userSelect: "none" }}>
         <span style={{ ...css.mono, color: T.mut3 }}>{fmtD(parseD(t.date), { day: "2-digit", month: "short" })}</span>
         <span>
           {bonus
-            ? <>{num(t.qty)} adet bedelsiz · <span style={{ color: T.mut3 }}>ort. {fmtMoney(e.avgBefore, ccy, true)} → {fmtMoney(e.avgAfter, ccy, true)}</span></>
-            : <>{num(t.qty)} × <span style={css.mono}>{fmtMoney(t.price, ccy, true)}</span>
-              {t.fee > 0 && <span style={{ color: T.mut3 }}> · {div ? "stopaj" : "kom."} {fmtMoney(t.fee, ccy, true)}</span>}</>}
+            ? <>{num(t.qty)} adet bedelsiz</>
+            : <>{num(t.qty)} × <span style={css.mono}>{fmtMoney(t.price, ccy, true)}</span></>}
         </span>
-        {data.portfolios.length > 0 && (
-          /* inline-select: kutu değil metin gibi görünür, üstüne gelince/odaklanınca kenarlık
-             kazanır. Tek tıkla grup atama korunur (✎ formundan yapmak çok daha yavaş), ama
-             salt-okunur bir listenin ortasında kalıcı bir giriş kutusu gibi durmaz. */
-          <select className="inline-select" title="Portföy grubu"
-            style={{ ...css.input, width: "auto", maxWidth: 150, padding: "1px 4px", fontSize: 11.5, color: T.mut3 }}
-            value={t.portfolio_id ?? ""}
-            onChange={async (ev) => { await api.setTradePortfolio(t.id, ev.target.value ? +ev.target.value : null); reload(); }}>
-            <option value="">Gruplanmamış</option>
-            {data.portfolios.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-        )}
-      </div>
-
-      {/* 3. katman: pozisyona etkisi ("lot" satırı) */}
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 3, fontSize: 11.5, color: T.mut3 }}>
-        <span>
-          adet <span style={css.mono}>{num(e.qtyBefore)}</span> → <span style={{ ...css.mono, color: T.mut }}>{num(e.qtyAfter)}</span>
-        </span>
-        {buy && (
-          <span>
-            ort. maliyet <span style={css.mono}>{e.qtyBefore > 0 ? fmtMoney(e.avgBefore, ccy, true) : "—"}</span>
-            {" → "}<span style={{ ...css.mono, color: T.mut }}>{fmtMoney(e.avgAfter, ccy, true)}</span>
-          </span>
-        )}
-        {!buy && (
-          <span>
-            gerçekleşen{" "}
-            <span style={{ ...css.mono, color: e.realized > 0 ? T.pos : e.realized < 0 ? T.neg : T.mut }}>
-              {e.realized > 0 ? "+" : ""}{fmtMoney(Math.round(e.realized), ccy)}
-            </span>
-            <span style={{ color: T.mut3 }}> (ort. {fmtMoney(e.avgBefore, ccy, true)})</span>
+        {!buy && !bonus && e.realized !== 0 && (
+          <span style={{ ...css.mono, fontSize: 11.5, color: e.realized > 0 ? T.pos : T.neg }}>
+            {e.realized > 0 ? "+" : ""}{fmtMoney(Math.round(e.realized), ccy)}
           </span>
         )}
         {e.closed && (
           <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 8, background: T.panel2, color: T.mut }}>
-            pozisyon kapandı
+            kapandı
           </span>
         )}
+        <span style={{ marginLeft: "auto", color: T.mut3, fontSize: 10 }}>{acik ? "▾" : "▸"}</span>
       </div>
+
+      {/* 3. KATMAN — tıklayınca. Pozisyon etkisi, komisyon ve portföy seçici burada:
+          üçü de satır satır taranan bilgiler değil, "şu işleme bakayım" denince açılanlar.
+          Portföy seçici özellikle buraya indi — veri DEĞİŞTİREN bir kontroldü ve salt okunur
+          bir listenin ortasında her satırda duruyordu (fiyat kutusunun portföy listesinden
+          çıkarılmasıyla aynı gerekçe). */}
+      {acik && (
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", marginTop: 6, paddingLeft: 2, fontSize: 11.5, color: T.mut3 }}>
+          <span>
+            adet <span style={css.mono}>{num(e.qtyBefore)}</span> → <span style={{ ...css.mono, color: T.mut }}>{num(e.qtyAfter)}</span>
+          </span>
+          <span>
+            ort. maliyet <span style={css.mono}>{e.qtyBefore > 0 ? fmtMoney(e.avgBefore, ccy, true) : "—"}</span>
+            {" → "}<span style={{ ...css.mono, color: T.mut }}>{fmtMoney(e.avgAfter, ccy, true)}</span>
+          </span>
+          {t.fee > 0 && (
+            <span>{div ? "stopaj" : "komisyon"} <span style={{ ...css.mono, color: T.mut }}>{fmtMoney(t.fee, ccy, true)}</span></span>
+          )}
+          {data.portfolios.length > 0 && (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              portföy:
+              <select className="inline-select" title="Portföy grubu"
+                style={{ ...css.input, width: "auto", maxWidth: 150, padding: "1px 4px", fontSize: 11.5, color: T.mut }}
+                value={t.portfolio_id ?? ""}
+                onChange={async (ev) => { await api.setTradePortfolio(t.id, ev.target.value ? +ev.target.value : null); reload(); }}>
+                <option value="">Gruplanmamış</option>
+                {data.portfolios.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
