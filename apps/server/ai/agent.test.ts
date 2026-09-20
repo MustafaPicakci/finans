@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { agentLoop, executeActions, consumePlan, type AgentDeps, type PendingAction } from "./index.js";
+import { agentLoop, executeActions, planGecerli, konusmaBasligi, formatResults, type AgentDeps, type PendingAction } from "./index.js";
 import { AiError, withKeyFallback, type AiProvider, type ChatRequest, type ChatResult, type ToolCall } from "./provider.js";
 import { ROUTE_TOOLS } from "./tools.js";
 
@@ -184,11 +184,59 @@ describe("executeActions", () => {
   });
 });
 
-describe("plan kimliği tek kullanımlıktır", () => {
-  it("aynı plan ikinci kez uygulanamaz (ağ tekrarında çift kayıt olurdu)", () => {
-    expect(consumePlan("9:plan-abc")).toBe(true);
-    expect(consumePlan("9:plan-abc")).toBe(false);
-    expect(consumePlan("9:plan-xyz")).toBe(true); // farklı plan etkilenmez
+/* Faz 34 — plan kimliğinin TEK KULLANIMLIK olması artık burada sınanmıyor ve bu bilinçli:
+   güvence JS'ten SQL'e taşındı (`UPDATE ai_plans SET consumed_at=… WHERE consumed_at IS NULL
+   RETURNING`). Eskiden süreç içi bir Map'ti ve bu test onu doğruluyordu; ama Map süreç
+   yeniden başlayınca boşaldığından asıl senaryoyu (Render'ın uyuttuğu sunucu + ağ tekrarı)
+   hiç yakalayamıyordu. Sahte bir depoya karşı yazılacak yeni bir test de yalnız sahteyi
+   doğrulardı — değişmezin yaşadığı yer tek bir atomik UPDATE. Aşağıdakiler ise saf: */
+
+describe("planın ömrü", () => {
+  const saatOnce = (s: number) => {
+    const d = new Date(Date.now() - s * 3600_000);
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  };
+  it("taze plan geçerli, süresi dolan geçersizdir", () => {
+    expect(planGecerli(saatOnce(1))).toBe(true);
+    expect(planGecerli(saatOnce(23))).toBe(true);
+    expect(planGecerli(saatOnce(25))).toBe(false);
+  });
+  /* Onay kartı artık yenilemeden sonra geri geldiğinden, süresi dolmuş bir planın
+     sessizce "geçerli" görünmesi kullanıcıya bayat argümanları onaylatırdı. */
+  it("sınır ttl parametresiyle daraltılabilir", () => {
+    expect(planGecerli(saatOnce(2), 1)).toBe(false);
+    expect(planGecerli(saatOnce(2), 3)).toBe(true);
+  });
+});
+
+describe("konuşma başlığı", () => {
+  it("ilk cümleden türer, satır sonlarını tek boşluğa indirir", () => {
+    expect(konusmaBasligi("  Dün markete\n  850 TL harcadım  ")).toBe("Dün markete 850 TL harcadım");
+  });
+  it("uzun metni keser (liste satırı tek satırdır)", () => {
+    const b = konusmaBasligi("x".repeat(200));
+    expect(b.length).toBe(60);
+    expect(b.endsWith("…")).toBe(true);
+  });
+  it("boş metinde bile bir başlık verir (listede adsız satır olmaz)", () => {
+    expect(konusmaBasligi("   ")).toBe("Yeni sohbet");
+  });
+});
+
+/* Sonuç dökümü artık SOHBETE yazılıyor, yani kalıcı: başarısız adımın sebebi de görünmeli
+   (eskiden istemcide üretilen uçucu bir metindi). */
+describe("formatResults", () => {
+  it("başarılı/başarısız ayrımını ve sebebi yazar", () => {
+    expect(formatResults([
+      { summary: "Gider: Migros · 850,00 ₺", ok: true, detail: "uygulandı" },
+      { summary: "Ekstre ödemesi", ok: true, detail: "zaten kayıtlıydı" },
+      { summary: "Gelir: Maaş", ok: false, detail: "hesap bulunamadı" },
+    ])).toBe(
+      "✓ Gider: Migros · 850,00 ₺\n" +
+      "✓ Ekstre ödemesi (zaten kayıtlıydı)\n" +
+      "✕ Gelir: Maaş — hesap bulunamadı",
+    );
   });
 });
 

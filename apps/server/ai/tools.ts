@@ -360,4 +360,6 @@ export const SKIPPED: { route: string; reason: string }[] = [
   { route: "POST /ai/chat", reason: "asistanın kendi ucu" },
   { route: "POST /ai/execute", reason: "asistanın kendi ucu" },
   { route: "POST /ai/undo", reason: "asistanın kendi ucu (uygulanan planı geri alır; modelin çağırdığı bir araç değil)" },
+  { route: "PUT /ai/conversations/:id", reason: "asistanın kendi ucu: sohbetin adını kullanıcı koyar, modelin kendi konuşmasını yeniden adlandırması istenmez" },
+  { route: "DELETE /ai/conversations/:id", reason: "asistanın kendi ucu: sohbeti silmek kullanıcı eylemidir, modelin kendi geçmişini silmesi istenmez" },
 ];

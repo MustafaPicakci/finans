@@ -313,6 +313,12 @@ api.get("/all", async (c) => {
       ),
       db.all<{ key: string; value: string }>("SELECT key, value FROM settings"),
       db.all<{ key: string; value: string }>("SELECT key, value FROM user_settings WHERE user_id=?", uid),
+      /* Faz 34 — asistan sohbeti ve uyguladığı işlemler de kullanıcının verisidir: sohbet
+         sunucuya taşındığından (eskiden localStorage'daydı, export'un görebileceği bir yer
+         değildi) KVKK indirmesine de girmesi gerekir. */
+      db.all("SELECT * FROM ai_conversations WHERE user_id=? ORDER BY id", uid),
+      db.all("SELECT * FROM ai_messages WHERE user_id=? ORDER BY id", uid),
+      db.all("SELECT * FROM ai_actions WHERE user_id=? ORDER BY id", uid),
     ]);
   // fiyatlar: global otomatik (piyasa) + kullanıcının elle override'ı (varsa o kazanır, source='manual')
   const pm = new Map<string, any>(autoPrices.map((p) => [`${p.asset_type}:${p.symbol}`, { ...p, source: "auto" }]));
@@ -1166,7 +1172,7 @@ api.put("/settings", async (c) => {
 /* ---- KVKK: kullanıcının tüm verisini JSON indir ---- */
 api.get("/export", async (c) => {
   const uid = c.get("user").id;
-  const [accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, account_entries, transfers, userSettings] =
+  const [accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, account_entries, transfers, userSettings, ai_conversations, ai_messages, ai_actions] =
     await Promise.all([
       db.all("SELECT * FROM accounts WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM recurring WHERE user_id=? ORDER BY id", uid),
@@ -1185,12 +1191,19 @@ api.get("/export", async (c) => {
       db.all("SELECT * FROM account_entries WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM transfers WHERE user_id=? ORDER BY id", uid),
       db.all<{ key: string; value: string }>("SELECT key, value FROM user_settings WHERE user_id=?", uid),
+      /* Faz 34 — asistan sohbeti ve uyguladığı işlemler de kullanıcının verisidir: sohbet
+         sunucuya taşındığından (eskiden localStorage'daydı, export'un görebileceği bir yer
+         değildi) KVKK indirmesine de girmesi gerekir. */
+      db.all("SELECT * FROM ai_conversations WHERE user_id=? ORDER BY id", uid),
+      db.all("SELECT * FROM ai_messages WHERE user_id=? ORDER BY id", uid),
+      db.all("SELECT * FROM ai_actions WHERE user_id=? ORDER BY id", uid),
     ]);
   c.header("Content-Disposition", `attachment; filename="finans-export-${todayLocal()}.json"`);
   console.log(`[audit] Veri dışa aktarma (KVKK Export): (id:${uid})`);
   return c.json({
     exported_at: nowLocal(), user: c.get("user"),
     accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, account_entries, transfers,
+    ai_conversations, ai_messages, ai_actions,
     settings: Object.fromEntries(userSettings.map((s) => [s.key, s.value])),
   });
 });

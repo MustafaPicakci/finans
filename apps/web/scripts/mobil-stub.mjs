@@ -126,23 +126,83 @@ const all = {
 
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".svg": "image/svg+xml", ".webmanifest": "application/manifest+json", ".ico": "image/x-icon" };
 
+/* Asistan sekmesinin stub deposu (bkz. /api/ai/* uçları) — süreç ömrü boyunca bellekte. */
+const aiSimdi = () => new Date().toISOString().slice(0, 19).replace("T", " ");
+let aiMesajNo = 2;
+const aiKonusmalar = [
+  {
+    id: 1, title: "dün markete 1.250 TL harcadım, Axess'le", at: aiSimdi(), undoable: 0,
+    messages: [
+      { id: 1, role: "user", content: "dün markete 1.250 TL harcadım, Axess'le", at: aiSimdi(), planId: null },
+      { id: 2, role: "assistant", content: "Anladım. Aşağıdaki iki kaydı oluşturacağım, onayına sunuyorum.", at: aiSimdi(), planId: null },
+    ],
+    plans: [],
+    /* Onay kartı AÇILIŞTA duruyor: mobilde bakılacak asıl yerleşim o (kart sohbet
+       gövdesinin dışındadır ki kaydırılan pencerede kırpılmasın). */
+    pending: {
+      planId: "stub-plan", at: aiSimdi(),
+      actions: [
+        { tool: "kart_harcamasi", summary: "Akbank Axess kartına 1.250,00 ₺ market harcaması (3 taksit), 6 Eyl", args: {} },
+        { tool: "gelir_gider", summary: "Garanti Vadesiz hesabından 480,00 ₺ ulaşım gideri, bugün", args: {} },
+      ],
+    },
+  },
+  {
+    id: 2, title: "Akbank kartının ekstresini ödedim", at: aiSimdi(), undoable: 1, pending: null,
+    /* Uygulanmış plan: "geri al" düğmesinin mesaj ALTINDA render edildiği hâl */
+    messages: [
+      { id: 101, role: "user", content: "Akbank kartının ekstresini ödedim", at: aiSimdi(), planId: null },
+      { id: 102, role: "assistant", content: "✓ Akbank ekstresi ödendi · 4.820,00 ₺ · Garanti Vadesiz", at: aiSimdi(), planId: "eski-plan" },
+    ],
+    plans: [{ planId: "eski-plan", at: aiSimdi(), total: 1, undoable: 1, summary: "Ekstre ödemesi: Akbank · vade 2026-09-14 · Garanti Vadesiz" }],
+  },
+];
+
 createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
   const json = (o, code = 200) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
   if (url.pathname === "/api/auth/me") return json({ user: { id: 1, email: "demo@finans.local" } });
   if (url.pathname === "/api/all") return json(all);
   if (url.pathname === "/api/ai/status") return json({ enabled: true, model: "gemini/gemini-3.6-flash (2 anahtar)" });
-  if (url.pathname === "/api/ai/history") return json({ plans: [] });
-  /* Asistanın ONAY KARTI yerleşimi de görülebilsin: sohbet ucu ne gönderilirse gönderilsin
-     sabit iki adımlık bir plan döner (model yok, ağ yok). */
-  if (url.pathname === "/api/ai/chat") return json({
-    reply: "Anladım. Aşağıdaki iki kaydı oluşturacağım, onayına sunuyorum.",
-    planId: "stub-plan",
-    pending: [
-      { tool: "kart_harcamasi", summary: "Akbank Axess kartına 1.250,00 ₺ market harcaması (3 taksit), 6 Eyl", args: {} },
-      { tool: "gelir_gider", summary: "Garanti Vadesiz hesabından 480,00 ₺ ulaşım gideri, bugün", args: {} },
-    ],
-  });
+  /* Asistan (Faz 34): sohbet sunucuda yaşadığından stub'ın da bir sohbeti olması gerekir —
+     yoksa sekme boş açılır ve mobilde asıl bakılacak şeyler (sohbet listesi, onay kartı,
+     mesaj altındaki "geri al") hiç render edilmez. Bellekte küçük bir depo yeter: model
+     yok, ağ yok, ne gönderilirse gönderilsin sabit iki adımlık bir plan döner. */
+  if (url.pathname === "/api/ai/conversations" && req.method === "GET") {
+    return json({ conversations: aiKonusmalar.map(({ id, title, at, messages, undoable }) => ({ id, title, at, messages: messages.length, undoable })), more: false });
+  }
+  if (url.pathname.startsWith("/api/ai/conversations/")) {
+    const id = Number(url.pathname.split("/").pop());
+    const k = aiKonusmalar.find((x) => x.id === id);
+    if (!k) return json({ error: "konuşma bulunamadı" }, 404);
+    if (req.method === "DELETE") { aiKonusmalar.splice(aiKonusmalar.indexOf(k), 1); return json({ ok: true }); }
+    if (req.method === "PUT") { k.title = "Yeniden adlandırıldı"; return json({ ok: true, title: k.title }); }
+    return json({ id: k.id, title: k.title, messages: k.messages, truncated: false, plans: k.plans, pending: k.pending });
+  }
+  if (url.pathname === "/api/ai/chat") {
+    const k = aiKonusmalar[0];
+    k.messages.push({ id: ++aiMesajNo, role: "user", content: "dün markete 1.250 TL harcadım, Axess'le", at: aiSimdi(), planId: null });
+    k.messages.push({ id: ++aiMesajNo, role: "assistant", content: "Anladım. Aşağıdaki iki kaydı oluşturacağım, onayına sunuyorum.", at: aiSimdi(), planId: null });
+    k.pending = {
+      planId: "stub-plan", at: aiSimdi(),
+      actions: [
+        { tool: "kart_harcamasi", summary: "Akbank Axess kartına 1.250,00 ₺ market harcaması (3 taksit), 6 Eyl", args: {} },
+        { tool: "gelir_gider", summary: "Garanti Vadesiz hesabından 480,00 ₺ ulaşım gideri, bugün", args: {} },
+      ],
+    };
+    return json({ conversationId: k.id, reply: "Anladım.", pending: k.pending.actions, model: "gemini/gemini-3.6-flash", planId: "stub-plan" });
+  }
+  if (url.pathname === "/api/ai/execute") {
+    const k = aiKonusmalar[0];
+    k.messages.push({ id: ++aiMesajNo, role: "assistant", content: "✓ Akbank Axess · Market · 1.250,00 ₺\n✓ Gider: Ulaşım · 480,00 ₺", at: aiSimdi(), planId: "stub-plan" });
+    k.plans = [{ planId: "stub-plan", at: aiSimdi(), total: 2, undoable: 2, summary: "Akbank Axess kartına 1.250,00 ₺ market harcaması" }]; k.pending = null; k.undoable = 2;
+    return json({ conversationId: k.id, results: [], undoable: 2 });
+  }
+  if (url.pathname === "/api/ai/undo") {
+    const k = aiKonusmalar[0];
+    k.plans = k.plans.map((p) => ({ ...p, undoable: 0 })); k.undoable = 0;
+    return json({ conversationId: k.id, results: [] });
+  }
   if (url.pathname.startsWith("/api/")) return json({ ok: true });
   try {
     const p = url.pathname === "/" ? "/index.html" : url.pathname;

@@ -55,8 +55,10 @@ export default function App() {
   useEffect(() => {
     api.me().then(({ user }) => { setUser(user); if (user) reload(); }).catch((e) => setErr(String(e)));
   }, [reload]);
-  /* Sohbet localStorage'da yaşıyor (Asistan) — çıkışta silinmezse ortak cihazda
-     sonraki kullanıcı öncekinin finansal konuşmasını okurdu. */
+  /* Sohbetler Faz 34'ten beri sunucuda ve kullanıcıya scope'lu, yani çıkışta SİLİNMEZ
+     (başka cihazdan devam edilebilsin diye). Temizlenen yalnız bu cihazın "en son şu
+     sohbetteydim" işaretçisi + Faz 22-33'ün artık okunmayan localStorage sohbeti —
+     ortak cihazda sonraki kullanıcı öncekinin konuşmasının açıldığını görmesin. */
   const logout = useCallback(async () => { await api.logout().catch(() => {}); clearChat(); setUser(null); setData(null); }, []);
   const refresh = useCallback(async () => {
     setRefreshing(true);
