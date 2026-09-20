@@ -161,7 +161,12 @@ const aiKonusmalar = [
 createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
   const json = (o, code = 200) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
-  if (url.pathname === "/api/auth/me") return json({ user: { id: 1, email: "demo@finans.local" } });
+  /* GİRİŞ EKRANI da uygulamanın bir ekranı ve mobilde denetlenebilmeli: `CIKIS=1` ile
+     stub oturumsuz davranır (`user: null`) → App kabuğu Auth ekranını render eder.
+     Kullanım: CIKIS=1 node apps/web/scripts/mobil-stub.mjs */
+  if (url.pathname === "/api/auth/me") {
+    return json({ user: process.env.CIKIS ? null : { id: 1, email: "demo@finans.local" } });
+  }
   if (url.pathname === "/api/all") return json(all);
   if (url.pathname === "/api/ai/status") return json({ enabled: true, model: "gemini/gemini-3.6-flash (2 anahtar)" });
   /* Asistan (Faz 34): sohbet sunucuda yaşadığından stub'ın da bir sohbeti olması gerekir —

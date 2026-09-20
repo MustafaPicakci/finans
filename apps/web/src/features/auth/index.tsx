@@ -93,7 +93,10 @@ export function Auth({ onAuthed, urlAuth }: {
   const cta = mode === "login" ? "Giriş yap" : mode === "register" ? "Kayıt ol" : mode === "forgot" ? "Sıfırlama bağlantısı gönder" : "Şifreyi güncelle";
 
   return (
-    <div style={{ minHeight: "100dvh", background: T.bg, color: T.text, display: "grid", placeItems: "center", padding: 16 }}>
+    /* boxSizing: min-height ve padding aynı kutuda — border-box olmadan yükseklik
+       100dvh + 32px oluyordu, yani içerik rahat sığsa bile sayfa her zaman 32px
+       kaydırılıyordu (telefonda adres çubuğu bunu zıplamaya çevirir). */
+    <div style={{ minHeight: "100dvh", boxSizing: "border-box", background: T.bg, color: T.text, display: "grid", placeItems: "center", padding: 16 }}>
       <style>{themeCSS}</style>
       {/* Kart ve tanıtım TEK grid çocuğu: ayrı çocuk olsalar grid iki satıra bölünür ve
           aralarında ekran boyuna göre değişen bir boşluk açılırdı. */}

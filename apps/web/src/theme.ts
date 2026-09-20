@@ -147,7 +147,13 @@ export const fmtPct = (x: number, dec = 1, zatenYuzde = false) => {
 export const fmtPay = (x: number, dec = 1) => `%${(x * 100).toFixed(dec).replace(".", ",")}`;
 
 export const css: Record<string, CSSProperties> = {
-  card: { background: T.panel, border: `1px solid ${T.line}`, borderRadius: 20, padding: 22, boxShadow: "var(--shadow-sm)" },
+  /* boxSizing BURADA olmak zorunda: uygulamanın içindeki kartlar genişlik VERMEDEN kullanılır
+     (blok öğe, genişlik auto → padding zaten içeride kalır) ama `width:"100%"` verilen iki yerde
+     — giriş ekranı kartı ve Modal — içerik kutusuna 22×2 padding + 1×2 kenarlık EKLENİYORDU:
+     390px telefonda 358px'lik yuvaya 404px'lik kart çiziliyor, sağ kenarı ekranın dışında
+     kalıyordu. width:auto iken border-box'ın hiçbir etkisi yok, yani bu düzeltme başka
+     hiçbir kartı kıpırdatmaz. */
+  card: { background: T.panel, border: `1px solid ${T.line}`, borderRadius: 20, padding: 22, boxSizing: "border-box", boxShadow: "var(--shadow-sm)" },
   label: { fontSize: 11.5, color: T.mut, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6, fontWeight: 600 },
   input: {
     width: "100%", boxSizing: "border-box", background: T.panel2, border: `1px solid ${T.line}`,
