@@ -2,11 +2,11 @@ import React, { useMemo, useState } from "react";
 import { ResponsiveContainer, ComposedChart, Area, Line, ReferenceLine, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
 import {
   fmtD, parseD, convert, portfolioValueDecomposition, coveredOnly, sliceValueHistory, bucketValueHistory,
-  twrSeries, rebasePct, heldSymbols, symbolPriceSeries, symbolValueHistory,
+  twrSeries, twrByRange, rebasePct, heldSymbols, symbolPriceSeries, symbolValueHistory,
   BENCHMARKS, benchmarkSeries, benchmarkLabel,
   type BenchmarkPoint, type Currency, type HistoryRange, type PriceHistoryEntry, type Rates, type Trade,
 } from "@finans/engine";
-import { T, css, fmtMoney, CATEGORY_PALETTE } from "../../theme";
+import { T, css, fmtMoney, fmtPct, CATEGORY_PALETTE } from "../../theme";
 import { Empty, FiltreSeridi, Aciklama } from "../../ui";
 
 /* ————— PORTFÖY DEĞER GRAFİĞİ (Faz 13 → Faz 27) —————
@@ -32,12 +32,16 @@ const RANGES: { v: HistoryRange; label: string }[] = [
 const MAX_POINTS = 90;
 type Mode = "TRY" | "PCT";
 
-export function DegerGrafigi({ trades, priceHistory, benchmarks = [], rates, ccy, title = "Portföy Değeri", scopeLabel, height = 220 }: {
+export function DegerGrafigi({ trades, priceHistory, benchmarks = [], rates, ccy, title = "Portföy Değeri", scopeLabel, height = 220, defaultMode = "TRY", altBaslik }: {
   trades: Trade[]; priceHistory: PriceHistoryEntry[]; benchmarks?: BenchmarkPoint[]; rates: Rates; ccy: Currency;
   title?: string; scopeLabel?: string | null; height?: number;
+  /** Detay ekranı yüzde modunda açılır: oradaki soru "ne kadar param var" değil
+      "nasıl performans gösterdim" — ₺ modu düğmeyle erişilebilir kalır. */
+  defaultMode?: Mode;
+  altBaslik?: string;
 }) {
   const [range, setRange] = useState<HistoryRange>("1A");
-  const [mode, setMode] = useState<Mode>("TRY");
+  const [mode, setMode] = useState<Mode>(defaultMode);
   const [on, setOn] = useState<string[]>([]); // grafikte açık olan varlık serileri
   const [ref, setRef] = useState<string[]>([]); // açık referans endeksler (yalnız % modunda)
 
@@ -57,6 +61,14 @@ export function DegerGrafigi({ trades, priceHistory, benchmarks = [], rates, ccy
 
   const points = useMemo(() => bucketValueHistory(win, MAX_POINTS), [win]);
   const twr = useMemo(() => twrSeries(win), [win]);
+
+  /* Çiplerin üstündeki rakamlar. Kapsanan seri varsa o kullanılır (fiyatı bilinmeyen açık
+     pozisyonlu günler portföyü küçük gösterip getiriyi çarpıtırdı — bkz. coveredOnly);
+     yoksa ham seriye düşülür, tıpkı pencere seçiminde olduğu gibi. */
+  const rangeTwr = useMemo(
+    () => twrByRange(cov.length >= 2 ? cov : all, RANGES.map((r) => r.v)),
+    [cov, all],
+  );
 
   const held = useMemo(() => heldSymbols(trades), [trades]);
   const colorOf = (k: string) => CATEGORY_PALETTE[Math.max(0, held.findIndex((h) => h.key === k)) % CATEGORY_PALETTE.length];
@@ -156,27 +168,44 @@ export function DegerGrafigi({ trades, priceHistory, benchmarks = [], rates, ccy
     : `Bu aralıkta kayıt yok (toplam ${all.length} günlük geçmiş var). Daha geniş bir aralık seç.`;
 
   const money = (v: number) => `${v >= 0 ? "+" : "−"}${fmtMoney(Math.abs(v), ccy)}`;
-  const pct = (v: number) => `${v >= 0 ? "+" : "−"}%${Math.abs(v).toFixed(1).replace(".", ",")}`;
+  const pct = (v: number) => fmtPct(v, 1, true); // tek biçimleyici (theme.ts) — işaret %'in önünde
   const labelOf = (n: string) =>
     n === "value" ? "Değer" : n === "contributed" ? "Yatırdığın para" : n === "total" ? "Portföy (TWR)"
     : n.startsWith("b:") ? benchmarkLabel(n.slice(2)) : n.split(":")[1];
 
   return (
     <div style={{ ...css.card, paddingBottom: 6 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-          <span style={{ fontWeight: 700, fontSize: 15 }}>{title}</span>
-          {scopeLabel && <span style={{ fontSize: 12, color: T.mut }}>— {scopeLabel}</span>}
+          <div>
+            <span style={{ fontWeight: 700, fontSize: 15 }}>{title}</span>
+            {scopeLabel && <span style={{ fontSize: 12, color: T.mut }}> — {scopeLabel}</span>}
+            {altBaslik && <div style={{ fontSize: 11.5, color: T.mut3, marginTop: 2 }}>{altBaslik}</div>}
+          </div>
           {d && <span style={{ ...css.mono, fontSize: 12.5, color: up ? T.pos : T.neg }}>{up ? "▲" : "▼"} {money(d.value)}</span>}
         </div>
-        <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: `1px solid ${T.line}` }}>
-          {RANGES.map((r) => (
-            <button key={r.v} type="button" onClick={() => setRange(r.v)} style={{
-              padding: "5px 10px", border: "none", cursor: "pointer", fontSize: 11.5, fontFamily: T.disp,
-              fontWeight: range === r.v ? 700 : 500,
-              background: range === r.v ? T.panel : T.panel2, color: range === r.v ? T.acc : T.mut,
-            }}>{r.label}</button>
-          ))}
+        {/* Her çip KENDİ dönem getirisini de yazar. Çıplak "1H / 1A / 3A" etiketleri kullanıcıyı
+            tek tek tıklayıp karşılaştırmaya zorluyordu; rakamlar çipin üstündeyken "hangi
+            dönemde ne oldu" tek bakışta okunur. Rakam TWR'dır — para giriş-çıkışı arındırılmış,
+            grafiğin % moduyla birebir aynı hesap. */}
+        <div style={{ display: "flex", borderRadius: 10, overflow: "hidden", border: `1px solid ${T.line}` }}>
+          {RANGES.map((r) => {
+            const v = rangeTwr[r.v];
+            const secili = range === r.v;
+            return (
+              <button key={r.v} type="button" onClick={() => setRange(r.v)} style={{
+                padding: "5px 9px", border: "none", cursor: "pointer", fontFamily: T.disp, minHeight: 0,
+                display: "flex", flexDirection: "column", alignItems: "center", gap: 1, lineHeight: 1.15,
+                background: secili ? T.panel : T.panel2, color: secili ? T.acc : T.mut,
+              }}>
+                <span style={{ fontSize: 11.5, fontWeight: secili ? 700 : 500 }}>{r.label}</span>
+                <span style={{
+                  ...css.mono, fontSize: 9.5,
+                  color: v == null ? T.mut3 : v > 0 ? T.pos : v < 0 ? T.neg : T.mut3,
+                }}>{v == null ? "—" : pct(v)}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
 

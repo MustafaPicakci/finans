@@ -41,18 +41,45 @@ const trades = [
   { id: 3, date: d(-45), asset_type: "KRIPTO", symbol: "BTC", side: "ALIŞ", qty: 0.05, price: 93500, fee: 8, currency: "USD", account_id: null, portfolio_id: 2 },
   { id: 4, date: d(-30), asset_type: "ETF", symbol: "VOO", side: "ALIŞ", qty: 3, price: 545.2, fee: 1, currency: "USD", account_id: null, portfolio_id: 2 },
   { id: 5, date: d(-10), asset_type: "BIST", symbol: "ASELS", side: "SATIŞ", qty: 50, price: 78.9, fee: 6, currency: "TRY", account_id: 4, portfolio_id: 1 },
+  /* Faz 31 — Varlık Takibi ekranının ASIL durumları burada doğrulanır. Bunlar olmadan
+     fikstürde yalnız açık pozisyon vardı; kapanan pozisyon bölümü ve iki dönemli sembol
+     hiç çizilmiyordu, yani yerleşimleri hiç görülemiyordu. */
+  // tamamen kapanmış pozisyon — "Kapanan pozisyonlar" bölümü için
+  { id: 6, date: d(-200), asset_type: "BIST", symbol: "EREGL", side: "ALIŞ", qty: 100, price: 38.2, fee: 5, currency: "TRY", account_id: 4, portfolio_id: 1 },
+  { id: 7, date: d(-150), asset_type: "BIST", symbol: "EREGL", side: "SATIŞ", qty: 100, price: 45.6, fee: 7, currency: "TRY", account_id: 4, portfolio_id: 1 },
+  // satılıp YENİDEN alınan sembol — iki ayrı pozisyon dönemi (biri kapalı, biri açık)
+  { id: 8, date: d(-180), asset_type: "BIST", symbol: "THYAO", side: "ALIŞ", qty: 80, price: 240, fee: 10, currency: "TRY", account_id: 4, portfolio_id: 1 },
+  { id: 9, date: d(-100), asset_type: "BIST", symbol: "THYAO", side: "SATIŞ", qty: 80, price: 265, fee: 11, currency: "TRY", account_id: 4, portfolio_id: 1 },
+  { id: 10, date: d(-20), asset_type: "BIST", symbol: "THYAO", side: "ALIŞ", qty: 40, price: 290, fee: 6, currency: "TRY", account_id: 4, portfolio_id: 1 },
+  // temettü — akış görünümündeki rozeti ve "gerçekleşenin içinde" ayrımını çizer
+  { id: 11, date: d(-60), asset_type: "BIST", symbol: "ASELS", side: "TEMETTÜ", qty: 200, price: 1.5, fee: 45, currency: "TRY", account_id: 4, portfolio_id: 1 },
 ];
 const prices = [
   { symbol: "ASELS", asset_type: "BIST", price: 81.25, source: "auto", updated_at: `${d(0)} 10:15:00`, currency: "TRY" },
   { symbol: "TP2", asset_type: "FON", price: 2.04, source: "auto", updated_at: `${d(0)} 09:00:00`, currency: "TRY" },
   { symbol: "BTC", asset_type: "KRIPTO", price: 98750, source: "auto", updated_at: `${d(0)} 10:15:00`, currency: "USD" },
   { symbol: "VOO", asset_type: "ETF", price: 561.8, source: "manual", updated_at: `${d(0)} 10:15:00`, currency: "USD" },
+  { symbol: "THYAO", asset_type: "BIST", price: 312.5, source: "auto", updated_at: `${d(0)} 10:15:00`, currency: "TRY" },
 ];
+/* Fiyat geçmişi — GERÇEKTEKİ kapsam farkını taklit eder (Faz 32 tablosunun asıl sınavı bu):
+   BIST/ETF/KRIPTO Yahoo'dan 2 yıl geriye DOLDURULABİLİYOR, FON (TEFAS) ve ALTIN doldurulamıyor.
+   Bu yüzden TP2 kısa geçmişli bırakıldı: tabloda "Yıllık" kolonunun "—" göstermesi doğru
+   davranıştır ve uydurulmuş getiri olmadığının ekrandaki kanıtıdır.
+   Günlük çözünürlük: 2 günde bir olsaydı "Günlük" kolonu aslında iki günü ölçerdi. */
 const price_history = [];
-for (let i = 120; i >= 0; i -= 2) {
-  price_history.push({ symbol: "ASELS", asset_type: "BIST", date: d(-i), price: 62 + (120 - i) * 0.16, currency: "TRY" });
-  price_history.push({ symbol: "TP2", asset_type: "FON", date: d(-i), price: 1.82 + (120 - i) * 0.0018, currency: "TRY" });
-}
+const seri = (symbol, asset_type, gun, bas, egim, currency = "TRY") => {
+  for (let i = gun; i >= 0; i--) {
+    const t = gun - i;
+    // hafif dalga: düz doğru, sparkline ve grafikleri gerçekçi göstermiyor
+    const dalga = Math.sin(t / 9) * bas * 0.015;
+    price_history.push({ symbol, asset_type, date: d(-i), price: +(bas + t * egim + dalga).toFixed(4), currency });
+  }
+};
+seri("ASELS", "BIST", 400, 52, 0.073);
+seri("THYAO", "BIST", 400, 195, 0.293);
+seri("BTC", "KRIPTO", 400, 68000, 76.9, "USD");
+seri("VOO", "ETF", 400, 470, 0.23, "USD");
+seri("TP2", "FON", 120, 1.82, 0.0018); // TEFAS geriye doldurulamaz → uzun pencereler boş kalır
 /* Faz 27 referans endeksleri — hepsi TL cinsinden (sunucuda o günün kuruyla çevrilir).
    Farklı eğimler bilinçli: grafikte serilerin ayrıştığı görülebilsin. */
 const benchmark_history = [];

@@ -440,7 +440,7 @@ export default function App() {
             {tab === "nakit" && <Nakit days={days} data={data} />}
             {tab === "plan" && <Plan data={data} reload={reload} onRealize={(p) => openAdd("kalem", p)} />}
             {tab === "kart" && <Kartlar data={data} reload={reload} onAdd={(k) => openAdd(k)} />}
-            {tab === "portfoy" && <Portfoy data={data} pos={pos} rates={rates} ccy={ccy} reload={reload} onAdd={(k) => openAdd(k)} />}
+            {tab === "portfoy" && <Portfoy data={data} pos={pos} rates={rates} ccy={ccy} reload={reload} />}
             {tab === "kayitlar" && <Kayitlar data={data} reload={reload} />}
             {tab === "asistan" && <Asistan reload={reload} initialText={shared} onConsumed={() => setShared(null)} />}
           </div>

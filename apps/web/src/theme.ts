@@ -122,6 +122,22 @@ export const fmtMoney = (v: number, ccy: Currency = "TRY", dec = false, raw = fa
   return raw ? s : maybeMask(s);
 };
 
+/**
+ * Yüzde biçimleyici. İşaret `%`'in ÖNÜNE yazılır.
+ *
+ * Bunun kuralı olması gerekiyordu: çağrı yerleri `{v > 0 ? "+" : ""}%{(x*100).toFixed(1)}`
+ * diye elle kuruyordu ve negatif değerde `toFixed` kendi eksisini getirip ortaya **"%-12,5"**
+ * çıkıyordu — Türkçede yanlış, üstelik pozitifte "+%6,8" yazıp negatifte biçim değiştirmek
+ * iki rakamı görsel olarak kıyaslanamaz kılıyordu.
+ *
+ * @param x oran mı yüzde mi olduğunu `zatenYuzde` söyler (0,068 → %6,8 | 6,8 → %6,8)
+ */
+export const fmtPct = (x: number, dec = 1, zatenYuzde = false) => {
+  const v = zatenYuzde ? x : x * 100;
+  const isaret = v > 0 ? "+" : v < 0 ? "−" : ""; // U+2212: eksi, tire değil (rakamla aynı genişlik)
+  return `${isaret}%${Math.abs(v).toFixed(dec).replace(".", ",")}`;
+};
+
 export const css: Record<string, CSSProperties> = {
   card: { background: T.panel, border: `1px solid ${T.line}`, borderRadius: 20, padding: 22, boxShadow: "var(--shadow-sm)" },
   label: { fontSize: 11.5, color: T.mut, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6, fontWeight: 600 },

@@ -1,11 +1,11 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   parseD, fmtD, ymOf, tradeLedger, summarizeTrades,
   type AllData, type AssetType, type Currency, type Trade, type TradeEntry,
 } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, fmtMoney, TYPE_COLORS } from "../../theme";
-import { Empty, FiltreSeridi, SilDugmesi } from "../../ui";
+import { Empty, FiltreSeridi, SilDugmesi, useSayfalama, DahaFazla } from "../../ui";
 import { EditSheet, type EditTarget } from "../../EditSheet";
 
 /* ————— HAREKETLER (İŞLEM GEÇMİŞİ) —————
@@ -39,7 +39,11 @@ const sinceOf = (months: Range): string => {
 
 const MONTH_FMT: Intl.DateTimeFormatOptions = { month: "long", year: "numeric" };
 
-export function Hareketler({ data, trades, scopeLabel, reload, symbol, onSymbol }: {
+/** Bir seferde gösterilen/eklenen satır sayısı. Satır üç katmanlı ve yüksek — 10'u bile
+    mobilde bir ekranı aşıyor; daha büyük bir dilim "sayfalama" hissini tamamen siliyordu. */
+const SAYFA = 10;
+
+export function Hareketler({ data, trades, scopeLabel, reload, symbol, onSymbol, govdesiz = false }: {
   data: AllData;
   /** defterin kapsamı — seçili portföyün işlemleri (veya tümü) */
   trades: Trade[];
@@ -48,6 +52,8 @@ export function Hareketler({ data, trades, scopeLabel, reload, symbol, onSymbol 
   /** dışarıdan (pozisyon satırına tıklayarak) seçilen sembol filtresi */
   symbol: string | null;
   onSymbol: (s: string | null) => void;
+  /** Faz 32: sekme kartının İÇİNDE render edilirken kendi kartını çizmez */
+  govdesiz?: boolean;
 }) {
   const [side, setSide] = useState<Side>("hepsi");
   const [type, setType] = useState<AssetType | "hepsi">("hepsi");
@@ -63,8 +69,26 @@ export function Hareketler({ data, trades, scopeLabel, reload, symbol, onSymbol 
     (!since || e.trade.date >= since)
   )).reverse(), [ledger, symbol, side, type, since]); // en yeni üstte
 
+  /* ————— SAYFALAMA (Faz 32) —————
+     SUNUCU TARAFI SAYFALAMA BURADA YAPILAMAZ ve bu bir kısıt değil, matematiğin gereği:
+     `tradeLedger` her satırın "adet 70 → 120 · ort. 245,10 → 246,30" değerlerini TÜM geçmişi
+     kronolojik yürüyerek üretir. Sunucu yalnız ikinci sayfayı gönderseydi yürüyüşün başlangıç
+     durumu (o ana kadarki adet ve ortalama maliyet) kaybolur, ekrandaki her sayı yanlış
+     çıkardı. Veri zaten `/api/all` ile tek seferde geliyor; sayfalanan şey yalnız RENDER —
+     asıl maliyet de orada (her satır düğmeli/seçicili karmaşık bir DOM ağacı).
+
+     "Daha fazla" biçimi bilinçli: liste kronolojik ve ay başlıklarıyla gruplu; numaralı
+     sayfalar bu sürekli zaman çizgisini bölerdi ve mobilde denetimlere ulaşmak için zaten
+     listenin sonuna inmek gerekirdi. Eskiye gitmenin asıl aracı üstteki dönem/sembol
+     süzgeçleri. */
+  const s2 = useSayfalama(shown, SAYFA, `${symbol}|${side}|${type}|${range}`);
+  const gorunen = s2.gorunen;
+
   /* Özet para birimi başına ayrı — TRY ile USD'yi tek rakamda toplamak yanıltıcı olurdu
-     (FX kuru işlem anındaki değil bugünkü olurdu). */
+     (FX kuru işlem anındaki değil bugünkü olurdu).
+     ÖZET `shown` ÜZERİNDEN, `gorunen` üzerinden DEĞİL: dönem özeti süzgecin tamamını
+     anlatır. Görünen sayfaya bağlasaydık "daha fazla göster"e her basışta alış/satış
+     toplamları büyür, kullanıcı hangi rakamın doğru olduğunu bilemezdi. */
   const summaries = useMemo(() => {
     const ccys = [...new Set(shown.map((e) => e.trade.currency ?? "TRY"))] as Currency[];
     return ccys.map((c) => ({ ccy: c, s: summarizeTrades(shown.filter((e) => (e.trade.currency ?? "TRY") === c)) }));
@@ -77,8 +101,12 @@ export function Hareketler({ data, trades, scopeLabel, reload, symbol, onSymbol 
   const filtered = symbol != null || side !== "hepsi" || type !== "hepsi" || range !== 0;
   const clear = () => { onSymbol(null); setSide("hepsi"); setType("hepsi"); setRange(0); };
 
+  const Kap = govdesiz
+    ? ({ children }: { children: React.ReactNode }) => <>{children}</>
+    : ({ children }: { children: React.ReactNode }) => <div style={css.card}>{children}</div>;
+
   return (
-    <div style={css.card}>
+    <Kap>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
         <div style={{ fontWeight: 700, fontSize: 15 }}>
           Hareketler
@@ -141,10 +169,10 @@ export function Hareketler({ data, trades, scopeLabel, reload, symbol, onSymbol 
 
       {shown.length === 0 && <Empty>{filtered ? "Bu filtreye uyan işlem yok." : "Kayıtlı işlem yok."}</Empty>}
 
-      {/* aya göre gruplanmış hareket listesi */}
-      {shown.map((e, i) => {
+      {/* aya göre gruplanmış hareket listesi (yalnız görünen dilim) */}
+      {gorunen.map((e, i) => {
         const ym = ymOf(parseD(e.trade.date));
-        const prevYm = i > 0 ? ymOf(parseD(shown[i - 1].trade.date)) : null;
+        const prevYm = i > 0 ? ymOf(parseD(gorunen[i - 1].trade.date)) : null;
         return (
           <React.Fragment key={e.trade.id}>
             {ym !== prevYm && (
@@ -157,8 +185,11 @@ export function Hareketler({ data, trades, scopeLabel, reload, symbol, onSymbol 
           </React.Fragment>
         );
       })}
+
+      <DahaFazla s={s2} ad="hareket" />
+
       {editing && <EditSheet data={data} target={editing} reload={reload} onClose={() => setEditing(null)} />}
-    </div>
+    </Kap>
   );
 }
 

@@ -11,7 +11,7 @@
      - kayit_ara       → düzenle/sil araçlarının ihtiyaç duyduğu kayıt id'leri
    Hepsi kullanıcıya scope'ludur (uid ile sorgulanır). */
 
-import { positions, txShares, keyOf, stmtKey, type Card, type CardTx, type Trade, type Price } from "@finans/engine";
+import { positions, openPositions, txShares, keyOf, stmtKey, type Card, type CardTx, type Trade, type Price } from "@finans/engine";
 import { db, todayLocal } from "../db.js";
 import type { ArgVals } from "./tools.js";
 import type { JsonSchema } from "./provider.js";
@@ -79,7 +79,10 @@ export const READ_TOOLS: ReadTool[] = [
       const pm = new Map(auto.map((p) => [`${p.asset_type}:${p.symbol}`, p]));
       for (const p of manual) pm.set(`${p.asset_type}:${p.symbol}`, { ...p, source: "manual" });
       const sym = a.symbol ? String(a.symbol).toUpperCase() : null;
-      return positions(trades, [...pm.values()])
+      /* `openPositions`: `positions()` işlem görmüş HER sembolü döndürür, kapananlar dahil.
+         Süzülmezse asistan "elinde 0 adet EREGL var" diyebiliyordu — oysa aracın kendi
+         açıklaması "elde tutulan adet" diyor. Arayüzdeki liste ile aynı kural. */
+      return openPositions(positions(trades, [...pm.values()]))
         .filter((p) => (sym ? p.sym.toUpperCase() === sym : true))
         .map((p) => ({
           sembol: p.sym, tur: p.type, adet: r2(p.qty), ort_maliyet: r2(p.avg),
