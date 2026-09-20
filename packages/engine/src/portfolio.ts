@@ -121,6 +121,16 @@ export function positions(trades: Trade[], prices: AllData["prices"]): Position[
   }).sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
 }
 
+/**
+ * Yalnız HÂLÂ ELDE TUTULAN pozisyonlar. `positions()` bilerek işlem görmüş HER sembolü döndürür
+ * (kapananların `realized`'ı gerçekleşen K/Z toplamlarında gerekli), ama "elimde ne var" diye
+ * soran her yer bunu süzmek zorundadır — süzmeyen ekran satılmış hisseyi 0 adetle gösterir.
+ * Kural burada tek yerde: eşik ayrı ayrı yazıldığı sürece bir çağıran onu unutuyordu.
+ */
+export function openPositions(pos: Position[]): Position[] {
+  return pos.filter((p) => p.qty > 1e-9);
+}
+
 /** Bir işlemin, gerçekleştiği andaki pozisyona etkisi — işlem geçmişi ekranının satır modeli.
     Tutarlar işlemin kendi para birimindedir (`trade.currency`). */
 export type TradeEntry = {

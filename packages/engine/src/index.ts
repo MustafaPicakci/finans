@@ -5,6 +5,8 @@ export * from "./loans.js";
 export * from "./deposits.js";
 export * from "./cards.js";
 export * from "./portfolio.js";
+export * from "./holdings.js";
+export * from "./returns.js";
 export * from "./projection.js";
 export * from "./funds.js";
 export * from "./accounts.js";
