@@ -105,6 +105,11 @@ const recurring = [
 ];
 const all = {
   accounts, categories, cards, card_txs, trades, prices, price_history, benchmark_history, transactions, recurring,
+  /* Sunucunun "şimdi"si — fiyat yaşı ("12 dk önce çekildi") bunun `prices.updated_at` ile
+     farkından çıkar, tarayıcı saatinden DEĞİL. Gerçek saat yerine damgalara göre SABİT bir
+     an seçiliyor: yaş her çekimde aynı çıksın, yerleşim denetimi günün saatine göre
+     "az önce"den "9 sa önce"ye kaymasın. Fiyatlar 10:15, fon 09:00 → 12 dk / 1 sa 27 dk. */
+  now: `${d(0)} 10:27:00`,
   recurring_amounts: [
     { recurring_id: 1, from_month: "0000-01", amount: 68500 },
     { recurring_id: 2, from_month: "0000-01", amount: 24000 },

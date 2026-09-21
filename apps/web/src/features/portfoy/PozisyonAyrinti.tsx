@@ -1,7 +1,7 @@
 import React from "react";
 import { num, type Position } from "@finans/engine";
 import { api } from "../../api";
-import { T, css, fmtMoney } from "../../theme";
+import { T, css, fmtMoney, fiyatYasi, FIYAT_YASI_IPUCU } from "../../theme";
 
 /* ————— POZİSYON SATIRININ AÇILAN AYRINTISI —————
    Faz 31'de fiyat giriş kutusu + "oto" rozeti + "sıfırla" varlık listesinin GÖRÜNEN
@@ -10,8 +10,10 @@ import { T, css, fmtMoney } from "../../theme";
    liste kartında ve tabloda. Tek bileşen: iki kopya olsaydı biri (ör. "nakit say") yalnız
    bir ekranda güncellenir, diğeri sessizce eskirdi. */
 
-export function PozisyonAyrinti({ p, reload, nakitSayilir, onNakitSay, onSymbol, solBosluk = 0 }: {
+export function PozisyonAyrinti({ p, now, reload, nakitSayilir, onNakitSay, onSymbol, solBosluk = 0 }: {
   p: Position;
+  /** sunucunun "şimdi"si (`AllData.now`) — fiyat yaşı bununla ölçülür, tarayıcı saatiyle DEĞİL */
+  now?: string | null;
   reload: () => void;
   nakitSayilir: boolean;
   onNakitSay: () => void;
@@ -19,11 +21,24 @@ export function PozisyonAyrinti({ p, reload, nakitSayilir, onNakitSay, onSymbol,
   onSymbol?: (s: string) => void;
   solBosluk?: number;
 }) {
+  /* Fiyatın yanındaki yaş. Elle girilen fiyatta da anlamlı ("bu rakamı ne zaman yazmıştım"),
+     ama metni "çekildi" değil "girildi" olmalı — yoksa kullanıcının kendi yazdığı sayı
+     otomatik gelmiş gibi okunur. */
+  const yas = fiyatYasi(p.updated, now);
   return (
     <div style={{ padding: `2px 2px 14px ${solBosluk}px`, display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 11.5, color: T.mut3 }}>
         <span>ort. maliyet <span style={{ ...css.mono, color: T.mut }}>{fmtMoney(p.avg, p.currency, true)}</span></span>
-        {p.cur != null && <span>güncel <span style={{ ...css.mono, color: T.mut }}>{fmtMoney(p.cur, p.currency, true)}</span></span>}
+        {p.cur != null && (
+          <span>güncel <span style={{ ...css.mono, color: T.mut }}>{fmtMoney(p.cur, p.currency, true)}</span>
+            {yas && (
+              /* Ham damga ("2026-09-21 14:30") buradaydı ve okunmuyordu: kullanıcının sorusu
+                 "hangi saniyede" değil "ne kadar eski". Kesin an tooltip'e indi. */
+              <span title={`${p.updated}${p.source === "manual" ? "" : ` — ${FIYAT_YASI_IPUCU}`}`}
+                style={{ opacity: 0.85 }}> · {yas} {p.source === "manual" ? "girildi" : "çekildi"}</span>
+            )}
+          </span>
+        )}
         {p.realized !== 0 && (
           <span>gerçekleşen{" "}
             <span style={{ ...css.mono, color: p.realized > 0 ? T.pos : p.realized < 0 ? T.neg : T.mut }}>
@@ -31,7 +46,11 @@ export function PozisyonAyrinti({ p, reload, nakitSayilir, onNakitSay, onSymbol,
             </span>
           </span>
         )}
-        {p.updated && <span style={{ opacity: 0.8 }}>{p.updated.slice(0, 16).replace("T", " ")}</span>}
+        {p.type === "FON" && (
+          /* Fon fiyatı NAV'dır: gün içinde değişmez, kapanıştan sonra hesaplanır. Yaşı tek
+             başına görünce "fiyatlarım bayat" sanılır — oysa daha tazesi YOK. */
+          <span style={{ opacity: 0.8 }}>fon fiyatı (NAV) günde bir hesaplanır</span>
+        )}
       </div>
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>

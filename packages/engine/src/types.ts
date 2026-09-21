@@ -72,4 +72,9 @@ export type AllData = {
   /** referans endeksler (global, TL'ye çevrilmiş) — bkz. benchmarks.ts.
       Opsiyonel: Faz 27'den önceki bir yanıt (PWA önbelleği, eski sunucu) bu alanı taşımaz. */
   benchmark_history?: BenchmarkPoint[];
+  /** SUNUCUNUN saatiyle "şimdi" (`nowLocal()` biçimi). Yalnız fiyat yaşını ölçmek için var:
+      `updated_at` timezone taşımaz, yani tarayıcı saatiyle karşılaştırılamaz (sunucu UTC,
+      kullanıcı UTC+3 → 3 saat kayma). Aynı saatten iki damganın FARKI zonedan bağımsızdır.
+      Opsiyonel: eski sunucu/PWA önbelleği taşımaz — o durumda yaş gösterilmez, uydurulmaz. */
+  now?: string;
 };

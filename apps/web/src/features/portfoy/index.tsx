@@ -455,7 +455,7 @@ function PozisyonListesi({ data, pos, ccy, rates, reload, onSymbol }: {
   return (<>
     {s.gorunen.map((p, i) => (
       <VarlikSatiri
-        key={`${p.type}:${p.sym}`} p={p} ccy={ccy} rates={rates} reload={reload}
+        key={`${p.type}:${p.sym}`} p={p} now={data.now} ccy={ccy} rates={rates} reload={reload}
         agirlik={toplamTry > 0 ? convert(p.value ?? 0, p.currency, "TRY", rates) / toplamTry : null}
         nakitSayilir={cashFunds.has(p.sym)} onNakitSay={() => toggleCashFund(p.sym)}
         onSymbol={onSymbol} son={i === s.gorunen.length - 1 && s.toplam === s.gosterilen}
@@ -466,8 +466,8 @@ function PozisyonListesi({ data, pos, ccy, rates, reload, onSymbol }: {
 }
 
 /** Tek varlık satırı: üstte kimlik + değer, altta adet/ağırlık + K/Z. Dokununca ayrıntı açılır. */
-function VarlikSatiri({ p, ccy, rates, reload, agirlik, nakitSayilir, onNakitSay, onSymbol, son }: {
-  p: Position; ccy: Currency; rates: Rates; reload: () => void;
+function VarlikSatiri({ p, now, ccy, rates, reload, agirlik, nakitSayilir, onNakitSay, onSymbol, son }: {
+  p: Position; now?: string | null; ccy: Currency; rates: Rates; reload: () => void;
   agirlik: number | null; nakitSayilir: boolean; onNakitSay: () => void;
   onSymbol?: (s: string) => void; son: boolean;
 }) {
@@ -527,7 +527,7 @@ function VarlikSatiri({ p, ccy, rates, reload, agirlik, nakitSayilir, onNakitSay
 
       {acik && (
         <PozisyonAyrinti
-          p={p} reload={reload} nakitSayilir={nakitSayilir} onNakitSay={onNakitSay}
+          p={p} now={now} reload={reload} nakitSayilir={nakitSayilir} onNakitSay={onNakitSay}
           onSymbol={onSymbol} solBosluk={46}
         />
       )}

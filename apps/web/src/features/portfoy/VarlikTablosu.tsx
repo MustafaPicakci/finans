@@ -195,7 +195,7 @@ export function VarlikTablosu({ data, pos, ccy, rates, reload, onSymbol }: {
                   <tr>
                     <td colSpan={BASLIK.length} style={{ padding: 0, background: T.panel2, borderBottom: `1px solid ${T.line}` }}>
                       <PozisyonAyrinti
-                        p={p} reload={reload} nakitSayilir={cashFunds.has(p.sym)}
+                        p={p} now={data.now} reload={reload} nakitSayilir={cashFunds.has(p.sym)}
                         onNakitSay={() => toggleCashFund(p.sym)} onSymbol={onSymbol} solBosluk={10}
                       />
                     </td>

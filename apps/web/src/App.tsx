@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { project, positions, cardInfos, stmtKey, loanRemaining, portfolioValueTry, depositValueOn, convert, type Currency } from "@finans/engine";
 import { api, ApiError, type SessionUser } from "./api";
-import { T, css, fmtMoney, themeCSS, THEME_KEY, CCY_KEY, type ThemeMode } from "./theme";
+import { T, css, fmtMoney, fiyatYasi, FIYAT_YASI_IPUCU, themeCSS, THEME_KEY, CCY_KEY, type ThemeMode } from "./theme";
 import { Center } from "./ui";
 import { NAV, NavIcon, PROFIL_META, TANIMLAR_META, type TabKey } from "./nav";
 import { useBalancesHidden, toggleBalancesHidden } from "./privacy";
@@ -88,6 +88,20 @@ export default function App() {
   const days = useMemo(() => (data ? project(data, Number(data.settings.horizon || 6), rates) : []), [data, rates]);
   const pos = useMemo(() => (data ? positions(data.trades, data.prices) : []), [data]);
   const cash = useMemo(() => (data ? data.accounts.reduce((s, a) => s + a.balance, 0) : 0), [data]);
+  /* Fiyat boru hattının yaşı — "Fiyatları yenile"nin yanında durur, çünkü cevabı olduğu soru
+     ("yenilemem gerekiyor mu?") o düğmeye basmadan önce sorulur.
+     EN YENİ otomatik damga alınır, en eskisi değil: tek bir sembol çekilemediğinde (fon
+     kotası, Yahoo'da olmayan sembol) en eski damga günlerce eski kalır ve sürekli yanlış
+     alarm verirdi. Sorulan şey "her fiyat taze mi" değil, "tazeleme çalışıyor mu" — o da
+     en son başarılı çekimdir. Elle girilenler dışarıda: onların yaşı kullanıcının kendi
+     yazma anıdır, boru hattı hakkında hiçbir şey söylemez (satır ayrıntısında görünür). */
+  const fiyatTazelik = useMemo(() => {
+    const oto = (data?.prices ?? []).filter((p) => p.source !== "manual" && p.updated_at);
+    if (!oto.length) return null;
+    // "YYYY-MM-DD HH:MM:SS" sabit genişlikte → sözlük sırası zaman sırasıdır
+    const enYeni = oto.reduce((a, b) => (a.updated_at > b.updated_at ? a : b)).updated_at;
+    return fiyatYasi(enYeni, data?.now);
+  }, [data]);
   const portValueTry = useMemo(() => portfolioValueTry(pos, rates), [pos, rates]);
   const depositsValueTry = useMemo(() => {
     if (!data) return 0;
@@ -357,6 +371,10 @@ export default function App() {
             <div className="topbar-sub" style={{ fontSize: 12.5, color: T.mut3, marginTop: 1 }}>{meta.sub}</div>
           </div>
           <div style={{ flex: 1 }} />
+          {fiyatTazelik && (
+            <span className="desktop-only" title={FIYAT_YASI_IPUCU}
+              style={{ fontSize: 12, color: T.mut3, whiteSpace: "nowrap" }}>Fiyatlar {fiyatTazelik}</span>
+          )}
           <button className="icon-btn desktop-only" onClick={refresh} disabled={refreshing} title="Fiyatları yenile" style={{
             display: "flex", alignItems: "center", gap: 7, width: "auto", height: 34, padding: "0 13px", borderRadius: 10,
             border: `1px solid ${T.line}`, background: T.panel, color: T.mut, fontSize: 12.5, fontWeight: 500, fontFamily: T.disp, cursor: "pointer",
@@ -377,11 +395,15 @@ export default function App() {
                 padding: 6, display: "grid", gap: 2,
               }}>
                 {([
-                  { label: refreshing ? "Yenileniyor…" : "Fiyatları yenile", icon: <span style={{ display: "inline-block", animation: refreshing ? "spin 1s linear infinite" : "none" }}>↻</span>, on: () => refresh(), disabled: refreshing },
+                  /* `alt`: mobilde fiyat yaşının durabileceği tek yer burası — üst çubukta
+                     390px'te yer yok, kartlara koymak Faz 32'de çıkarılan üçüncü kopyayı
+                     geri getirirdi. Eylemin altında duran bir DURUM satırı, ayrı bir eylem
+                     gibi okunmasın diye küçük ve soluk. */
+                  { label: refreshing ? "Yenileniyor…" : "Fiyatları yenile", alt: fiyatTazelik ? `son çekim ${fiyatTazelik}` : undefined, icon: <span style={{ display: "inline-block", animation: refreshing ? "spin 1s linear infinite" : "none" }}>↻</span>, on: () => refresh(), disabled: refreshing },
                   /* renkli emoji yerine kenar çubuğuyla aynı SVG: menüdeki simgeler tek renk kalsın */
                   { label: balancesHidden ? "Bakiyeleri göster" : "Bakiyeleri gizle", icon: <EyeIcon off={balancesHidden} />, on: toggleBalancesHidden },
                   { label: theme === "light" ? "Koyu tema" : "Açık tema", icon: <ThemeIcon />, on: () => setTheme((t) => (t === "light" ? "dark" : "light")) },
-                ] as { label: string; icon: React.ReactNode; on: () => void; disabled?: boolean; danger?: boolean }[]).map((it) => (
+                ] as { label: string; alt?: string; icon: React.ReactNode; on: () => void; disabled?: boolean; danger?: boolean }[]).map((it) => (
                   <button key={it.label} disabled={it.disabled}
                     onClick={() => { it.on(); setMenuOpen(false); }}
                     style={{
@@ -391,7 +413,12 @@ export default function App() {
                       opacity: it.disabled ? 0.5 : 1,
                     }}>
                     <span style={{ width: 18, display: "grid", placeItems: "center", fontSize: 13, color: it.danger ? T.neg : T.mut }}>{it.icon}</span>
-                    {it.label}
+                    {it.alt
+                      ? <span style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+                        {it.label}
+                        <span style={{ fontSize: 11, fontWeight: 500, color: T.mut3 }}>{it.alt}</span>
+                      </span>
+                      : it.label}
                   </button>
                 ))}
                 {/* Mobilde kenar çubuğu yok — kullanıcı hesabı ekranının kapısı burası.

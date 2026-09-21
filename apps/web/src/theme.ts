@@ -146,6 +146,41 @@ export const fmtPct = (x: number, dec = 1, zatenYuzde = false) => {
  */
 export const fmtPay = (x: number, dec = 1) => `%${(x * 100).toFixed(dec).replace(".", ",")}`;
 
+/**
+ * `prices.updated_at`'in yaşı — "az önce" / "12 dk önce" / "3 sa önce" / "2 gün önce".
+ *
+ * **İki damga da SUNUCUNUN saatindendir ve bu şart**: `updated_at` timezone taşımayan bir
+ * duvar saati damgası (`nowLocal()`), tarayıcının saatiyle karşılaştırılamaz — sunucu
+ * (Render) UTC'de, kullanıcı UTC+3'te olduğundan yeni çekilmiş bir fiyat "3 sa önce"
+ * görünürdü. Aynı saatten iki damganın FARKI zonedan bağımsız doğrudur, bu yüzden `now`
+ * `/api/all`'dan gelir. Gelmiyorsa (eski sunucu / PWA önbelleği) **null** dönülür: yaşı
+ * tarayıcı saatinden uydurmak, yanlış bir rakamı doğru gibi göstermek olurdu.
+ *
+ * Ölçtüğü şey fiyatın DEĞİL, son başarılı ÇEKİMİN yaşıdır — bkz. `FIYAT_YASI_IPUCU`.
+ */
+export function fiyatYasi(updated: string | null | undefined, now: string | null | undefined): string | null {
+  if (!updated || !now) return null;
+  /* "YYYY-MM-DD HH:MM:SS" → ikisi de aynı şekilde ayrıştırılır; mutlak değer değil FARK
+     kullanıldığı için tarayıcının hangi zonede olduğu sonucu etkilemez. */
+  const ms = (v: string) => Date.parse(v.replace(" ", "T"));
+  const d = ms(now) - ms(updated);
+  if (!isFinite(d)) return null;
+  if (d < 0) return "az önce"; // sunucu saati damgadan geri (saat düzeltmesi) — negatif yaş yazma
+  const dk = Math.floor(d / 60_000);
+  if (dk < 2) return "az önce";
+  if (dk < 60) return `${dk} dk önce`;
+  const sa = Math.floor(dk / 60);
+  if (sa < 24) return `${sa} sa önce`;
+  return `${Math.floor(sa / 24)} gün önce`;
+}
+
+/** Yaş rozetlerinin tooltip'i. Ayrım kasıtlı: `updated_at` fiyatın oluştuğu an değil, bizim
+    onu son kez başarıyla ÇEKTİĞİMİZ andır. Yahoo piyasa kapalıyken de son kapanışı döndürür,
+    yani pazar günü çekilen bir BIST fiyatı "2 dk önce" görünür ama cuma kapanışıdır. Rakamın
+    dürüstçe söylediği şey: fiyat boru hattı çalışıyor mu (cron öldü mü, sunucu uyudu mu). */
+export const FIYAT_YASI_IPUCU =
+  "Fiyatın son çekildiği an. BIST verisi ~15 dk gecikmelidir ve piyasa kapalıyken son kapanış çekilir; fon (TEFAS) fiyatı günde bir hesaplanır.";
+
 export const css: Record<string, CSSProperties> = {
   /* boxSizing BURADA olmak zorunda: uygulamanın içindeki kartlar genişlik VERMEDEN kullanılır
      (blok öğe, genişlik auto → padding zaten içeride kalır) ama `width:"100%"` verilen iki yerde

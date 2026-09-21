@@ -328,6 +328,12 @@ api.get("/all", async (c) => {
     prices: [...pm.values()], price_history, benchmark_history,
     // global (fx/tefas) + kullanıcı ayarları (horizon/cash_funds); kullanıcı çakışmada kazanır
     settings: Object.fromEntries([...globalSettings, ...userSettings].map((s) => [s.key, s.value])),
+    /* SUNUCUNUN "şimdi"si — fiyat yaşı ("12 dk önce çekildi") bunun `prices.updated_at` ile
+       farkından çıkar. Tarayıcının saatiyle karşılaştırmak YANLIŞ olurdu: `nowLocal()`
+       timezone taşımayan bir duvar saati damgasıdır ve sunucu (Render) UTC'de, kullanıcı
+       UTC+3'te — fark hep 3 saat kayar, taze fiyat "3 sa önce" görünürdü. İki damga da aynı
+       saate ait olduğundan farkları zonedan bağımsız doğrudur. */
+    now: nowLocal(),
   });
 });
 
