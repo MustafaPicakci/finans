@@ -13,4 +13,5 @@ export * from "./accounts.js";
 export * from "./statement.js";
 export * from "./setup.js";
 export * from "./kayitlar.js";
+export * from "./harcama.js";
 export * from "./benchmarks.js";

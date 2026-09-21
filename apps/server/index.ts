@@ -7,6 +7,7 @@ import { logger } from "hono/logger";
 import cron from "node-cron";
 import { txShares, keyOf, cashDelta, statementAmount, REC_AMOUNT_BEGIN, type Card, type CardTx, type TradeSide } from "@finans/engine";
 import { db, initDb, nowLocal, todayLocal, TENANT_TABLES, GLOBAL_SETTING_KEYS, type TxClient } from "./db.js";
+import { loadAllData } from "./data.js";
 import { refreshAll, backfillPriceHistory } from "./prices.js";
 import { refreshBenchmarks, autoBackfill } from "./benchmarks.js";
 import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, purgeStaleEmailTokens, SESSION_COOKIE, type SessionUser } from "./auth.js";
@@ -260,76 +261,16 @@ api.use("*", async (c, next) => {
   await next();
 });
 
-/** Bugünden 2 yıl öncesi (YYYY-MM-DD) — referans serilerinin gönderim penceresi. */
-function twoYearsAgo(): string {
-  const d = new Date();
-  d.setFullYear(d.getFullYear() - 2);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
+/* ---- tek seferde tüm veri (kullanıcıya scope'lu; prices/price_history/benchmark_history GLOBAL) ----
+   Gövdesi data.ts'e taşındı: asistanın okuma araçları da (net varlık, nakit projeksiyonu) aynı
+   `AllData`yı ister ve fiyat/ayar birleştirmesinin ikinci bir kopyası olmamalı — bkz. data.ts.
 
-/* ---- tek seferde tüm veri (kullanıcıya scope'lu; prices/price_history/benchmark_history GLOBAL) ---- */
-api.get("/all", async (c) => {
-  const uid = c.get("user").id;
-  const [accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, account_entries, transfers, autoPrices, userPrices, price_history, benchmark_history, globalSettings, userSettings] =
-    await Promise.all([
-      db.all("SELECT * FROM accounts WHERE user_id=? ORDER BY id", uid),
-      db.all("SELECT * FROM recurring WHERE user_id=? ORDER BY day, id", uid),
-      db.all("SELECT recurring_id, from_month, amount FROM recurring_amounts WHERE user_id=? ORDER BY recurring_id, from_month", uid),
-      db.all("SELECT * FROM loans WHERE user_id=? ORDER BY id", uid),
-      db.all("SELECT * FROM oneoffs WHERE user_id=? ORDER BY date", uid),
-      db.all("SELECT * FROM trades WHERE user_id=? ORDER BY date, id", uid),
-      db.all("SELECT * FROM portfolios WHERE user_id=? ORDER BY name", uid),
-      db.all("SELECT * FROM cards WHERE user_id=? ORDER BY id", uid),
-      db.all("SELECT * FROM card_txs WHERE user_id=? ORDER BY date, id", uid),
-      db.all("SELECT * FROM categories WHERE user_id=? ORDER BY name", uid),
-      db.all("SELECT * FROM transactions WHERE user_id=? ORDER BY date DESC, id DESC", uid),
-      db.all("SELECT * FROM deposits WHERE user_id=? ORDER BY open_date, id", uid),
-      db.all("SELECT recurring_id, ym FROM recurring_realized WHERE user_id=?", uid),
-      db.all("SELECT card_id, due FROM statement_payments WHERE user_id=?", uid),
-      // Faz 15 — hesap hareket defteri: yeniden eskiye (yürüyen bakiye istemcide bugünden geriye çözülür)
-      db.all("SELECT * FROM account_entries WHERE user_id=? ORDER BY date DESC, id DESC", uid),
-      db.all("SELECT * FROM transfers WHERE user_id=? ORDER BY date DESC, id DESC", uid),
-      db.all<any>("SELECT symbol, asset_type, price, source, updated_at, currency FROM prices"),
-      db.all<any>("SELECT symbol, asset_type, price, updated_at, currency FROM user_prices WHERE user_id=?", uid),
-      /* price_history GLOBAL bir tablodur ve TEFAS tazelemesi bedavaya gelen TÜM fonları
-         (yüzlerce) her gün oraya yazar — "yeni fon eklenirse fiyatı hazır olsun" diye, bkz.
-         prices.ts. Ama okuma tarafı filtrelemeyince bu, her sayfa açılışında tüm piyasanın
-         geçmişini istemciye indirmek demekti: yüz binlerce satıra doğru büyüyen, sürekli
-         şişen bir yük (ölçüldü: 770 kB / 5,5 sn). Veri tek yerde kullanılıyor — portföy
-         değer grafiği (`portfolioValueHistory`) — ve orada yalnız KULLANICININ işlem yaptığı
-         semboller anlamlı. EXISTS ile ona daraltılıyor; grafik değişmez, yük düşer. */
-      db.all(
-        `SELECT ph.* FROM price_history ph
-          WHERE EXISTS (SELECT 1 FROM trades t
-                         WHERE t.user_id=? AND t.symbol=ph.symbol AND t.asset_type=ph.asset_type)
-          ORDER BY ph.date`,
-        uid,
-      ),
-      /* Referans endeksler GLOBAL ve KÜÇÜKTÜR (5 seri × ~500 gün) — price_history'nin aksine
-         kullanıcıya göre daraltılamaz, çünkü karşılaştırmanın anlamı zaten "tutmadığın şeye
-         göre nasılsın". Yine de 2 yılla sınırlanıyor: grafiğin en geniş penceresi 1Y. */
-      db.all<{ key: string; date: string; price: number }>(
-        "SELECT key, date, price FROM benchmark_history WHERE date >= ? ORDER BY date", twoYearsAgo(),
-      ),
-      db.all<{ key: string; value: string }>("SELECT key, value FROM settings"),
-      db.all<{ key: string; value: string }>("SELECT key, value FROM user_settings WHERE user_id=?", uid),
-      /* Faz 34 — asistan sohbeti ve uyguladığı işlemler de kullanıcının verisidir: sohbet
-         sunucuya taşındığından (eskiden localStorage'daydı, export'un görebileceği bir yer
-         değildi) KVKK indirmesine de girmesi gerekir. */
-      db.all("SELECT * FROM ai_conversations WHERE user_id=? ORDER BY id", uid),
-      db.all("SELECT * FROM ai_messages WHERE user_id=? ORDER BY id", uid),
-      db.all("SELECT * FROM ai_actions WHERE user_id=? ORDER BY id", uid),
-    ]);
-  // fiyatlar: global otomatik (piyasa) + kullanıcının elle override'ı (varsa o kazanır, source='manual')
-  const pm = new Map<string, any>(autoPrices.map((p) => [`${p.asset_type}:${p.symbol}`, { ...p, source: "auto" }]));
-  for (const up of userPrices) pm.set(`${up.asset_type}:${up.symbol}`, { ...up, source: "manual" });
-  return c.json({
-    accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, account_entries, transfers,
-    prices: [...pm.values()], price_history, benchmark_history,
-    // global (fx/tefas) + kullanıcı ayarları (horizon/cash_funds); kullanıcı çakışmada kazanır
-    settings: Object.fromEntries([...globalSettings, ...userSettings].map((s) => [s.key, s.value])),
-  });
-});
+   Bu taşımada Faz 34'ten kalan bir kusur da düştü: `ai_conversations`/`ai_messages`/`ai_actions`
+   buradaki `Promise.all`a eklenmiş ama SONUCU HİÇ KULLANILMIYORDU (22 değişken, 25 sorgu) —
+   yorumu bile "KVKK indirmesine girmesi gerekir" diyor, yani satırlar `/api/export`a aitti ve
+   orada zaten var. Yani her sayfa açılışı ve her mutasyon sonrası `reload()`, sohbet tablolarını
+   (monoton büyüyen `ai_messages` dahil) `SELECT *` ile boşuna çekiyordu. */
+api.get("/all", async (c) => c.json(await loadAllData(c.get("user").id, { gecmis: true })));
 
 /* ---- generic CRUD ---- */
 type Col = { name: string; required?: boolean; default?: unknown };

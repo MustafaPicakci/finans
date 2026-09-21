@@ -113,16 +113,25 @@ const TR_KATLA: Record<string, string> = {
 const sadelestir = (s: string) =>
   s.toLocaleLowerCase("tr").replace(/[ıişğüöçâîû]/g, (ch) => TR_KATLA[ch] ?? ch);
 
-/** Serbest metin araması: ad + detay + etiket taranır. Boş sorgu listeyi olduğu gibi döner.
-    Birden çok kelime VE ile bağlanır ("market garanti" → ikisi de geçmeli), çünkü kullanıcı
-    hatırladığı parçaları arka arkaya yazar; OR sonuçları gürültüye boğardı. */
-export function kayitAra(kayitlar: Kayit[], sorgu: string): Kayit[] {
+/** Tek bir metnin sorguya uyup uymadığı. Birden çok kelime VE ile bağlanır ("market garanti"
+    → ikisi de geçmeli), çünkü kullanıcı hatırladığı parçaları arka arkaya yazar; OR sonuçları
+    gürültüye boğardı. Boş sorgu her metne uyar.
+
+    `kayitAra`'nın içinden ÇIKARILDI çünkü ikinci bir arayan var: harcama özeti (harcama.ts)
+    aynı toleransla süzmek zorunda — "market" araması hem `Kayit` listesinde hem toplamda aynı
+    satırları bulmalı, yoksa ekranda görünen liste ile asistanın söylediği toplam ayrışır.
+    Katlama kuralının tek kopya kalması bu yüzden önemli (bkz. yukarıdaki I/ı gerekçesi). */
+export function metinEsler(havuz: string, sorgu: string): boolean {
   const kelimeler = sadelestir(sorgu).split(/\s+/).filter(Boolean);
-  if (!kelimeler.length) return kayitlar;
-  return kayitlar.filter((k) => {
-    const havuz = sadelestir(`${k.ad} ${k.detay} ${k.etiket}`);
-    return kelimeler.every((w) => havuz.includes(w));
-  });
+  if (!kelimeler.length) return true;
+  const h = sadelestir(havuz);
+  return kelimeler.every((w) => h.includes(w));
+}
+
+/** Serbest metin araması: ad + detay + etiket taranır. Boş sorgu listeyi olduğu gibi döner. */
+export function kayitAra(kayitlar: Kayit[], sorgu: string): Kayit[] {
+  if (!sadelestir(sorgu).trim()) return kayitlar;
+  return kayitlar.filter((k) => metinEsler(`${k.ad} ${k.detay} ${k.etiket}`, sorgu));
 }
 
 export type KayitSuzgec = {
