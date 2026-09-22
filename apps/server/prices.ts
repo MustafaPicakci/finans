@@ -65,6 +65,87 @@ export async function yahooHistory(sym: string, range = "1y"): Promise<{ date: s
   }
 }
 
+/** Sembolün Yahoo karşılığı. İKİ yerde gerekiyor (geçmiş fiyat + kurumsal olay); iki kopya
+    olsaydı biri yeni bir varlık türünde sessizce ayrışırdı. */
+export function yahooSymbol(assetType: string, symbol: string): string {
+  switch (assetType) {
+    case "BIST": return `${symbol}.IS`;
+    case "KRIPTO": return `${symbol}-USD`;
+    case "DOVIZ": return `${symbol}TRY=X`;
+    default: return symbol; // ETF: doğrudan sembol
+  }
+}
+
+/**
+ * Faz 36 — KURUMSAL OLAYLAR. `yahooHistory` ile AYNI uç, tek farkı `events=div,split`.
+ * Bu yüzden yeni bir veri kaynağı/sözleşmesi girmiyor: Yahoo formatı bozulursa üç fonksiyon
+ * birlikte güncellenir.
+ *
+ * Ölçüldü (30 likit BIST sembolü): bedelsizler `splits` olarak GELİYOR — 11/30 sembolde son
+ * 5 yılda en az bir olay var. Oranlar ondalıktır (ISCTR 249,99751:100), bu yüzden `splitRatio`
+ * METNİ ayrıştırılmaz, ham `numerator`/`denominator` kullanılır.
+ *
+ * Temettü tutarı BRÜTTÜR (stopaj düşülmemiş) — arayüz bunu açıkça yazar ve tutarı
+ * düzenlenebilir bırakır; burada bir stopaj oranı VARSAYILMAZ (oran değişir, yanlış bir
+ * netleştirme sessiz bir hata olurdu).
+ */
+export async function yahooEvents(sym: string, range = "5y"): Promise<
+  { date: string; kind: "bolunme" | "temettu"; value: number }[]
+> {
+  try {
+    const r = await fetch(
+      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=${encodeURIComponent(range)}&interval=1d&events=div%2Csplit`,
+      { headers: UA, signal: AbortSignal.timeout(30_000) },
+    );
+    if (!r.ok) return []; // 404: sembol değişmiş/kotasyondan çıkmış — sessizce geç
+    const ev: any = (await r.json())?.chart?.result?.[0]?.events ?? {};
+    const out: { date: string; kind: "bolunme" | "temettu"; value: number }[] = [];
+    const day = (ts: number) => {
+      const d = new Date(ts * 1000);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    };
+    for (const v of Object.values<any>(ev.splits ?? {})) {
+      const ratio = Number(v?.numerator) / Number(v?.denominator);
+      if (isFinite(ratio) && ratio > 0) out.push({ date: day(v.date), kind: "bolunme", value: ratio });
+    }
+    for (const v of Object.values<any>(ev.dividends ?? {})) {
+      const amt = Number(v?.amount);
+      if (isFinite(amt) && amt > 0) out.push({ date: day(v.date), kind: "temettu", value: amt });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Tutulan sembollerin kurumsal olaylarını `corporate_actions`'a yazar (Faz 36).
+ * FON/ALTIN kapsam dışı: fonlar bölünmez, TEFAS zaten NAV'a yansıtır.
+ * Upsert olduğundan idempotent — günlük cron aynı olayı tekrar yazmaz, düzeltme gelirse ezer.
+ */
+export async function refreshCorporateActions(range = "5y"): Promise<{ symbol: string; events: number }[]> {
+  const held = await db.all<{ asset_type: string; symbol: string; currency: string }>(
+    "SELECT DISTINCT asset_type, symbol, currency FROM trades WHERE asset_type IN ('BIST','ETF')",
+  );
+  const out: { symbol: string; events: number }[] = [];
+  for (const h of held) {
+    const evs = await yahooEvents(yahooSymbol(h.asset_type, h.symbol), range);
+    if (evs.length) {
+      await db.tx(async (t) => {
+        for (const e of evs) {
+          await t.run(
+            `INSERT INTO corporate_actions (symbol, asset_type, date, kind, value, currency) VALUES (?,?,?,?,?,?)
+             ON CONFLICT (symbol, asset_type, date, kind) DO UPDATE SET value=excluded.value, currency=excluded.currency`,
+            h.symbol, h.asset_type, e.date, e.kind, e.value, h.currency,
+          );
+        }
+      });
+    }
+    out.push({ symbol: `${h.asset_type}:${h.symbol}`, events: evs.length });
+  }
+  return out;
+}
+
 /**
  * Elde tutulan sembollerin GEÇMİŞ fiyatlarını `price_history`'ye doldurur (Faz 27).
  * Neden gerekti: fiyat geçmişi yalnız uygulama çalıştığı günden itibaren birikiyordu, yani
@@ -87,11 +168,7 @@ export async function backfillPriceHistory(range = "2y"): Promise<{ symbol: stri
 
   const out: { symbol: string; asset_type: string; days: number }[] = [];
   for (const h of held) {
-    const ysym =
-      h.asset_type === "BIST" ? `${h.symbol}.IS`
-      : h.asset_type === "KRIPTO" ? `${h.symbol}-USD`
-      : h.asset_type === "DOVIZ" ? `${h.symbol}TRY=X`
-      : h.symbol; // ETF: doğrudan sembol
+    const ysym = yahooSymbol(h.asset_type, h.symbol);
     const usdNative = (h.asset_type === "KRIPTO" || h.asset_type === "ETF") && h.currency !== "USD";
     const rows: [string, number][] = [];
     for (const p of await yahooHistory(ysym, range)) {

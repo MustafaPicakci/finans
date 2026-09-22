@@ -1,4 +1,5 @@
 import type { BenchmarkPoint } from "./benchmarks.js";
+import type { CorporateAction } from "./corporate.js";
 /** Hesap türü (Faz 16): nakit ve aracı kurum da birer hesaptır — para hiçbir noktada sistemden
     "çıkmasın" diye. ATM'den çekilen para kaybolmaz, `nakit` hesabına virmanlanır; Midas'a atılan
     para kaybolmaz, `araci` hesabına virmanlanır. Tür yalnız gruplama/ikon içindir, matematiği
@@ -72,6 +73,10 @@ export type AllData = {
   /** referans endeksler (global, TL'ye çevrilmiş) — bkz. benchmarks.ts.
       Opsiyonel: Faz 27'den önceki bir yanıt (PWA önbelleği, eski sunucu) bu alanı taşımaz. */
   benchmark_history?: BenchmarkPoint[];
+  /** Faz 36 — piyasanın kurumsal olayları (bedelsiz/temettü), kullanıcının sembolleriyle
+      sınırlı. `kurumsalOneriler()` bunları defterle karşılaştırıp eksik kaydı bulur.
+      Opsiyonel: Faz 36'ten önceki bir yanıt (PWA önbelleği, eski sunucu) bu alanı taşımaz. */
+  corporate_actions?: CorporateAction[];
   /** SUNUCUNUN saatiyle "şimdi" (`nowLocal()` biçimi). Yalnız fiyat yaşını ölçmek için var:
       `updated_at` timezone taşımaz, yani tarayıcı saatiyle karşılaştırılamaz (sunucu UTC,
       kullanıcı UTC+3 → 3 saat kayma). Aynı saatten iki damganın FARKI zonedan bağımsızdır.

@@ -467,7 +467,8 @@ export default function App() {
           <div key={tab} className="tab-grid" style={{ animation: "fadeUp .4s ease both", display: "grid", gap: 16 }}>
             {tab === "ozet" && <Ozet data={data} days={days} pos={pos} cash={cash} rates={rates} reload={reload} summary={summary} m={m} onGoAccounts={() => setTab("hesaplar")}
               onGoPortfolio={() => setTab("portfoy")}
-              onSellFund={(p: TradePrefill) => setAdd({ kind: "trade", tradePrefill: p })} />}
+              onSellFund={(p: TradePrefill) => setAdd({ kind: "trade", tradePrefill: p })}
+              onKurumsalOlay={(p: TradePrefill) => setAdd({ kind: "trade", tradePrefill: p })} />}
             {tab === "hesaplar" && <Hesaplar data={data} reload={reload} />}
             {tab === "profil" && <Profil user={user} onDeleted={() => { setUser(null); setData(null); }} />}
             {tab === "tanimlar" && <Tanimlar data={data} reload={reload} />}

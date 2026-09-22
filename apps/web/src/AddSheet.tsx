@@ -2,7 +2,7 @@ import React, { useMemo } from "react";
 import type { AllData } from "@finans/engine";
 import { T, css, fmtMoney } from "./theme";
 import { Modal } from "./ui";
-import { KalemForm, TransferForm, CardTxForm, RecurringForm, LoanForm, TradeForm, DepositForm, ImportForm, type AddKind, type KalemPrefill, type CardTxPrefill, type TradePrefill } from "./features/forms";
+import { KalemForm, TransferForm, CardTxForm, RecurringForm, LoanForm, TradeForm, BedelliForm, DepositForm, ImportForm, type AddKind, type KalemPrefill, type CardTxPrefill, type TradePrefill } from "./features/forms";
 import { shortcuts } from "./features/forms/recall";
 
 export type { AddKind, KalemPrefill, TradePrefill };
@@ -20,6 +20,10 @@ const OPTIONS: { kind: AddKind; dot: string; title: string; desc: string }[] = [
   { kind: "recurring", dot: "var(--brand)", title: "Düzenli gelir / gider", desc: "Maaş, kira, fatura… her ay tekrarlar, nakit projeksiyonuna girer" },
   { kind: "loan", dot: "var(--cat-8)", title: "Kredi / taksit", desc: "Sabit taksit planı; kalan taksitler nakit projeksiyonuna ve kredi borcuna girer" },
   { kind: "trade", dot: "var(--pos)", title: "Portföy işlemi", desc: "Hisse/fon/altın/döviz alış-satışı; pozisyonlara ve net varlığa yansır" },
+  /* Bedelli ayrı bir SEÇENEK ama ayrı bir KAYIT TÜRÜ değil (Faz 21/35): duyurunun dili
+     ("%150 bedelli, 1 TL nominal") ile formun dili (adet + birim fiyat) farklı olduğundan
+     çeviriyi kullanıcı elle yapıyordu; iki tipik hata da sessizdi. Sonunda düz bir ALIŞ yazar. */
+  { kind: "bedelli", dot: "var(--cat-3)", title: "Bedelli sermaye artışı", desc: "Rüçhan hakkını kullan: duyurudaki oranı gir, kaç lot alacağını ve ne ödeyeceğini hesaplasın. Deftere normal bir ALIŞ olarak yazılır" },
   { kind: "deposit", dot: "var(--type-doviz)", title: "Vadeli mevduat", desc: "Anapara + faiz oranı + gün sayısı; net varlığa kilitli varlık olarak faiz işleyerek girer" },
   { kind: "import", dot: "var(--cat-4)", title: "Toplu içe aktar", desc: "Banka ekstresini veya tabloyu yapıştır; satırlar çözülür, kontrol edip tek seferde deftere aktarırsın" },
 ];
@@ -31,6 +35,7 @@ const TITLES: Record<AddKind, string> = {
   recurring: "Düzenli Gelir / Gider",
   loan: "Kredi / Taksit",
   trade: "Portföy İşlemi",
+  bedelli: "Bedelli Sermaye Artışı",
   deposit: "Vadeli Mevduat",
   import: "Toplu İçe Aktar",
 };
@@ -93,6 +98,7 @@ export function AddSheet({ data, state, setState, onClose, reload }: {
       {state.kind === "recurring" && <RecurringForm {...props} />}
       {state.kind === "loan" && <LoanForm {...props} />}
       {state.kind === "trade" && <TradeForm {...props} prefill={state.tradePrefill} />}
+      {state.kind === "bedelli" && <BedelliForm {...props} />}
       {state.kind === "deposit" && <DepositForm {...props} />}
       {state.kind === "import" && <ImportForm {...props} />}
     </Modal>

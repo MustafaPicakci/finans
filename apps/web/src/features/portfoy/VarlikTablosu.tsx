@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import {
   convert, openPositions, symbolReturns,
   type AllData, type Currency, type Position, type PriceHistoryEntry, type Rates,
+  dripAcikMi, dripToggle,
 } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, fmtMoney, fmtPct, fmtPay, TYPE_COLORS } from "../../theme";
@@ -58,6 +59,12 @@ export function VarlikTablosu({ data, pos, ccy, rates, reload, onSymbol }: {
   const [acikSym, setAcikSym] = useState<string | null>(null);
 
   const cashFunds = new Set((data.settings.cash_funds || "").split(",").map((s) => s.trim()).filter(Boolean));
+  /* DRIP işareti `user_settings.drip_symbols`'te (cash_funds deseni) — ayrı tablo açmaya
+     değmeyecek kadar küçük bir opt-in. Ayrıştırma motorda tek kaynakta. */
+  const toggleDrip = async (type: string, sym: string) => {
+    await api.put("settings", { drip_symbols: dripToggle(data.settings, type, sym) });
+    reload();
+  };
   const toggleCashFund = async (sym: string) => {
     const next = new Set(cashFunds);
     next.has(sym) ? next.delete(sym) : next.add(sym);
@@ -197,6 +204,7 @@ export function VarlikTablosu({ data, pos, ccy, rates, reload, onSymbol }: {
                       <PozisyonAyrinti
                         p={p} now={data.now} reload={reload} nakitSayilir={cashFunds.has(p.sym)}
                         onNakitSay={() => toggleCashFund(p.sym)} onSymbol={onSymbol} solBosluk={10}
+                        dripAcik={dripAcikMi(data.settings, p.type, p.sym)} onDrip={() => toggleDrip(p.type, p.sym)}
                       />
                     </td>
                   </tr>

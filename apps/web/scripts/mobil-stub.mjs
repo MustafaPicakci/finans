@@ -126,7 +126,21 @@ const all = {
     { id: 3, account_id: 1, date: d(-200), amount: 60000, kind: "acilis", source_table: null, source_id: null, note: "Açılış bakiyesi", created_at: `${d(-200)} 09:00:00` },
   ],
   transfers: [{ id: 1, date: d(-6), from_account_id: 1, to_account_id: 3, amount: 2000, note: "ATM çekimi" }],
-  settings: { fx_usd_try: "41.85", horizon: "6", cash_funds: "" },
+  settings: { fx_usd_try: "41.85", horizon: "6", cash_funds: "", drip_symbols: "BIST:ASELS" },
+  /* Faz 36 — kurumsal olaylar. Fikstür BİLEREK üç durumu birden kurar, yoksa Özet'teki kart
+     hiç çizilmez ve yerleşimi görülemez:
+     1. ASELS bedelsizi (150 gün önce, alımdan SONRA → öneri ÇIKAR),
+     2. ASELS temettüsü + drip_symbols açık → "Geri yatır" düğmesi de çıkar,
+     3. EREGL temettüsü pozisyon kapandıktan sonra → öneri ÇIKMAZ (kuralın sessiz kaldığı
+        durum da denetlenebilsin; kart yalnız ikisini göstermeli). */
+  corporate_actions: [
+    { symbol: "ASELS", asset_type: "BIST", date: d(-100), kind: "bolunme", value: 2, currency: "TRY" },
+    /* d(-60) DEĞİL: fikstürde o tarihte zaten bir TEMETTÜ kaydı var ve kural onu doğru
+       şekilde bastırıyordu — yani "Geri yatır" yolu hiç çizilmiyordu. Kaydı olmayan bir
+       tarih seçildi ki önerinin kendisi de denetlenebilsin. */
+    { symbol: "ASELS", asset_type: "BIST", date: d(-25), kind: "temettu", value: 0.2346, currency: "TRY" },
+    { symbol: "EREGL", asset_type: "BIST", date: d(-40), kind: "temettu", value: 1.15, currency: "TRY" },
+  ],
 };
 
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".svg": "image/svg+xml", ".webmanifest": "application/manifest+json", ".ico": "image/x-icon" };
@@ -212,6 +226,16 @@ createServer(async (req, res) => {
     const k = aiKonusmalar[0];
     k.plans = k.plans.map((p) => ({ ...p, undoable: 0 })); k.undoable = 0;
     return json({ conversationId: k.id, results: [] });
+  }
+  /* AYAR YAZMALARI GERÇEKTEN UYGULANIR — aşağıdaki catch-all'a düşseydi stub {ok:true} der,
+     değeri saklamaz ve arayüz reload'dan sonra ESKİ değeri geri okurdu. Sonuç: "nakit say",
+     "temettüyü geri yatır" gibi AÇIK/KAPALI düğmelerin yalnız bir hâli denetlenebiliyordu;
+     kapalı hâlin yerleşimi (anahtar topuzu, renk) hiç görülmüyordu. */
+  if (url.pathname === "/api/settings" && (req.method === "PUT" || req.method === "POST")) {
+    let govde = "";
+    for await (const parca of req) govde += parca;
+    try { Object.assign(all.settings, JSON.parse(govde || "{}")); } catch { /* bozuk gövde: yok say */ }
+    return json({ ok: true });
   }
   if (url.pathname.startsWith("/api/")) return json({ ok: true });
   try {

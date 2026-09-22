@@ -5,14 +5,24 @@ import {
 } from "recharts";
 import {
   fmtD, parseD, keyOf, convert, depositValueOn, fundSellSuggestion, setupGaps,
+  kurumsalOneriler, dripSet, type KurumsalOneri,
   type AllData, type Day, type Position, type Rates,
 } from "@finans/engine";
 import { api } from "../../api";
-import { T, css, tl, fmtPay, TYPE_COLORS } from "../../theme";
+import { T, css, tl, fmtPay, fmtMoney, TYPE_COLORS } from "../../theme";
 import { Money, Empty, Aciklama } from "../../ui";
 import type { TradePrefill } from "../../AddSheet";
 
 const SETUP_DISMISS_KEY = "finans-setup-dismissed";
+
+/** Bugün, `YYYY-MM-DD` (sunucunun todayLocal'ı ile aynı biçim) */
+const todayStr = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+/** Adet biçimi: ondalık ayırıcı VİRGÜL, gereksiz sıfırlar atılır (varlık satırıyla aynı kural) */
+const fmtAdet = (v: number) =>
+  Number.isInteger(v) ? String(v) : v.toFixed(4).replace(/0+$/, "").replace(/\.$/, "").replace(".", ",");
 
 export type OzetSummary = {
   netWorthTry: number; cash: number; portValueTry: number; depositsValueTry: number;
@@ -34,10 +44,12 @@ function sparkPath(vals: number[], W: number, H: number, pad = 6): { line: strin
 /* Özet grafikleri TRY canonical'dır (nakit projeksiyonu + portföy değeri geçmişi hep TRY).
    Hero net varlık + KPI kartları buradadır (değerler App.tsx'te TRY hesaplanıp görüntü birimine çevrilerek gelir).
    Hesap/mevduat yönetimi Hesaplar sekmesindedir; burada yalnız özet + "Yönet" kısayolu. */
-export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAccounts, onGoPortfolio, onSellFund }: {
+export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAccounts, onGoPortfolio, onSellFund, onKurumsalOlay }: {
   data: AllData; days: Day[]; pos: Position[]; cash: number; rates: Rates; reload: () => void;
   summary: OzetSummary; m: (v: number, dec?: boolean) => string; onGoAccounts: () => void;
   onSellFund: (p: TradePrefill) => void; onGoPortfolio: () => void;
+  /** Faz 36 — kaçırılan kurumsal olayı önden dolu işlem formuyla açar */
+  onKurumsalOlay: (p: TradePrefill) => void;
 }) {
   /* "Ödeme öncesi fon boz" önerisi (Faz 17): saf nakit önümüzdeki hafta eksiye düşüyorsa,
      nakit sayılan fondan ne kadar bozulacağını hesaplar. Bkz. funds.ts — tutar pencerenin
@@ -108,6 +120,20 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAcc
     () => (localStorage.getItem(SETUP_DISMISS_KEY) || "").split(",").filter(Boolean),
   );
   const gaps = setupGaps(data, keyOf(new Date())).filter((g) => !dismissed.includes(g.key));
+
+  /* Faz 36 — KAÇIRILAN KURUMSAL OLAYLAR. Kural engine'de (kurumsalOneriler); burası yalnız
+     gösterir ve önden dolu formu açar. Kayıt YAZILMAZ: adet kullanıcının defteridir, bedelsizi
+     onun adına yazmak "portföyün düzeldi" diye yanlış bir sayı üretebilirdi (Yahoo'nun oranı
+     yanlışsa ya da hisse aracı kurumda farklı işlendiyse).
+     `dismissed` ile AYNI kapatma kutusunu kullanır ama ayrı anahtar alanı (`ca:SYM:TARİH`):
+     "ilgilenmiyorum" demek kalıcı olmalı, yoksa kart her açılışta geri gelir. */
+  const olaylar = React.useMemo(() => kurumsalOneriler(data.trades, data.corporate_actions ?? [], {
+    dripSymbols: dripSet(data.settings),
+    priceHistory: data.price_history,
+    today: todayStr(),
+  }), [data]);
+  const olayKey = (o: KurumsalOneri) => `ca:${o.kind}:${o.asset_type}:${o.symbol}:${o.date}`;
+  const gorunenOlaylar = olaylar.filter((o) => !dismissed.includes(olayKey(o)));
   const dismiss = (key: string) => {
     const next = [...dismissed, key];
     setDismissed(next);
@@ -141,6 +167,61 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAcc
         ))}
       </div>
     </div>
+
+    {/* Kaçırılan kurumsal olaylar — kurulum kartının ÜSTÜNDE, çünkü bu bir öneri değil
+        DÜZELTMEdir: kaydedilmezse portföyün adedi eksik kalır ve K/Z yanlış okunur.
+        Kurulum kartı "şu özelliği de kurabilirsin" der; bu "defterinde eksik var" der. */}
+    {gorunenOlaylar.length > 0 && (
+      <div style={{ ...css.card, padding: 14, display: "flex", flexDirection: "column", gap: 10, borderColor: T.acc }}>
+        <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: T.acc }}>
+          Defterinde eksik görünen kurumsal olaylar
+        </div>
+        {gorunenOlaylar.map((o) => (
+          <div key={olayKey(o)} className="ui-row" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: 0, borderBottom: "none" }}>
+            <div className="row-title" style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>
+                <span style={css.mono}>{o.symbol}</span>{" · "}
+                {o.kind === "bedelsiz"
+                  ? `%${Math.round((o.ratio - 1) * 100)} bedelsiz`
+                  : `temettü ${fmtMoney(o.perShare, o.currency, true)}/adet`}
+                <span style={{ fontWeight: 500, color: T.mut3 }}>{" · "}{o.date}</span>
+              </div>
+              <div style={{ fontSize: 11.5, color: T.mut, marginTop: 1, lineHeight: 1.45 }}>
+                {o.kind === "bedelsiz"
+                  ? <>O tarihte <b>{fmtAdet(o.qtyBefore)}</b> adedin vardı → <b>{fmtAdet(o.qty)}</b> adet daha eklenmeli. Kaydetmezsen portföyün eksik görünür.</>
+                  : <>
+                    <b>{fmtAdet(o.qty)}</b> adet üzerinden <b>{fmtMoney(o.amount, o.currency, true)}</b> brüt
+                    <span title="Yahoo brüt tutarı verir; hesabına stopaj düşülmüş NET tutar girer. Formdaki rakamı ekstrendeki tutarla düzelt.">
+                      {" "}(stopaj düşülmemiş)
+                    </span>
+                    {o.reinvest && <> · geri yatırım: <b>{fmtAdet(o.reinvest.qty)}</b> adet @ {fmtMoney(o.reinvest.price, o.currency, true)}</>}
+                  </>}
+              </div>
+            </div>
+            <button className="row-end" title="Bu olayı bir daha gösterme" onClick={() => dismiss(olayKey(o))}
+              style={{ background: "none", border: "none", color: T.mut3, cursor: "pointer", fontSize: 15, lineHeight: 1, padding: "4px 2px", minHeight: 0 }}>×</button>
+            <span className="row-break" aria-hidden="true" />
+            <button style={{ ...css.ghost, padding: "7px 13px", fontSize: 12.5, color: T.acc, borderColor: T.acc }}
+              onClick={() => onKurumsalOlay(o.kind === "bedelsiz"
+                ? { asset_type: o.asset_type, symbol: o.symbol, side: "BEDELSİZ", qty: o.qty, price: 0, date: o.date }
+                /* Temettüde `price` = HİSSE BAŞINA tutar (formun kendi temsili), `qty` = adet.
+                   Tutar alanı ikisinin çarpımıdır; brüt geldiği için kullanıcı düzeltebilsin
+                   diye form adet modunda açılır. */
+                : { asset_type: o.asset_type, symbol: o.symbol, side: "TEMETTÜ", qty: o.qty, price: o.perShare, date: o.date })}>
+              {o.kind === "bedelsiz" ? "Bedelsizi kaydet" : "Temettüyü kaydet"}
+            </button>
+            {o.kind === "temettu" && o.reinvest && (
+              <button style={{ ...css.ghost, padding: "7px 13px", fontSize: 12.5 }}
+                title="Temettü tutarıyla aynı hisseden alış kaydı aç (önce temettüyü kaydet)"
+                onClick={() => onKurumsalOlay({
+                  asset_type: o.asset_type, symbol: o.symbol, side: "ALIŞ",
+                  qty: o.reinvest!.qty, price: o.reinvest!.price, date: o.date,
+                })}>Geri yatır</button>
+            )}
+          </div>
+        ))}
+      </div>
+    )}
 
     {/* Kurulum uyarıları HERO'NUN ALTINDA. Üstteyken açılışta ilk görülen şey kullanıcının
         net varlığı değil, yapmadığı işler oluyordu (mobilde ilk 450px'i yiyordu). Satır başına

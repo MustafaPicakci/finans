@@ -10,13 +10,16 @@ import { T, css, fmtMoney, fiyatYasi, FIYAT_YASI_IPUCU } from "../../theme";
    liste kartında ve tabloda. Tek bileşen: iki kopya olsaydı biri (ör. "nakit say") yalnız
    bir ekranda güncellenir, diğeri sessizce eskirdi. */
 
-export function PozisyonAyrinti({ p, now, reload, nakitSayilir, onNakitSay, onSymbol, solBosluk = 0 }: {
+export function PozisyonAyrinti({ p, now, reload, nakitSayilir, onNakitSay, dripAcik, onDrip, onSymbol, solBosluk = 0 }: {
   p: Position;
   /** sunucunun "şimdi"si (`AllData.now`) — fiyat yaşı bununla ölçülür, tarayıcı saatiyle DEĞİL */
   now?: string | null;
   reload: () => void;
   nakitSayilir: boolean;
   onNakitSay: () => void;
+  /** Faz 36 — temettü geri yatırımı (DRIP) işaretli mi; yalnız hisse/ETF'de anlamlı */
+  dripAcik?: boolean;
+  onDrip?: () => void;
   /** verilirse "hareketlerini gör" düğmesi çıkar (detay ekranında listeyi süzer) */
   onSymbol?: (s: string) => void;
   solBosluk?: number;
@@ -80,6 +83,22 @@ export function PozisyonAyrinti({ p, now, reload, nakitSayilir, onNakitSay, onSy
               background: nakitSayilir ? T.posSoft : "transparent",
               color: nakitSayilir ? T.pos : T.mut,
             }}>{nakitSayilir ? "✓ nakit sayılır" : "nakit say"}</button>
+        )}
+        {onDrip && (p.type === "BIST" || p.type === "ETF") && (
+          /* "Nakit say" ile AYNI dilbilgisi: pozisyona yapıştırılmış, tek tıkla dönen bir
+             opt-in işaret. Fon olmayan varlıkta temettü kavramı yok, o yüzden yalnız
+             hisse/ETF'de çıkar — her satırda duran ölü bir düğme gürültüdür. */
+          <button
+            title={dripAcik
+              ? "Temettü geri yatırımını kapat"
+              : "Temettü geldiğinde aynı hisseden alım da önerilsin (kayıt yine onayınla yazılır)"}
+            onClick={onDrip}
+            style={{
+              fontSize: 11.5, fontWeight: 600, padding: "5px 10px", borderRadius: 999, cursor: "pointer",
+              border: `1px solid ${dripAcik ? T.acc : T.line}`,
+              background: dripAcik ? T.accSoft : "transparent",
+              color: dripAcik ? T.acc : T.mut,
+            }}>{dripAcik ? "✓ temettüyü geri yatır" : "temettüyü geri yatır"}</button>
         )}
         {onSymbol && (
           <button style={{ ...css.ghost, fontSize: 11.5, padding: "5px 10px" }}

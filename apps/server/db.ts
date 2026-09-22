@@ -217,6 +217,23 @@ CREATE TABLE IF NOT EXISTS price_history (
   currency text NOT NULL DEFAULT 'TRY',
   PRIMARY KEY (symbol, asset_type, date)
 );
+/* Faz 36 — KURUMSAL OLAYLAR (bedelsiz + temettü). GLOBAL, tıpkı price_history gibi: bir
+   şirketin bedelsizi herkes için aynıdır, kullanıcıya göre değişmez. Kaynak Yahoo'nun zaten
+   çağırdığımız chart ucu (events=div,split) — yeni bir veri sözleşmesi girmiyor.
+   kind: 'bolunme' (value = adet çarpanı, 2 = 1:1 bedelsiz) | 'temettu' (value = hisse başına
+   BRÜT tutar). Oranlar ondalıktır (Türkiye'de bedelsiz yuvarlak değildir: 249,99751:100),
+   bu yüzden double precision. BEDELLİ burada YOK: hiçbir makine okunur kaynak vermiyor ve
+   zaten normal bir ALIŞ olarak kaydedilir (Faz 21 kararı).
+   NOT: bu blok bir template literal'in içinde — yorumlara backtick YAZMA, string'i kapatır. */
+CREATE TABLE IF NOT EXISTS corporate_actions (
+  symbol text NOT NULL,
+  asset_type text NOT NULL,
+  date text NOT NULL,
+  kind text NOT NULL,
+  value double precision NOT NULL,
+  currency text NOT NULL DEFAULT 'TRY',
+  PRIMARY KEY (symbol, asset_type, date, kind)
+);
 /* Faz 27 — referans endeksler (BIST 100, S&P 500, NASDAQ, gram altın, USD/TRY).
    GLOBAL ve kullanıcıdan bağımsız; hepsi TL'ye çevrilmiş halde saklanır (bkz. benchmarks.ts).
    price_history'ye yazılmadı: AssetType kapalı bir birleşim ve TradeForm'un tür açılırını

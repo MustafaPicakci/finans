@@ -7,7 +7,7 @@ import { logger } from "hono/logger";
 import cron from "node-cron";
 import { txShares, keyOf, cashDelta, statementAmount, REC_AMOUNT_BEGIN, type Card, type CardTx, type TradeSide } from "@finans/engine";
 import { db, initDb, nowLocal, todayLocal, TENANT_TABLES, GLOBAL_SETTING_KEYS, type TxClient } from "./db.js";
-import { refreshAll, backfillPriceHistory } from "./prices.js";
+import { refreshAll, backfillPriceHistory, refreshCorporateActions } from "./prices.js";
 import { refreshBenchmarks, autoBackfill } from "./benchmarks.js";
 import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, purgeStaleEmailTokens, SESSION_COOKIE, type SessionUser } from "./auth.js";
 import { sendMail, resetEmail, verifyEmail, mailConfigured, verifyMailConfig, mailFromWarning } from "./mail.js";
@@ -270,7 +270,7 @@ function twoYearsAgo(): string {
 /* ---- tek seferde tüm veri (kullanıcıya scope'lu; prices/price_history/benchmark_history GLOBAL) ---- */
 api.get("/all", async (c) => {
   const uid = c.get("user").id;
-  const [accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, account_entries, transfers, autoPrices, userPrices, price_history, benchmark_history, globalSettings, userSettings] =
+  const [accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, account_entries, transfers, autoPrices, userPrices, price_history, benchmark_history, corporate_actions, globalSettings, userSettings] =
     await Promise.all([
       db.all("SELECT * FROM accounts WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM recurring WHERE user_id=? ORDER BY day, id", uid),
@@ -311,6 +311,17 @@ api.get("/all", async (c) => {
       db.all<{ key: string; date: string; price: number }>(
         "SELECT key, date, price FROM benchmark_history WHERE date >= ? ORDER BY date", twoYearsAgo(),
       ),
+      /* Faz 36 — kurumsal olaylar. price_history dersinin aynısı: tablo GLOBAL ama yalnız
+         KULLANICININ işlem yaptığı semboller anlamlı (başkasının hissesinin bedelsizi bu
+         kullanıcıya hiçbir şey söylemez). Küçük bir tablo ama filtre baştan konuyor —
+         sonradan "hepsini gönderiyorduk" diye keşfedilen yük tam olarak böyle birikti. */
+      db.all<{ symbol: string; asset_type: string; date: string; kind: string; value: number; currency: string }>(
+        `SELECT ca.* FROM corporate_actions ca
+          WHERE EXISTS (SELECT 1 FROM trades t
+                         WHERE t.user_id=? AND t.symbol=ca.symbol AND t.asset_type=ca.asset_type)
+          ORDER BY ca.date`,
+        uid,
+      ),
       db.all<{ key: string; value: string }>("SELECT key, value FROM settings"),
       db.all<{ key: string; value: string }>("SELECT key, value FROM user_settings WHERE user_id=?", uid),
       /* Faz 34 — asistan sohbeti ve uyguladığı işlemler de kullanıcının verisidir: sohbet
@@ -325,7 +336,7 @@ api.get("/all", async (c) => {
   for (const up of userPrices) pm.set(`${up.asset_type}:${up.symbol}`, { ...up, source: "manual" });
   return c.json({
     accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs, categories, transactions, deposits, recurring_realized, statement_payments, account_entries, transfers,
-    prices: [...pm.values()], price_history, benchmark_history,
+    prices: [...pm.values()], price_history, benchmark_history, corporate_actions,
     // global (fx/tefas) + kullanıcı ayarları (horizon/cash_funds); kullanıcı çakışmada kazanır
     settings: Object.fromEntries([...globalSettings, ...userSettings].map((s) => [s.key, s.value])),
     /* SUNUCUNUN "şimdi"si — fiyat yaşı ("12 dk önce çekildi") bunun `prices.updated_at` ile
@@ -1362,6 +1373,15 @@ cron.schedule("20 3 * * *", () => {
   autoBackfill()
     .then((r) => { if (r.symbols.length) console.log(`[backfill] yeni sembol dolduruldu: ${r.symbols.join(", ")}`); })
     .catch((e) => console.warn("[backfill] günlük bakım hatası:", e));
+  /* Faz 36 — kurumsal olaylar (bedelsiz/temettü) aynı günlük turda. Ayrı bir cron açılmadı:
+     backfill ile AYNI Yahoo ucuna gidiyor, ikinci bir zamanlama iki kat istek demekti.
+     Upsert olduğu için idempotent; hata tüm turu düşürmesin diye kendi catch'i var. */
+  refreshCorporateActions()
+    .then((r) => {
+      const n = r.reduce((a, b) => a + b.events, 0);
+      if (n) console.log(`[kurumsal] ${n} olay tazelendi (${r.filter((x) => x.events).map((x) => x.symbol).join(", ")})`);
+    })
+    .catch((e) => console.warn("[kurumsal] günlük tazeleme hatası:", e));
 });
 cron.schedule("*/15 * * * *", runScheduledJobs);
 
@@ -1412,6 +1432,17 @@ serve({ fetch: app.fetch, port }, () => console.log(`finans → http://localhost
 autoBackfill()
   .then((r) => console.log(`[backfill] hazır — referans ${r.benchmarks} satır${r.symbols.length ? `, yeni sembol: ${r.symbols.join(", ")}` : ""}`))
   .catch((e) => console.warn("[backfill] açılış bakımı başarısız (grafik kısa kalır):", e));
+
+/* Kurumsal olaylar da AÇILIŞTA bir kez — yukarıdakiyle aynı gerekçe. Yalnız günlük cron'a
+   bağlı kalsaydı yeni bir kuruluma (ya da bu sürümün deploy'una) kadar tablo boş kalır ve
+   kaçırılmış bedelsiz uyarısı bir güne kadar HİÇ çıkmazdı — özellik "gelmemiş" görünürdü.
+   Upsert olduğu için tekrar çalışması zararsız. */
+refreshCorporateActions()
+  .then((r) => {
+    const n = r.reduce((a, b) => a + b.events, 0);
+    console.log(`[kurumsal] açılış taraması: ${r.length} sembol, ${n} olay`);
+  })
+  .catch((e) => console.warn("[kurumsal] açılış taraması başarısız (kaçan bedelsiz uyarısı gecikir):", e));
 
 /* Başlangıç catch-up'ı: Render free tier trafik yokken süreci uyutur; uyanışta node-cron ilk 15-dk
    tıkına dek beklerdi → kullanıcı bayat fiyat/işlenmemiş otonom kalem görürdü. Sunar sunmaz bir kez

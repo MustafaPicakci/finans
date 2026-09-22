@@ -4,11 +4,12 @@ import {
   depositMaturity, depositGrossInterest, depositNetInterest, depositMaturityValue,
   type AllData, type AssetType, type CardTx, type Currency, type Deposit, type OneOff, type Recurring,
   type Trade, type Transaction, type Transfer, type Loan,
+  dripAcikMi, dripToggle, bedelliPlan, openPositions,
 } from "@finans/engine";
 import { api } from "../../api";
 import { KategoriAlani } from "./KategoriAlani";
 import { T, css, fmtMoney, TYPE_HINT } from "../../theme";
-import { Field, AmountField, Hint, SuggestInput } from "../../ui";
+import { Field, AmountField, Hint, SuggestInput, Empty } from "../../ui";
 import {
   kalemSuggestions, cardTxSuggestions, symbolSuggestions, priceOf, priceCcyOf, heldQty, lastUsedPortfolio,
   type KalemSuggestion, type CardTxSuggestion, type SymbolSuggestion,
@@ -21,7 +22,7 @@ const defaultCcy = (t: AssetType): Currency => (t === "KRIPTO" || t === "ETF" ? 
    Her form modal içinde yaşar: "Kaydet" kaydedip kapatır, "Kaydet, yeni ekle"
    kaydedip formu sıfırlar ve odağı ilk alana döndürür (art arda giriş). */
 
-export type AddKind = "kalem" | "transfer" | "cardtx" | "recurring" | "loan" | "trade" | "deposit" | "import";
+export type AddKind = "kalem" | "transfer" | "cardtx" | "recurring" | "loan" | "trade" | "bedelli" | "deposit" | "import";
 export { ImportForm } from "./ImportForm";
 type FormProps = { data: AllData; reload: () => void; onClose: () => void };
 /** Formu önden doldurma: Plan'daki ileri tarihli kalemi "Gerçekleşti" ile deftere geçirirken
@@ -52,11 +53,14 @@ export type EditTarget =
   | { kind: "deposit"; row: Deposit };
 
 /** Kaydet (kapat) + Kaydet-yeni-ekle buton çifti; düzenlemede tek "Kaydet" kalır */
-function SaveButtons({ ok, reason, onSaveNew, editing }: { ok: boolean; reason: string | null; onSaveNew: () => void; editing?: boolean }) {
+/* `onSaveNew` opsiyoneldir: "Kaydet, yeni ekle" yalnız ARKA ARKAYA girilen kayıtlarda
+   anlamlı. Bedelli sermaye artışı tek seferlik bir olaydır (aynı hisseye üst üste bedelli
+   girilmez), o yüzden `editing` ile gizlenir ve geri çağrı hiç verilmez. */
+function SaveButtons({ ok, reason, onSaveNew, editing }: { ok: boolean; reason: string | null; onSaveNew?: () => void; editing?: boolean }) {
   return (<>
     <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
       <button type="submit" style={{ ...css.btn, opacity: ok ? 1 : 0.4 }} disabled={!ok}>Kaydet</button>
-      {!editing && <button type="button" style={{ ...css.ghost, opacity: ok ? 1 : 0.4 }} disabled={!ok} onClick={onSaveNew}>Kaydet, yeni ekle</button>}
+      {!editing && onSaveNew && <button type="button" style={{ ...css.ghost, opacity: ok ? 1 : 0.4 }} disabled={!ok} onClick={onSaveNew}>Kaydet, yeni ekle</button>}
     </div>
     {reason && <Hint>{reason}</Hint>}
   </>);
@@ -435,6 +439,106 @@ export function DepositForm({ data, reload, onClose, edit }: FormProps & { edit?
   );
 }
 
+/* ————— BEDELLİ SERMAYE ARTIŞI (Faz 36) —————
+   KAYIT OLARAK YENİ BİR ŞEY DEĞİL: rüçhan hakkını kullanıp hisse başına bedel ödemek
+   matematiksel olarak normal bir ALIŞ'tır (Faz 21 kararı, bilerek korundu) — bu form bir
+   HESAP MAKİNESİDİR, sonunda `trades`'e düz bir ALIŞ yazar.
+
+   Ayrı bir form olmasının sebebi, duyurunun ifadesiyle formun istediğinin AYNI OLMAMASI:
+   şirket "%150 bedelli, 1 TL nominal" der; TradeForm ise "adet" ve "birim fiyat" ister.
+   Kullanıcı bu çeviriyi elle yapıyordu ve iki hatanın ikisi de sessizdi —
+   (1) oranı sermayeye uygulayıp yanlış lot yazmak,
+   (2) birim fiyata NOMINAL yerine PİYASA fiyatını yazmak, ki bu ortalama maliyeti şişirir
+       ve pozisyonu olduğundan kârsız gösterir.
+   Adet hesabı engine'de (`bedelliPlan`), testli. */
+export function BedelliForm({ data, reload, onClose }: FormProps) {
+  /* Yalnız ELDE TUTULAN hisseler: rüçhan hakkı zaten yalnız mevcut ortağa doğar. Tutmadığın
+     bir sembolü listelemek "bedelli ile yeni hisse alınır" yanılsaması yaratırdı. */
+  const tutulan = useMemo(
+    () => openPositions(positions(data.trades, data.prices)).filter((p) => p.type === "BIST"),
+    [data.trades, data.prices],
+  );
+  const [f, setF] = useState({
+    key: tutulan[0] ? `${tutulan[0].type}:${tutulan[0].sym}` : "",
+    oran: "", bedel: "1", date: todayStr(), account_id: "", portfolio_id: "",
+  });
+  const pos = tutulan.find((p) => `${p.type}:${p.sym}` === f.key) ?? null;
+  /* Oran YÜZDE girilir (duyuru öyle yazar), engine ORAN bekler: %150 → 1,5 */
+  const plan = pos ? bedelliPlan(pos.qty, num(f.oran) / 100, num(f.bedel)) : null;
+
+  const ok = !!pos && !!plan && !!f.date;
+  const reason = !pos ? "Önce bir hisse seç"
+    : !(num(f.oran) > 0) ? "Bedelli oranı gerekli (örn. 150)"
+      : !(num(f.bedel) > 0) ? "Hisse başına bedel gerekli (genelde 1 TL nominal)"
+        : !plan ? "Bu oranda tam lot çıkmıyor" : null;
+
+  const save = async () => {
+    if (!ok || !pos || !plan) return;
+    await api.post("trades", {
+      date: f.date, asset_type: pos.type, symbol: pos.sym, side: "ALIŞ",
+      qty: plan.qty, price: num(f.bedel), fee: 0, currency: pos.currency,
+      account_id: f.account_id ? +f.account_id : null,
+      portfolio_id: f.portfolio_id ? +f.portfolio_id : null,
+    });
+    reload();
+    onClose();
+  };
+
+  if (!tutulan.length) {
+    return <Empty>Bedelli için önce elinde bir BIST hissesi olmalı — rüçhan hakkı yalnız mevcut ortağa doğar.</Empty>;
+  }
+
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); save(); }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <Field label="Hisse" flex={2}>
+          <select autoFocus style={css.input} value={f.key} onChange={(e) => setF({ ...f, key: e.target.value })}>
+            {tutulan.map((p) => (
+              <option key={`${p.type}:${p.sym}`} value={`${p.type}:${p.sym}`}>{p.sym} — {p.qty} adet</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Bedelli oranı (%)">
+          <input style={css.input} inputMode="decimal" placeholder="örn. 150" value={f.oran}
+            onChange={(e) => setF({ ...f, oran: e.target.value })} />
+        </Field>
+        <AmountField label="Hisse başına bedel (TL)" value={f.bedel} onChange={(v) => setF({ ...f, bedel: v })} />
+      </div>
+      <Hint>Duyuruda yazan oranı aynen gir. Bedel neredeyse her zaman <b>nominal 1 TL</b>'dir — piyasa fiyatı DEĞİL.</Hint>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+        <Field label="Tarih"><input type="date" style={css.input} value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field>
+        <Field label="Ödeyen hesap (ops.)" flex={2}>
+          <select style={css.input} value={f.account_id} onChange={(e) => setF({ ...f, account_id: e.target.value })}>
+            <option value="">— (bakiyeye işleme)</option>
+            {data.accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+        </Field>
+        {data.portfolios.length > 0 && (
+          <Field label="Portföy (ops.)">
+            <select style={css.input} value={f.portfolio_id} onChange={(e) => setF({ ...f, portfolio_id: e.target.value })}>
+              <option value="">— Gruplanmamış</option>
+              {data.portfolios.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </Field>
+        )}
+      </div>
+      {plan && pos && (
+        <div style={{ fontSize: 12, color: T.mut, marginTop: 10, background: T.panel2, borderRadius: 8, padding: "10px 12px", display: "grid", gap: 4 }}>
+          <div>Alınacak yeni adet: <span style={{ ...css.mono, color: T.text, fontWeight: 700 }}>{plan.qty}</span>
+            {" "}<span style={{ color: T.mut3 }}>({pos.qty} adedin %{num(f.oran)}'i, küsurat kırpıldı)</span></div>
+          <div>Ödenecek: <span style={{ ...css.mono, color: T.neg, fontWeight: 700 }}>{fmtMoney(plan.cost, pos.currency, true)}</span></div>
+          <div>İşlem sonrası toplam: <span style={{ ...css.mono, color: T.text }}>{plan.qtyAfter} adet</span>
+            {" · "}ort. maliyet <span style={{ ...css.mono, color: T.text }}>
+              {fmtMoney((pos.qty * pos.avg + plan.cost) / plan.qtyAfter, pos.currency, true)}
+            </span> <span style={{ color: T.mut3 }}>(şimdi {fmtMoney(pos.avg, pos.currency, true)})</span></div>
+          <div style={{ color: T.mut3 }}>Defterine normal bir <b>ALIŞ</b> olarak yazılır — sonradan Kayıtlar'dan düzenlenebilir.</div>
+        </div>
+      )}
+      <SaveButtons ok={ok} reason={reason} editing />
+    </form>
+  );
+}
+
 /** Virman (Faz 16) — kendi hesapların arası para hareketi. TEK kayıt iki bacağı birden yazar:
     kaynaktan düşer, hedefe ekler. gelir/gider defterine girmez, net varlığı değiştirmez.
     Bu form olmadan kullanıcı iki sahte gelir/gider kaydı girmek zorundaydı — biri unutulunca
@@ -527,9 +631,14 @@ const SIDE_HINT: Record<Trade["side"], string> = {
   "BEDELSİZ": "Adet artar, toplam maliyet aynı kalır → ortalama maliyet düşer. Para hareketi yoktur.",
 };
 
-/** Özet'teki "fon boz" önerisinden gelen önden doldurma (Faz 17) */
+/** Önden doldurma: Özet'teki "fon boz" önerisi (Faz 17) ve kurumsal olay önerileri (Faz 36).
+    `amount` TUTAR modunu, `qty` ADET modunu açar — ikisi de verilmezse form boş gelir.
+    Faz 36'te `qty`/`price` eklendi çünkü bedelsiz ve temettü önerilerinin bilinen değeri
+    tutar değil ADETTİR (bedelsizde para hareketi zaten yok, temettüde hisse başına tutar
+    ayrı bir alan). Tek alanlı `amount` ile ifade edilemezlerdi. */
 export type TradePrefill = {
-  asset_type: AssetType; symbol: string; side: Trade["side"]; amount: number;
+  asset_type: AssetType; symbol: string; side: Trade["side"];
+  amount?: number; qty?: number; price?: number;
   date?: string; account_id?: number | null;
 };
 
@@ -547,15 +656,23 @@ export function TradeForm({ data, reload, onClose, edit, prefill }: FormProps & 
       asset_type: prefill?.asset_type ?? ("BIST" as AssetType),
       symbol: prefill?.symbol ?? "",
       side: prefill?.side ?? ("ALIŞ" as Trade["side"]),
-      qty: "", amount: prefill ? String(prefill.amount) : "",
-      price: prefill ? String(priceOf(data, prefill.symbol, prefill.asset_type) ?? "") : "",
+      qty: prefill?.qty != null ? String(prefill.qty) : "",
+      amount: prefill?.amount != null ? String(prefill.amount) : "",
+      /* Öneriden gelen fiyat KAZANIR: temettüde bu "hisse başına tutar"dır, sembolün güncel
+         piyasa fiyatı değil — priceOf'a düşseydi ₺0,23 yerine ₺312 yazardı. */
+      price: prefill?.price != null ? String(prefill.price)
+        : prefill ? String(priceOf(data, prefill.symbol, prefill.asset_type) ?? "") : "",
       fee: "", currency: defaultCcy(prefill?.asset_type ?? "BIST") as Currency,
       account_id: prefill?.account_id != null ? String(prefill.account_id) : "",
       // portföy grubu: son kullanılan grup varsayılan gelir (art arda giriş)
       portfolio_id: (() => { const p = lastUsedPortfolio(data); return p != null ? String(p) : ""; })(),
     });
   /* Düzenlemede kayıt adet taşır → adet modu; yenisinde varlık türünün doğal modu (öneriden gelen tutarlı) */
-  const [mode, setMode] = useState<TradeMode>(() => edit ? "adet" : prefill ? "tutar" : defaultMode(f.asset_type));
+  const [mode, setMode] = useState<TradeMode>(() =>
+    edit ? "adet"
+      : prefill?.qty != null ? "adet"   // bedelsiz/temettü önerisi: bilinen değer ADET
+        : prefill ? "tutar"             // "fon boz" önerisi: bilinen değer TUTAR
+          : defaultMode(f.asset_type));
   const symbolRef = useRef<HTMLInputElement>(null);
   const sugs = useMemo(() => symbolSuggestions(data), [data]);
   /** Sembolün güncel fiyatı — para birimi eşleşiyorsa doldurulabilir (USD fiyatı TL alanına yazılmasın) */
@@ -563,6 +680,8 @@ export function TradeForm({ data, reload, onClose, edit, prefill }: FormProps & 
     ? priceOf(data, f.symbol, f.asset_type) : null;
   /** Elde tutulan miktar — SATIŞ'ta "tümünü sat" için */
   const held = f.symbol ? heldQty(data.trades, f.symbol, f.asset_type) : 0;
+  /** Temettü geri yatırımı bu sembolde açık mı (Faz 36) */
+  const dripAcik = !!f.symbol && dripAcikMi(data.settings, f.asset_type, f.symbol);
   /** geçmişten seçildi: varlık türü/para birimi/hesap hatırlanır, birim fiyat güncel fiyattan dolar */
   const pickSymbol = (s: SymbolSuggestion) => setF((x) => ({
     ...x, symbol: s.symbol, asset_type: s.asset_type, currency: s.currency,
@@ -655,6 +774,47 @@ export function TradeForm({ data, reload, onClose, edit, prefill }: FormProps & 
         </Field>
       </div>
       <div style={{ fontSize: 11.5, color: T.mut, marginTop: 6 }}>{SIDE_HINT[f.side]}</div>
+      {/* Faz 36 — temettü geri yatırımı (DRIP). ALIŞ anında sorulur çünkü karar tam da orada
+          verilir ("bunu uzun vadeli tutuyorum, temettüsü tekrar girsin"); ama işaret İŞLEME
+          değil POZİSYONA aittir — aynı hisseyi ikinci kez alınca hangi işlemin kazanacağı
+          sorusu doğardı. Bu yüzden `user_settings.drip_symbols`'e YAZILIR ve pozisyon
+          ayrıntısındaki aynı düğmeyle de dönebilir. Anahtar ANINDA kaydedilir (formu
+          kaydetmeden de geçerli): bir tercih, bir işlem değil. */}
+      {f.side === "ALIŞ" && !!f.symbol && (f.asset_type === "BIST" || f.asset_type === "ETF") && (
+        <button type="button"
+          onClick={async () => {
+            await api.put("settings", { drip_symbols: dripToggle(data.settings, f.asset_type, f.symbol) });
+            reload();
+          }}
+          title="Temettü geldiğinde aynı hisseden alım da önerilsin. Kayıt yine onayınla yazılır — otomatik işlem açılmaz."
+          style={{
+            display: "flex", alignItems: "center", gap: 9, marginTop: 10, width: "100%",
+            padding: "9px 11px", borderRadius: 10, cursor: "pointer", textAlign: "left",
+            border: `1px solid ${dripAcik ? T.acc : T.line}`,
+            background: dripAcik ? T.accSoft : T.panel2, fontFamily: T.disp,
+          }}>
+          {/* Gerçek bir anahtar görünümü: onay kutusu "form alanı", bu ise kalıcı bir tercih */}
+          <span style={{
+            width: 34, height: 20, borderRadius: 999, flexShrink: 0, position: "relative",
+            background: dripAcik ? T.acc : T.line, transition: "background .15s",
+          }}>
+            <span style={{
+              position: "absolute", top: 2, left: dripAcik ? 16 : 2, width: 16, height: 16,
+              borderRadius: "50%", background: "#fff", transition: "left .15s",
+            }} />
+          </span>
+          <span style={{ minWidth: 0 }}>
+            <span style={{ display: "block", fontSize: 12.5, fontWeight: 600, color: dripAcik ? T.acc : T.text }}>
+              Temettüyü geri yatır
+            </span>
+            <span style={{ display: "block", fontSize: 11, color: T.mut3 }}>
+              {dripAcik
+                ? `${f.symbol} temettüsü geldiğinde alım da önerilir`
+                : "Temettü geldiğinde yalnız gelir olarak yazılır"}
+            </span>
+          </span>
+        </button>
+      )}
       {/* Giriş modu: fonda tutar ("50 bin lira attım"), hissede adet ("50 lot aldım").
           Bedelsizde para hareketi olmadığından mod seçimi anlamsız — gizlenir. */}
       {!isBonus && (
