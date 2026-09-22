@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { project } from "./projection.js";
+import { project, netWorthBreakdown } from "./projection.js";
 import type { AllData } from "./types.js";
 
 const baseData = (over: Partial<AllData> = {}): AllData => ({
@@ -244,5 +244,82 @@ describe("project", () => {
     const days = project(data, 1, { usdTry: 40 });
     expect(days[0].assets).toBe(2 * 180 * 40); // 14400 TRY
     expect(days[0].total).toBe(1000 + 14400);
+  });
+});
+
+describe("netWorthBreakdown", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 0, 1)); // 1 Ocak 2026
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Bugüne (1 Ocak) HİÇBİR hareket düşmeyen tam bir tablo: nakit + portföy + vadeli + kart + kredi */
+  const doluVeri = () =>
+    baseData({
+      accounts: [{ id: 1, name: "Vadesiz", balance: 10_000 }],
+      trades: [{ id: 1, date: "2025-06-01", asset_type: "BIST", symbol: "EREGL", side: "ALIŞ", qty: 10, price: 100, fee: 0, currency: "TRY" }],
+      prices: [{ symbol: "EREGL", asset_type: "BIST", price: 120, source: "auto", updated_at: "2026-01-01" }],
+      deposits: [{ id: 1, name: "Vadeli", principal: 5_000, rate: 40, open_date: "2026-01-01", term_days: 365, withholding: 0 }],
+      cards: [{ id: 1, name: "Akbank", limit_amount: 50_000, statement_day: 1, due_day: 10 }],
+      card_txs: [{ id: 1, card_id: 1, date: "2025-12-15", name: "Market", amount: 2_000, installments: 1 }],
+      loans: [{ id: 1, name: "Taşıt", amount: 1_000, first_date: "2026-02-05", total: 10 }],
+    });
+
+  it("bileşenler toplama oturur: toplam ve borç parçalarının tam toplamıdır", () => {
+    const n = netWorthBreakdown(doluVeri());
+    expect(n.nakit).toBe(10_000);
+    expect(n.portfoy).toBe(1_200);
+    expect(n.vadeli).toBe(5_000); // açılış günü: henüz faiz işlemedi
+    expect(n.toplam).toBe(n.nakit + n.portfoy + n.vadeli);
+    expect(n.borc).toBe(n.kartBorcu + n.krediBorcu);
+    expect(n.net).toBe(n.toplam - n.borc);
+    // test boşa dönmesin: iki borç türü de gerçekten dolu
+    expect(n.kartBorcu).toBe(2_000);
+    expect(n.krediBorcu).toBe(10_000);
+  });
+
+  /* ————— AYRIŞMA KAPANI —————
+     Net varlığın iki tanımı var (hero/asistan kırılımı ve projeksiyonun Day.worth'ü) ve ikisi
+     AYNI rakamı vermek zorunda; yoksa aynı soruya iki cevap veren iki ekran olur. */
+  it("net, bugüne hareket düşmediğinde project()[0].worth ile BİREBİR aynıdır", () => {
+    const data = doluVeri();
+    expect(project(data, 1)[0].ev).toEqual([]); // bugün gerçekten boş (test varsayımı)
+    expect(netWorthBreakdown(data).net).toBe(project(data, 1)[0].worth);
+  });
+
+  it("borç bileşenleri Day.debt'i tam olarak açıklar (üçüncü bir borç türü eklenirse burası patlar)", () => {
+    const n = netWorthBreakdown(doluVeri());
+    expect(n.kartBorcu + n.krediBorcu).toBeCloseTo(project(doluVeri(), 1)[0].debt, 6);
+  });
+
+  it("BUGÜNE bir hareket düşerse ayrışır ve ayrışma YÖNÜ bellidir: kırılım gerçek bakiyeyi, Day.worth planlıyı anlatır", () => {
+    const data = baseData({
+      accounts: [{ id: 1, name: "Vadesiz", balance: 10_000 }],
+      recurring: [{ id: 1, kind: "income", name: "Maaş", day: 1, from_month: null, to_month: null }],
+      recurring_amounts: [{ recurring_id: 1, from_month: "0000-01", amount: 5_000 }],
+    });
+    const gun0 = project(data, 1)[0];
+    const n = netWorthBreakdown(data);
+    expect(gun0.ev).toEqual([{ n: "Maaş", a: 5_000 }]); // maaş bugün
+    expect(n.nakit).toBe(10_000);        // banka şu an bunu söylüyor
+    expect(gun0.bal).toBe(15_000);       // projeksiyon maaşı işlemiş
+    expect(gun0.worth - n.net).toBe(5_000);
+  });
+
+  it("USD-doğal pozisyon kur ile TRY'ye çevrilir", () => {
+    const data = baseData({
+      accounts: [],
+      trades: [{ id: 1, date: "2025-06-01", asset_type: "KRIPTO", symbol: "BTC", side: "ALIŞ", qty: 2, price: 100, fee: 0, currency: "USD" }],
+      prices: [{ symbol: "BTC", asset_type: "KRIPTO", price: 150, source: "auto", updated_at: "2026-01-01", currency: "USD" }],
+    });
+    expect(netWorthBreakdown(data, { usdTry: 40 }).portfoy).toBe(2 * 150 * 40);
+  });
+
+  it("boş veride her şey sıfırdır (yeni kullanıcı)", () => {
+    const n = netWorthBreakdown(baseData());
+    expect(n).toEqual({ nakit: 0, portfoy: 0, vadeli: 0, toplam: 0, kartBorcu: 0, krediBorcu: 0, borc: 0, net: 0 });
   });
 });

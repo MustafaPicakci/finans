@@ -121,6 +121,27 @@ Kaynaklardan biri format değiştirirse sadece `apps/server/prices.ts` içindeki
 
 İkinci cümlede olduğu gibi bir mesajda birden fazla olay olabilir; her biri ayrı bir işleme çevrilir.
 
+**Sorularını da cevaplar (Faz 35).** Asistanın iki işi var: kayıt oluşturmak ve kendi verine dair
+soruları cevaplamak.
+
+> "bu ay ne kadar harcadım?" · "markete yılbaşından beri ne verdim?" · "son üç ay nasıl gitti?"
+> "net varlığım ne?" · "ayı çıkarır mıyım, ne zaman eksiye düşerim?"
+
+Rakamı **model değil sunucu** hesaplar ve hesap motorun kendi fonksiyonlarıyla yapılır — yani
+asistanın söylediği net varlık, ekranın en üstünde yazanla *tanım olarak* aynıdır. Öncesinde
+asistan yalnız kayıt arayabiliyordu (en çok 50 satır, tek türde): "bu ay ne kadar harcadım"
+sorusuna model satırları kafadan toplayarak cevap veriyordu ve kayıt sayısı 50'yi aştığında
+**rakam sessizce eksik** çıkıyordu.
+
+İki tuzak da çözülmüş durumda:
+- **Kart harcaması ile onun ekstre ödemesi aynı parayı iki kez saymaz.** "Ne kadar harcadım"
+  sorusu kart harcamalarını *harcandığı gün, tam tutarıyla* sayar (12 taksitli alışveriş alındığı
+  aya yazılır) ve ekstre ödemelerini saymaz; "hesabımdan ne çıktı" sorusu ise bunun tersini yapar.
+  Asistan hangisini kullandığını söyler.
+- **Kart harcamasının kategorisi yoktur** (uygulama kart harcamasında kategori tutmuyor), yani
+  kategori kırılımı yalnız hesap/nakit işlemlerini anlatır. Asistan bunu saklamaz, açıkça yazar —
+  eski Rapor sekmesinin "neredeyse boş" görünmesinin sebebi tam olarak buydu.
+
 **Hiçbir şey onayın olmadan yazılmaz.** Asistan yalnız *plan* üretir: ne oluşturulacağı insan-okur satırlar hâlinde önüne gelir ("`ASELS ALIŞ · 20 adet × 12,71 TRY · 2026-07-11 · Garanti`"), istemediğin satırı ✕ ile çıkarırsın, **Onayla ve uygula** dedikten sonra kayıt oluşur. Yanlış anlaşılan bir cümle böylece deftere değil ekrana düşer.
 
 Tutarı senin değil **sistemin** hesapladığı işlemlerde (kart ekstresi ödemesi, düzenli kalemin gerçekleştirilmesi, hesap mutabakatı) onay satırı o tutarı da önizler — "`Ekstre ödemesi: Akbank · vade 2026-08-14 · Garanti · tutar: 3.200,00 ₺`" — ve ekstre zaten ödenmişse ya da o vadede ekstre yoksa bunu söyler. Uygulama anında tutar yine sunucuda hesaplanır (arada yeni bir harcama girmişse güncel tutar yazılır); onaydaki sayı önizlemedir.
@@ -157,7 +178,7 @@ Seçilen model **function calling** desteklemek zorundadır (asistanın tek işi
 
 **Dürüst kısıtlar:**
 - Dil modeli tarih ve tutar çıkarımında hata yapabilir — onay ekranı tam da bunun için var, uygulamadan önce satırları oku.
-- **Verin sağlayıcıya gider:** her mesajda hesap/kart/kategori/portföy adların, hesap bakiyelerin ve portföydeki sembollerin (id'lere çevirebilmesi için) seçtiğin model sağlayıcısına gönderilir. İşlem geçmişin ancak asistan `kayit_ara` ile bakma ihtiyacı duyarsa gider. Bu veriyi dışarı hiç çıkarmak istemiyorsan `AI_API_KEY`'i boş bırak (sekme kapalı kalır) ya da yerel bir model kullan (`AI_PROVIDER=openai` + Ollama'nın `AI_BASE_URL`'i).
+- **Verin sağlayıcıya gider:** her mesajda hesap/kart/kategori/portföy adların, hesap bakiyelerin ve portföydeki sembollerin (id'lere çevirebilmesi için) seçtiğin model sağlayıcısına gönderilir. İşlem geçmişin ancak asistan `kayit_ara` ile bakma ihtiyacı duyarsa gider; toplam soran sorularda (bkz. Faz 35) sağlayıcıya giden şey **hesaplanmış özettir** (toplam, kırılım), tek tek kayıtlar değil. Bu veriyi dışarı hiç çıkarmak istemiyorsan `AI_API_KEY`'i boş bırak (sekme kapalı kalır) ya da yerel bir model kullan (`AI_PROVIDER=openai` + Ollama'nın `AI_BASE_URL`'i).
 - Konuşma geçmişi sunucuda tutulmaz; her istekte istemciden gider ve sohbet sayfayı yenileyince sıfırlanır.
 - Bir plan yalnız **bir kez** uygulanabilir (plan kimliği tek kullanımlıktır) — ağ hatasından sonraki tekrar denemesi çift kayıt yazmaz.
 

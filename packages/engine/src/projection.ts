@@ -2,8 +2,8 @@ import type { AllData, Currency } from "./types.js";
 import { keyOf, hits, ymOf } from "./date.js";
 import { recActiveOn, recurringAmountIndex, recAmountOn } from "./recurring.js";
 import { loanPayDay, loanRemaining, loanActiveOn } from "./loans.js";
-import { cardInfos } from "./cards.js";
-import { convert, qtyDelta, type Rates } from "./portfolio.js";
+import { cardInfos, stmtKey } from "./cards.js";
+import { convert, qtyDelta, positions, portfolioValueTry, type Rates } from "./portfolio.js";
 import { depositValueOn } from "./deposits.js";
 
 /** `cashFunds` = o gün elde tutulan para piyasası fonlarının TRY değeri (assets'in bir alt kümesi);
@@ -107,4 +107,48 @@ export function project(data: AllData, months: number, rates: Rates = { usdTry: 
     days.push({ date: new Date(d), k, net, bal, assets, cashFunds, deposits, total, debt, worth: total - debt, ev });
   }
   return days;
+}
+
+/* ————— NET VARLIK KIRILIMI (Faz 35) —————
+   `Day.worth` net varlığı TEK bir sayı olarak verir; "neyden oluşuyor" sorusunun cevabı ise
+   App.tsx'in içinde, hero'yu besleyen dört ayrı `useMemo`'da duruyordu — yani ekranın dışından
+   (asistan) sorulabilir bir yerde değildi. Kopyalamak yerine tanım buraya taşınıyor.
+
+   ÇAPA BUGÜNÜN GERÇEK BAKİYESİDİR (`Σ accounts.balance`), `project(...)[0].bal` DEĞİL: gün 0
+   bugüne düşen PLANLI hareketleri (bugün ödeme günü olan bir maaş/kira) zaten işlemiştir, oysa
+   "ne kadar nakdim var" sorusunun cevabı bankanın şu an söylediği rakamdır. İkisi çoğu gün
+   eşittir, bugüne bir hareket düştüğünde ayrışır — hangisinin hangisi olduğu testte yazılı. */
+export type NetVarlik = {
+  /** Σ hesap bakiyesi (harcanabilir nakit) */
+  nakit: number;
+  /** portföyün TRY değeri (USD-doğal pozisyonlar `rates` ile çevrilir) */
+  portfoy: number;
+  /** vadeli mevduatların o günkü değeri (anapara + biriken net faiz) */
+  vadeli: number;
+  /** nakit + portföy + vadeli (borç DÜŞÜLMEMİŞ) */
+  toplam: number;
+  /** ödenmemiş kart ekstreleri */
+  kartBorcu: number;
+  /** kredilerin kalan taksit tutarı */
+  krediBorcu: number;
+  borc: number;
+  /** toplam − borç */
+  net: number;
+};
+
+/** Net varlığın bileşenleri (hepsi TRY). `Day.worth` ile aynı tanım — testli. */
+export function netWorthBreakdown(data: AllData, rates: Rates = { usdTry: 0 }): NetVarlik {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const nakit = data.accounts.reduce((s, a) => s + a.balance, 0);
+  const portfoy = portfolioValueTry(positions(data.trades, data.prices), rates);
+  const vadeli = data.deposits.reduce((s, d) => s + depositValueOn(d, today), 0);
+  const paid = new Set((data.statement_payments ?? []).map((p) => stmtKey(p.card_id, p.due)));
+  /* Kart ve kredi borcu AYRI AYRI hesaplanır, biri diğerinden çıkarılarak bulunmaz: çıkarma
+     kullanılsa projeksiyona üçüncü bir borç türü eklendiği gün o tutar sessizce "kart borcu"
+     etiketiyle görünürdü. Şimdi bileşenlerin toplamı `Day.debt`'e eşit olmak ZORUNDA (test). */
+  const kartBorcu = cardInfos(data.cards, data.card_txs, today, paid).reduce((s, c) => s + c.debt, 0);
+  const krediBorcu = data.loans.reduce((s, l) => s + l.amount * loanRemaining(l, today), 0);
+  const toplam = nakit + portfoy + vadeli;
+  const borc = kartBorcu + krediBorcu;
+  return { nakit, portfoy, vadeli, toplam, kartBorcu, krediBorcu, borc, net: toplam - borc };
 }

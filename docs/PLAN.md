@@ -618,6 +618,63 @@ arşiv sohbetine taşındı, çok adımlı planlar tek mesajda doğru gruplandı
 ekran da (liste, sohbet, onay kartı, geri alma paneli) taşmasız — `mobil-stub.mjs` asistan
 uçlarını da konuşacak şekilde genişletildi.
 
+## Faz 35 — Asistan soru cevaplıyor (toplamlar) ✅
+
+Asistanın yazma tarafı 21 araçla zengindi, okuma tarafı dörttü (`kart_ekstreleri`, `pozisyonlar`,
+`kayit_ara`, `bugun`) ve bu yalnız bir eksiklik değil **yanlış cevap kaynağıydı**: "bu ay ne kadar
+harcadım" sorulduğunda modelin tek yolu `kayit_ara` ile en çok **50 satır** çekip kafadan
+toplamaktı. Üç ayrı biçimde yanlış: (1) araç TEK tür sorguluyor, yani kart harcaması ile hesap
+işlemi birleşmiyor; (2) 50'yi aşan bir ayda rakam **sessizce** eksik çıkıyor — `card_txs`
+uygulamanın en hızlı büyüyen tablosu, bir ay rahat aşar; (3) ekstre ödemesi ile kart harcaması
+ayırt edilmiyor, yani birleştirilse bu kez aynı para **iki kez** sayılırdı. Kullanıcı rakamı doğru
+sanar; yanlış rakam vermek rakam vermemekten kötüdür.
+
+Üç okuma aracı eklendi ve **toplamı model değil sunucu hesaplıyor**, matematik de araçta değil
+engine'de: `harcama_ozeti` → `harcamaOzeti` ([harcama.ts](../packages/engine/src/harcama.ts), yeni),
+`net_varlik` → `netWorthBreakdown` ([projection.ts](../packages/engine/src/projection.ts)),
+`nakit_durumu` → `project` + `cashGap`/`fundSellSuggestion`. Böylece asistanın söylediği net varlık
+hero rakamıyla, nakit açığı önerisi Özet kartıyla **tanım olarak aynı** — aynı soruya iki cevap
+veren iki yüzey oluşmuyor.
+
+`harcamaOzeti` toplamı üretir ama yanıltıcı olmasını **temel seçimine zorlayarak** engeller:
+`tuketim` (para nereye gitti: kart harcaması harcandığı gün TAM tutarıyla — 12 taksitli alışveriş
+alındığı aya; ekstre ödemeleri hariç) vs `nakit` (hesaptan ne çıktı: yalnız `transactions`, ekstre
+ödemesi dahil, kart harcaması hariç). İkisi toplanamaz ve hangisinin kullanıldığı çıktıda yazılıdır.
+Ekstre ödemesi **adından değil** `statement_payments.tx_id`'den tanınır ("Akbank ekstresi" elle de
+yazılabilir; engine bunu bilemez, id'ler dışarıdan gelir). Faz 26'da Kayıtlar ekranının bilerek
+toplam üretmemesi doğru bir karardı ama soruyu ortadan kaldırmamıştı — yalnız cevabı olmayan bir
+soru bırakmıştı.
+
+Saklanmayan iki kısıt: **kart harcamasının kategorisi yok** (`card_txs`'te kolon yok) → kategori
+kırılımı yalnız hesap işlemlerini anlatır, kartın tamamı tek kovada durur; eski Rapor sekmesinin
+"neredeyse boş" görünmesinin ve Faz 26'da kaldırılmasının yapısal sebebi buydu. İkisi de `uyari`
+alanıyla dönüyor ve systemPrompt bunları kullanıcıya **aktarmayı** şart koşuyor ("SORU SORULURSA"
+bloğu: hangi soru hangi araca gider, toplam elle hesaplanmaz).
+
+`kayit_ara` da düzeltildi: artık `{toplam, gosterilen, kayitlar}` dönüyor ve kesildiğinde "bu
+listeden toplam çıkarma, harcama_ozeti kullan" uyarısı taşıyor — eskiden çıplak dizi dönüyordu,
+137 kayıttan 50'si geldiğinde bunu hiçbir şey söylemiyordu.
+
+Yan ürün: `/api/all`ın gövdesi [data.ts](../apps/server/data.ts)'e taşındı (`loadAllData`), çünkü
+asistan aynı `AllData`yı istiyor ve **fiyat/ayar birleştirmesinin** ikinci bir kopyası olmamalı
+(global auto fiyat + kullanıcının elle override'ı, çakışmada kullanıcı kazanır). `gecmis` bayrağı
+fiyat/referans geçmişini opsiyonel yapıyor — onu yalnız değer grafiği kullanıyor. Taşıma sırasında
+Faz 34'ten kalan bir kusur da düştü: `/api/all` içindeki `Promise.all`a `ai_conversations`/
+`ai_messages`/`ai_actions` sorguları eklenmiş ama **sonuçları hiç kullanılmıyordu** (22 değişken,
+25 sorgu); yorumu "KVKK indirmesine girmesi gerekir" diyor, yani satırlar `/api/export`a aitti ve
+orada zaten var. Yani her sayfa açılışı ve her mutasyon sonrası `reload()`, monoton büyüyen
+`ai_messages` dahil üç tabloyu `SELECT *` ile boşuna çekiyordu.
+
+Doğrulama: `pnpm build` üç pakette temiz (`check-ai-routes` kapısı dahil), **264 engine** (+22:
+16 harcama özeti, 6 net varlık kırılımı) + 29 sunucu testi yeşil. Engine testleri asıl tuzakları
+tutuyor: kart harcaması + onun ekstre ödemesi aynı parayı iki kez saymıyor (2000 değil 1000),
+işaretlenmemiş bir "ekstre" adlı işlem normal gider sayılıyor (ad'a göre tahmin yok), taksitli
+harcama alındığı ay tam tutarıyla, Türkçe metin süzgeci iki kaynakta da çalışıyor ("MIGROS"/"migros"),
+ve iki **ayrışma kapanı**: `netWorthBreakdown().net === project()[0].worth` (bugüne hareket
+düşmediğinde) + `kartBorcu + krediBorcu === Day.debt` (üçüncü bir borç türü eklenirse test patlar).
+Bugüne hareket düştüğünde iki tanımın ayrıştığı ve **ayrışmanın yönü** de ayrı bir testte yazılı,
+kimse yanlış olanı "düzeltmeye" kalkmasın diye.
+
 ---
 
 ## Doğrulama
@@ -633,7 +690,7 @@ uçlarını da konuşacak şekilde genişletildi.
 
 ## Sıralama
 
-Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Faz 0–34 tamamlandı (Faz 5 yayına, 10–13 ürün derinleşmesine, 21+ asistan ve portföy derinleşmesine kadar); yukarıdaki nota bakın — 22-33'ün günlüğü burada değil, CLAUDE.md/README'de.
+Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Faz 0–35 tamamlandı (Faz 5 yayına, 10–13 ürün derinleşmesine, 21+ asistan ve portföy derinleşmesine kadar); yukarıdaki nota bakın — 22-33'ün günlüğü burada değil, CLAUDE.md/README'de.
 
 **Sıradaki iş — numaralı faz değil, açık kalan kalemler (öncelik sırasıyla):**
 1. **E-posta teslim edilebilirliği** (prod engelleyici, bkz. Faz 10) — Resend/Brevo + kendi domain + SPF/DKIM/DMARC; sadece env değişikliği. Bu bitmeden çok-kullanıcı kâğıt üzerinde kalır.
