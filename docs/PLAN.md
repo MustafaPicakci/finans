@@ -677,6 +677,71 @@ kimse yanlış olanı "düzeltmeye" kalkmasın diye.
 
 ---
 
+## Faz 36 — Kaçırılan bedelsiz/temettü, DRIP, bedelli akışı ✅
+
+`BEDELSİZ` ve `TEMETTÜ` Faz 21'den beri birer pozisyon olayı olarak **duruyordu**, ama ikisini de
+kullanıcının fark edip elle girmesi gerekiyordu. Bu bir özellik eksikliği değil **sessiz bir
+hataydı**: tuttuğun hisse bedelsiz verir de girmezsen adedin eksik kalır, portföy kendini kalıcı
+olarak düşük gösterir ve fiyat yarıya indiği için düşüş **zarar gibi** okunur. Ölçüldü — 30 likit
+BIST sembolünün **11'inde** son 5 yılda bedelsiz var, yani nadir bir kenar durum değil. Kullanıcının
+kendi defterinde de ölçüldü: bedelsiz tarafında eksik yok (hepsini olaylardan sonra almış) ama
+**9 kayıtsız temettü** çıktı.
+
+Tespit, zaten çağırdığımız Yahoo `chart` ucuna **tek parametre**: `events=div,split`. Yeni bir veri
+kaynağı/sözleşmesi girmiyor. Oranlar `splitRatio` **metninden** değil ham `numerator`/`denominator`
+alanlarından okunur — Türkiye'de bedelsiz yuvarlak değildir (ISCTR `249,99751:100`).
+
+Kural [corporate.ts](../packages/engine/src/corporate.ts)'te ve **yeni matematik içermez**
+(holdings.ts'in aynı gerekçesi): adet yürüyüşü `qtyDelta`'dan gelir, ortalama maliyete hiç
+dokunulmaz. Yaptığı tek iş piyasanın söylediği olayı defterle karşılaştırmak — üç soru, üçü de
+veriye bakar: olaydan **önce** adedin var mıydı, olayı zaten kaydettin mi, ne kadar eksik.
+
+**Öneri kayıt yazmaz**, önden dolu form açar. Adet kullanıcının defteridir; Yahoo'nun oranı yanlışsa
+ya da aracı kurum farklı işlediyse onun adına yazılan kayıt "portföyün düzeldi" diye yanlış bir sayı
+üretirdi.
+
+Testle sabitlenen üç kural:
+
+1. **"Kaydettin mi?" penceresi `[bu olay, AYNI TÜRDEN bir sonraki olay)`**. Düz "olaydan sonra
+   BEDELSİZ var mı" ölçütü, iki kez bedelsiz veren bir hissede ikincisini kaydetmiş kullanıcıya
+   birincisini de kaydetmiş gibi davranır ve eksik kayıt sessizce gizlenirdi. Tür ayrımı da şart:
+   aynı yıl hem bedelsiz hem temettü veren hissede tek pencere, kaydedilen bedelsizin temettü
+   önerisini de susturmasına yol açardı.
+2. **Adet ex-date'ten ÖNCE ölçülür** (`t.date < a.date`): ex-date'te alan kişi o olaya hak kazanmaz.
+3. **DRIP geri yatırım fiyatı ödeme GÜNÜNÜN fiyatıdır**, bugünkü değil — parayı o gün almışsın,
+   bugünkü fiyatla adet türetmek geçmişi bugüne göre yeniden yazardı (benchmarks.ts'in "o günün
+   kuru" kuralının aynısı). Fiyat yoksa tutar verilir, adet **uydurulmaz**.
+
+Temettü tutarı **brüttür** ve kart bunu açıkça yazar. Yahoo brüt verir, hesaba stopaj düşülmüş net
+girer; bir stopaj oranı **varsayılmadı** (oran değişir, yanlış bir netleştirme sessiz bir hata
+olurdu) — form düzenlenebilir.
+
+**DRIP işareti** `user_settings.drip_symbols`'te (`cash_funds` deseni, `TYPE:SYM`). İşleme değil
+**pozisyona** aittir — aynı hisseyi ikinci kez alınca hangi işlemin kazanacağı sorusu doğardı.
+Anahtar alış formunda (karar orada verilir) ve pozisyon ayrıntısında; ikisi de aynı ayarı yazar.
+
+**BEDELLİ ayrı bir kayıt türü olmadı** (Faz 21 kararı korundu): rüçhan hakkını kullanmak
+matematiksel olarak normal bir `ALIŞ`tır. Yeni form bir **hesap makinesidir** ve sonunda düz bir
+ALIŞ yazar. Ayrı olmasının sebebi duyurunun dili ("%150 bedelli, 1 TL nominal") ile formun dilinin
+(adet + birim fiyat) farklı olması; çeviriyi kullanıcı elle yapıyordu ve iki tipik hata da sessizdi
+— oranı yanlış tabana uygulamak, ve birim fiyata nominal yerine **piyasa fiyatını** yazmak
+(ortalama maliyeti şişirir, pozisyonu kârsız gösterir). Küsurat bilerek kırpılır: rüçhan hakkı lot
+bazında kullanılır.
+
+Tarama **açılışta da** koşar, yalnız günlük cron'da değil — aksi halde deploy'dan sonra tablo bir
+güne kadar boş kalır ve uyarı hiç çıkmazdı (`autoBackfill`'in açılışta çalışma gerekçesinin aynısı).
+
+Yan iş: `mobil-stub.mjs`'te `PUT /api/settings` artık **gerçekten uygulanıyor**. Catch-all'a düşüp
+`{ok:true}` dönüyordu, yani açık/kapalı düğmelerin (`nakit say`, `temettüyü geri yatır`) yalnız
+**bir** hâli denetlenebiliyordu; kapalı hâlin yerleşimi hiç görülmemişti.
+
+Doğrulama: `pnpm build` temiz, 322 test yeşil (29 yeni engine testi). Gerçek yerel DB'ye karşı
+uçtan uca koşuldu — açılış taraması 13 sembol için 78 olay çekti, kural 9 kayıtsız temettü buldu
+(bedelsiz tarafında eksik yok). Tarayıcıda 390px'te taşma yok; önden doldurma (BEDELSİZ seçili,
+ASELS, 200 adet, doğru tarih), bedelli hesabı (40 adette %150 → 60 lot) ve DRIP anahtarının
+**iki hâli** de doğrulandı.
+
+
 ## Doğrulama
 
 - **Faz 0**: ✅ `pnpm build` temiz; 46 engine vitest testi yeşil; gerçek `data/finans.db` ile prod sunucu smoke test edildi (API verisi + derlenmiş arayüz doğrulandı).
