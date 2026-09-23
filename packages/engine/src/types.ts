@@ -65,6 +65,23 @@ export type AccountEntry = {
 };
 /** Günlük fiyat anlık görüntüsü — her tazelemede/elle girişte o günün satırı upsert edilir */
 export type PriceHistoryEntry = { symbol: string; asset_type: AssetType; date: string; price: number; currency?: Currency };
+/** Faz 37 — ŞİRKET TAKVİMİ: bir sembolün SIRADAKİ bilanço (finansal sonuç) tarihi.
+    Global piyasa verisi, tıpkı `corporate_actions` gibi — bir şirketin bilanço günü herkes
+    için aynıdır. Sembol başına TEK satır tutulur (`kind` + sembol = anahtar): geçmiş bilanço
+    tarihlerinin defterde bir karşılığı yok, takvimde işi olan yalnız sıradaki tarih.
+
+    `tahmini` AKTARILMAK ZORUNDA OLAN BİR ALANDIR ve bu yüzden opsiyonel değil: Yahoo
+    `isEarningsDateEstimate` ile tarihin duyurulmuş mu yoksa geçen yılın tarihinden mi
+    türetildiğini söylüyor (ölçüldü: THYAO/GARAN duyurulmuş, ASELS/BIMAS tahmin). İkisini aynı
+    biçimde göstermek tahmini bir tarihi kesin göstermek olurdu. */
+export type CompanyEvent = {
+  symbol: string;
+  asset_type: AssetType;
+  /** şimdilik tek tür; KAP olmadan şirket takviminin makine okunur tek parçası bu */
+  kind: "bilanco";
+  date: string;
+  tahmini: boolean;
+};
 export type AllData = {
   accounts: Account[]; recurring: Recurring[]; loans: Loan[]; oneoffs: OneOff[];
   trades: Trade[]; portfolios: Portfolio[]; cards: Card[]; card_txs: CardTx[]; prices: Price[]; price_history: PriceHistoryEntry[];
@@ -77,6 +94,10 @@ export type AllData = {
       sınırlı. `kurumsalOneriler()` bunları defterle karşılaştırıp eksik kaydı bulur.
       Opsiyonel: Faz 36'ten önceki bir yanıt (PWA önbelleği, eski sunucu) bu alanı taşımaz. */
   corporate_actions?: CorporateAction[];
+  /** Faz 37 — şirket takvimi (bilanço tarihleri), kullanıcının sembolleriyle sınırlı.
+      Opsiyonel: Faz 37'den önceki bir yanıt (PWA önbelleği, eski sunucu) bu alanı taşımaz —
+      o durumda takvim piyasa bölümünü eksik gösterir, uydurmaz. */
+  company_events?: CompanyEvent[];
   /** SUNUCUNUN saatiyle "şimdi" (`nowLocal()` biçimi). Yalnız fiyat yaşını ölçmek için var:
       `updated_at` timezone taşımaz, yani tarayıcı saatiyle karşılaştırılamaz (sunucu UTC,
       kullanıcı UTC+3 → 3 saat kayma). Aynı saatten iki damganın FARKI zonedan bağımsızdır.

@@ -141,6 +141,13 @@ const all = {
     { symbol: "ASELS", asset_type: "BIST", date: d(-25), kind: "temettu", value: 0.2346, currency: "TRY" },
     { symbol: "EREGL", asset_type: "BIST", date: d(-40), kind: "temettu", value: 1.15, currency: "TRY" },
   ],
+  /* Faz 37 — bilanço tarihleri. İKİ durum birden kurulur, çünkü satırın görünümü buna göre
+     değişiyor: duyurulmuş tarih düz yazılır, TAHMİNİ tarih "~" ile. Biri eksik olsaydı
+     yerleşimde hangisinin nasıl göründüğü denetlenemezdi. */
+  company_events: [
+    { symbol: "ASELS", asset_type: "BIST", kind: "bilanco", date: d(18), tahmini: true },
+    { symbol: "EREGL", asset_type: "BIST", kind: "bilanco", date: d(6), tahmini: false },
+  ],
 };
 
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".svg": "image/svg+xml", ".webmanifest": "application/manifest+json", ".ico": "image/x-icon" };

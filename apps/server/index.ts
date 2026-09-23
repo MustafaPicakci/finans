@@ -8,7 +8,7 @@ import cron from "node-cron";
 import { txShares, keyOf, cashDelta, statementAmount, REC_AMOUNT_BEGIN, type Card, type CardTx, type TradeSide } from "@finans/engine";
 import { db, initDb, nowLocal, todayLocal, TENANT_TABLES, GLOBAL_SETTING_KEYS, type TxClient } from "./db.js";
 import { loadAllData } from "./data.js";
-import { refreshAll, backfillPriceHistory, refreshCorporateActions } from "./prices.js";
+import { refreshAll, backfillPriceHistory, refreshCorporateActions, refreshCompanyEvents } from "./prices.js";
 import { refreshBenchmarks, autoBackfill } from "./benchmarks.js";
 import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, purgeStaleEmailTokens, SESSION_COOKIE, type SessionUser } from "./auth.js";
 import { sendMail, resetEmail, verifyEmail, mailConfigured, verifyMailConfig, mailFromWarning } from "./mail.js";
@@ -1306,6 +1306,13 @@ cron.schedule("20 3 * * *", () => {
       if (n) console.log(`[kurumsal] ${n} olay tazelendi (${r.filter((x) => x.events).map((x) => x.symbol).join(", ")})`);
     })
     .catch((e) => console.warn("[kurumsal] günlük tazeleme hatası:", e));
+  /* Faz 37 — bilanço tarihleri aynı günlük turda ve aynı gerekçeyle (tek Yahoo boru hattı).
+     Ayrı zamanlama açmak istekleri ikiye katlardı; tarih günde bir kez değişse bile fazlası
+     bilgi getirmiyor. Kendi catch'i var: crumb el sıkışması bozulursa takvimin kalanı
+     (defter + makro) çalışmaya devam etmeli. */
+  refreshCompanyEvents()
+    .then((r) => { if (r.length) console.log(`[bilanço] ${r.length} sembol tazelendi (${r.filter((x) => x.tahmini).length} tanesi tahmini tarih)`); })
+    .catch((e) => console.warn("[bilanço] günlük tazeleme hatası:", e));
 });
 cron.schedule("*/15 * * * *", runScheduledJobs);
 
@@ -1367,6 +1374,13 @@ refreshCorporateActions()
     console.log(`[kurumsal] açılış taraması: ${r.length} sembol, ${n} olay`);
   })
   .catch((e) => console.warn("[kurumsal] açılış taraması başarısız (kaçan bedelsiz uyarısı gecikir):", e));
+
+/* Bilanço tarihleri de AÇILIŞTA bir kez (autoBackfill/refreshCorporateActions'ın gerekçesi):
+   yalnız günlük cron'a bağlı kalsaydı deploy sonrası takvimin piyasa bölümü bir güne kadar
+   boş kalır ve özellik "gelmemiş" görünürdü. */
+refreshCompanyEvents()
+  .then((r) => console.log(`[bilanço] açılış taraması: ${r.length} sembolün tarihi alındı`))
+  .catch((e) => console.warn("[bilanço] açılış taraması başarısız (takvimde bilanço satırı çıkmaz):", e));
 
 /* Başlangıç catch-up'ı: Render free tier trafik yokken süreci uyutur; uyanışta node-cron ilk 15-dk
    tıkına dek beklerdi → kullanıcı bayat fiyat/işlenmemiş otonom kalem görürdü. Sunar sunmaz bir kez

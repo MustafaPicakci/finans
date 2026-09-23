@@ -1,5 +1,8 @@
 import React, { useState, useMemo } from "react";
-import { fmtD, parseD, keyOf, type AllData, type Day } from "@finans/engine";
+import {
+  fmtD, parseD, keyOf, takvimOlaylari, takvimGunleri, PIYASA_TURLERI,
+  type AllData, type Day, type TakvimOlay,
+} from "@finans/engine";
 import { T, css, tl } from "../../theme";
 import { maskBrief } from "../../privacy";
 import { Money, Empty, Aciklama, FiltreSeridi } from "../../ui";
@@ -7,9 +10,76 @@ import { Money, Empty, Aciklama, FiltreSeridi } from "../../ui";
 /** Takvimde gösterilen gerçekleşen (defter) hareketi; `card` doluysa kart harcaması (nakdi o gün oynatmaz) */
 type LedgerEv = { n: string; a: number; card?: string };
 
+/* ————— FAZ 37: PİYASA KATMANI —————
+
+   Bu ekran ÖNCE bir nakit takvimidir ve öyle kalır: hücrenin söylediği şey bir RAKAMDIR
+   (etkin nakit) ve gün rengi bakiyeden gelir. Piyasa tarihleri (bilanço, bedelsiz/temettü
+   ex-date, TCMB/Fed/TÜİK) bunun ÜSTÜNE ikinci bir katman olarak biner — hücrede tek küçük
+   kare, ayrıntısı zaten var olan gün panelinde.
+
+   Faz 37 bunu önce AYRI BİR SEKME olarak kurdu ve yanlıştı: iki ekranın ay şeridi, ızgarası,
+   gün paneli ve liste görünümü aynı bileşenin iki kopyasıydı. Gerçekten farklı olan tek şey
+   hücrenin ne söylediğiydi (rakam mı, tür mü) — ve aynı 47px'lik kutuda ikisi duramaz. Doğru
+   cevap iki eşit ekran değil, BİRİNCİL + KATMAN: rakam korunur, piyasa tek işarete iner.
+   Motor tarafı (`takvimOlaylari`) olduğu gibi kullanılıyor, yalnız tür süzgeciyle daraltılmış.
+
+   KAPSAM KISITI (bilerek): pencere bu EKRANIN penceresidir — içinde bulunulan ayın başından
+   projeksiyon ufkuna. Yani ayın geçmiş günlerindeki olaylar (ızgarada zaten tıklanabilir
+   kesikli hücreler) görünür, ama daha eskisi görünmez. Aylar öncesinin ex-date'ini aramak bu
+   ekranın işi değil: "hisse o gün neden yarıya indi" sorusunu Özet'teki "kaçırdığın kurumsal
+   olay" kartı cevaplıyor ve nakit projeksiyonunun zaten geçmişi yok. */
+
+const PIYASA_RENK = "var(--cat-8)";
+
+/** Hücredeki piyasa işareti: KARE — planlı hareketin yuvarlak noktasından ayrılsın diye
+    (aynı hücrede ikisi birden bulunabiliyor, aynı biçim olsalar sayılırlardı). */
+const PiyasaIsaret = ({ boyut = 5 }: { boyut?: number }) => (
+  <span aria-hidden="true" style={{ width: boyut, height: boyut, borderRadius: 1, background: PIYASA_RENK, flexShrink: 0 }} />
+);
+
+/** Gün panelinde / listede bir piyasa olayı satırı. */
+function PiyasaSatir({ o }: { o: TakvimOlay }) {
+  return (
+    <div style={{ display: "flex", alignItems: "baseline", gap: 8, fontSize: 13, marginTop: 4 }}>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ color: T.mut }}>
+          {/* "~" = tarih TAHMİNİ (şirket duyurmadıysa geçen yıldan türetilmiş, TÜFE günü de
+              takvim kuralından). Kesinmiş gibi yazmak sessiz bir yanlış olurdu. */}
+          {o.tahmini && <span title="tarih tahmini" style={{ color: T.warn }}>~ </span>}{o.baslik}
+        </span>
+        {/* Alt satır YALNIZ `detay` varsa çizilir. `etiket` (Fed/TCMB/Bilanço) burada
+            gereksiz: bölümün başlığı zaten "piyasa" ve olay başlığı kurumu/sembolü söylüyor
+            ("Fed faiz kararı (FOMC)" altına "Fed" yazıyordu). Bilgi ekleyen tek alan `detay`:
+            "tarih tahmini (geçen yıla göre)", "hisse başına brüt", "adet çarpanı 2,5". */}
+        {o.detay && <span style={{ display: "block", fontSize: 11, color: T.mut3 }}>{o.detay}</span>}
+      </span>
+      {o.tutar != null && <Money v={o.tutar} mut />}
+    </div>
+  );
+}
+
+/** Piyasa bölümü — gün panelinde ve liste görünümünde aynı başlıkla çizilsin diye tek yerde. */
+const PiyasaBolum = ({ ev, ayrac }: { ev: TakvimOlay[]; ayrac?: boolean }) => (
+  <div style={{ marginTop: 10, ...(ayrac ? { borderTop: `1px solid ${T.line}`, paddingTop: 8 } : {}) }}>
+    <div style={{ ...css.label, marginBottom: 4, display: "flex", alignItems: "center", gap: 5 }}>
+      <PiyasaIsaret boyut={6} />piyasa
+    </div>
+    {ev.map((o) => <PiyasaSatir key={o.key} o={o} />)}
+  </div>
+);
+
 /* ————— NAKİT AKIŞI (liste + takvim) ————— */
 export function Nakit({ days, data }: { days: Day[]; data: AllData }) {
   const [view, setView] = useState<"liste" | "takvim">("takvim");
+  /* Tercih kalıcı: katmanı kapatan kullanıcı her açılışta yeniden kapatmak zorunda kalmasın.
+     Varsayılan AÇIK — katmanın var olma sebebi zaten tarihlerin görünmesi. */
+  const [piyasa, setPiyasa] = useState(() => {
+    try { return localStorage.getItem("finans-nakit-piyasa") !== "0"; } catch { return true; }
+  });
+  const piyasaCevir = () => setPiyasa((v) => {
+    try { localStorage.setItem("finans-nakit-piyasa", v ? "0" : "1"); } catch { /* özel pencere */ }
+    return !v;
+  });
   /* gerçekleşen hareketler (transactions + kart harcamaları) gün anahtarına göre — takvimde ✓ olarak
      işaretlenir. Projeksiyon geçmişi çizmediğinden içinde bulunulan ayın geçmiş günleri bu defterden gelir. */
   const ledger = useMemo(() => {
@@ -19,6 +89,21 @@ export function Nakit({ days, data }: { days: Day[]; data: AllData }) {
     data.card_txs.forEach((ct) => push(ct.date, { n: ct.name, a: -ct.amount, card: data.cards.find((c) => c.id === ct.card_id)?.name || "kart" }));
     return m;
   }, [data]);
+  /* Piyasa olayları: `takvimOlaylari` TÜR SÜZGECİYLE çağrılır ve `days` BOŞ geçilir — planlı
+     hareketler bu ekranda zaten `Day.ev`den geliyor, ikinci kez istemek aynı satırı iki kez
+     çizerdi. Pencere görüntülenen ayların tamamı (projeksiyon dışı kalan geçmiş günler de
+     ızgarada tıklanabiliyor, işaretleri orada da olmalı). */
+  const [pFrom, pTo] = useMemo(() => {
+    const ilk = days[0]?.date ?? new Date();
+    return [keyOf(new Date(ilk.getFullYear(), ilk.getMonth(), 1)), days[days.length - 1]?.k ?? keyOf(ilk)];
+  }, [days]);
+  const piyasaMap = useMemo(
+    () => (piyasa
+      ? takvimGunleri(takvimOlaylari(data, [], { from: pFrom, to: pTo, turler: PIYASA_TURLERI }))
+      : new Map<string, TakvimOlay[]>()),
+    [data, piyasa, pFrom, pTo],
+  );
+
   const months = useMemo(() => {
     const m = new Map<string, { label: string; y: number; mo: number; days: Day[] }>();
     days.forEach((d) => {
@@ -37,7 +122,18 @@ export function Nakit({ days, data }: { days: Day[]; data: AllData }) {
       {/* Ay seçici + görünüm değiştirici: ikisi de yalnız GÖRÜNÜMÜ değiştirir, veriyi değil →
           filtre şeridine girer (bkz. FiltreSeridi). Ay çipleri artık marka rengiyle dolmuyor;
           mor, ekranda "sıradaki eylem" için ayrıldı — seçili filtre beyaz yüzey + mor metin. */}
-      <FiltreSeridi sag={
+      <FiltreSeridi sag={<span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        {/* Piyasa katmanı anahtarı: GÖRÜNÜMÜ değiştirir, veriyi değil → filtre şeridine girer
+            (Faz 24 kural 2). Seçili hâli beyaz yüzey + katmanın kendi rengi; mor dolgu
+            "sıradaki eylem"e ayrılmıştır. */}
+        <button onClick={piyasaCevir} title="bilanço, bedelsiz/temettü, TCMB/Fed/TÜİK tarihleri" style={{
+          display: "flex", alignItems: "center", gap: 5, borderRadius: 20, padding: "5px 10px",
+          background: piyasa ? T.panel : "transparent", border: `1px solid ${piyasa ? T.line : "transparent"}`,
+          color: piyasa ? PIYASA_RENK : T.mut, cursor: "pointer", fontSize: 11.5, fontFamily: T.disp,
+          fontWeight: piyasa ? 700 : 400, whiteSpace: "nowrap",
+        }}>
+          <PiyasaIsaret boyut={piyasa ? 7 : 5} />piyasa
+        </button>
         <span style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: `1px solid ${T.line}` }}>
           {(["takvim", "liste"] as const).map((v) => (
             <button key={v} onClick={() => setView(v)} style={{
@@ -46,7 +142,7 @@ export function Nakit({ days, data }: { days: Day[]; data: AllData }) {
             }}>{v}</button>
           ))}
         </span>
-      }>
+      </span>}>
         <span style={{ display: "flex", gap: 6, overflowX: "auto", minWidth: 0 }}>
           {months.map((m, i) => (
             <button key={i} onClick={() => setMi(i)} style={{
@@ -57,13 +153,17 @@ export function Nakit({ days, data }: { days: Day[]; data: AllData }) {
           ))}
         </span>
       </FiltreSeridi>
-      {view === "takvim" ? <Takvim key={cur.label} month={cur} ledger={ledger} /> : <Liste days={cur.days} />}
+      {view === "takvim"
+        ? <Takvim key={cur.label} month={cur} ledger={ledger} piyasaMap={piyasaMap} />
+        : <Liste days={cur.days} piyasaMap={piyasaMap} />}
     </div>
   );
 }
 
-function Liste({ days }: { days: Day[] }) {
-  const eventDays = days.filter((d) => d.ev.length);
+function Liste({ days, piyasaMap }: { days: Day[]; piyasaMap: Map<string, TakvimOlay[]> }) {
+  /* Piyasa olayı OLAN ama planlı hareketi olmayan gün de listeye girer — katman açıkken
+     "o gün bir şey var" demek, o günü listeden düşürmekle çelişirdi. */
+  const eventDays = days.filter((d) => d.ev.length || piyasaMap.get(d.k)?.length);
   const last = days[days.length - 1];
   return (<>
     {eventDays.length === 0 && <Empty>Bu ayda planlı hareket yok.</Empty>}
@@ -81,6 +181,7 @@ function Liste({ days }: { days: Day[] }) {
             <span style={{ color: T.mut }}>{e.n}</span><Money v={e.a} sign />
           </div>
         ))}
+        {(piyasaMap.get(d.k)?.length ?? 0) > 0 && <PiyasaBolum ev={piyasaMap.get(d.k)!} ayrac={d.ev.length > 0} />}
       </div>
     ))}
     {last && (
@@ -95,7 +196,9 @@ function Liste({ days }: { days: Day[] }) {
 /** Etkin nakit = gün sonu nakit + para piyasası fonu (likit, nakit gibi değerlenir) */
 const effCash = (d: Day) => d.bal + d.cashFunds;
 
-function Takvim({ month, ledger }: { month: { y: number; mo: number; days: Day[] }; ledger: Map<string, LedgerEv[]> }) {
+function Takvim({ month, ledger, piyasaMap }: {
+  month: { y: number; mo: number; days: Day[] }; ledger: Map<string, LedgerEv[]>; piyasaMap: Map<string, TakvimOlay[]>;
+}) {
   const [selK, setSelK] = useState<string | null>(null);
   const todayK = keyOf(new Date());
   const byDate = new Map(month.days.map((d) => [d.date.getDate(), d]));
@@ -113,6 +216,7 @@ function Takvim({ month, ledger }: { month: { y: number; mo: number; days: Day[]
 
   const selDay = selK ? month.days.find((d) => d.k === selK) ?? null : null;
   const selLedger = selK ? ledger.get(selK) ?? [] : [];
+  const selPiyasa = selK ? piyasaMap.get(selK) ?? [] : [];
 
   return (<>
     <div style={{ display: "grid", gridTemplateColumns: "repeat(7,minmax(0,1fr))", gap: 4, maxWidth: 480, margin: "0 auto" }}>
@@ -125,7 +229,7 @@ function Takvim({ month, ledger }: { month: { y: number; mo: number; days: Day[]
         if (!d) {
           /* projeksiyon dışı gün: içinde bulunulan ayın GEÇMİŞ günleri (bakiye geçmişi tutulmadığından
              sayı yok) — gerçekleşen hareketleri ✓ ile işaretlenir, tıklayınca listelenir */
-          if (k >= todayK) return <div key={i} />;
+          if (k >= todayK && !piyasaMap.has(k)) return <div key={i} />;
           const isSel = selK === k;
           return (
             <button key={i} onClick={() => setSelK(isSel ? null : k)} style={{
@@ -133,9 +237,12 @@ function Takvim({ month, ledger }: { month: { y: number; mo: number; days: Day[]
               background: "transparent", cursor: "pointer", opacity: 0.65,
               display: "flex", flexDirection: "column", justifyContent: "space-between", padding: "4px 5px", overflow: "hidden",
             }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 3 }}>
                 <span style={{ fontSize: 11, color: T.mut3 }}>{dd}</span>
-                {done && check}
+                <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                  {done && check}
+                  {piyasaMap.has(k) && <PiyasaIsaret />}
+                </span>
               </div>
               <div />
             </button>
@@ -155,6 +262,7 @@ function Takvim({ month, ledger }: { month: { y: number; mo: number; days: Day[]
               <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
                 {done && check}
                 {hasEv && <span style={{ width: 5, height: 5, borderRadius: 3, background: T.acc }} />}
+                {piyasaMap.has(d.k) && <PiyasaIsaret />}
               </span>
             </div>
             <div style={{ textAlign: "right", lineHeight: 1.15 }}>
@@ -171,9 +279,10 @@ function Takvim({ month, ledger }: { month: { y: number; mo: number; days: Day[]
         <span><span style={{ ...css.mono, color: T.mut }}>Σ</span> = tüm varlık</span>
         <span><span style={{ color: T.neg }}>kırmızı</span> = eksi etkin nakit</span>
         <span><span style={{ color: T.pos }}>✓</span> = gerçekleşen hareket</span>
+        <span><span style={{ display: "inline-block", width: 6, height: 6, borderRadius: 1, background: PIYASA_RENK }} /> = piyasa tarihi (bilanço, bedelsiz/temettü, TCMB/Fed/TÜİK) — <b>~</b> işaretliyse tarih tahmini</span>
       </div>
     </Aciklama>
-    {selK && (selDay || selLedger.length > 0) && (() => {
+    {selK && (selDay || selLedger.length > 0 || selPiyasa.length > 0) && (() => {
       const date = selDay ? selDay.date : parseD(selK);
       const ledgerList = selLedger.length > 0 && (
         <div style={{ marginTop: selDay ? 10 : 0, ...(selDay ? { borderTop: `1px solid ${T.line}`, paddingTop: 8 } : {}) }}>
@@ -224,6 +333,7 @@ function Takvim({ month, ledger }: { month: { y: number; mo: number; days: Day[]
           </div>
         )}
         {ledgerList}
+        {selPiyasa.length > 0 && <PiyasaBolum ev={selPiyasa} ayrac={!!selDay || selLedger.length > 0} />}
       </div>
       );
     })()}

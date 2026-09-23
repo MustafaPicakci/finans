@@ -16,3 +16,5 @@ export * from "./kayitlar.js";
 export * from "./harcama.js";
 export * from "./benchmarks.js";
 export * from "./corporate.js";
+export * from "./makro.js";
+export * from "./takvim.js";

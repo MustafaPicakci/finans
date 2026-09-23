@@ -742,6 +742,118 @@ ASELS, 200 adet, doğru tarih), bedelli hesabı (40 adette %150 → 60 lot) ve D
 **iki hâli** de doğrulandı.
 
 
+## Faz 37 — Finansal olaylar: nakit takviminin piyasa katmanı ✅
+
+Soru şuydu: "Fed faiz kararı, ASELS bilançosu, BİM temettüsü gibi önemli tarihleri bir takvimde
+görsek." Önce **veri ölçüldü**, çünkü bu özelliğin tamamı bir veri kaynağı sorusudur ve dördü
+birbirinden çok farklı çıktı:
+
+| İstenen | Durum |
+| --- | --- |
+| Bilanço tarihi | **Var**, ama yarısı tahmin (aşağıda) |
+| İleriye dönük temettü/bedelsiz | **Yok** — hiçbir kaynak makine okunur vermiyor |
+| KAP şirket takvimi | **Erişilemiyor** — POST sorgu ucu bot koruması arkasında |
+| TCMB / Fed / TÜİK | **Var**, ama API'yle değil |
+
+**Bilanço**: CLAUDE.md'de "Yahoo BIST bilanço tarihi vermiyor" yazıyordu ve bu `chart?events=earn`
+için doğru (yeniden ölçüldü, boş dönüyor). Veren uç `quoteSummary/calendarEvents`, ama **crumb**
+istiyor: çerez al → `/v1/test/getcrumb` → her sorguya `&crumb=`. Projeye giren tek yeni kırılganlık
+bu ve bilinçli kabul edildi — alternatifi KAP'tı, o da erişilemiyor. Bozulursa kaybedilen şey
+yalnız bilanço satırları olur; takvimin defter tarafı ve makro tarihler etkilenmez.
+
+Asıl bulgu, alanın kendisinden çok **`isEarningsDateEstimate` bayrağı**: ölçümde THYAO ve GARAN'ın
+tarihi duyurulmuş (`false`), ASELS ve BIMAS'ınki geçen yılın tarihinden türetilmiş (`true`).
+Bayrağı düşürüp hepsini aynı biçimde yazmak, **uydurulmuş bir tarihi kesin göstermek** olurdu
+(`returns.ts`'in "veri yetmiyorsa null, uydurulmaz" kuralı). Ekranda tahmini tarih `~` ile yazılır.
+
+**İleriye dönük temettü yok ve bu kabullenildi.** `exDividendDate` çoğu sembolde **son** ex-date'i
+döndürüyor (THYAO 2025-09-02, GARAN 2026-04-07), ASELS'inki ise geçen yılın gününden türetilmiş.
+Yani aksiyoner olan tek olay — "temettü geliyor, nakit girecek" — tam da alınamayan olay. Ekran
+bunu saklamıyor: açıklama metni beklenen temettünün **Plan** sekmesine tek seferlik gelir olarak
+yazılabileceğini söylüyor (o yol zaten var).
+
+**Makro tarihler bir API'den değil, elle bakımlı bir tablodan geliyor** ([makro.ts](../packages/engine/src/makro.ts))
+ve bu bilinçli: Fed yılda 8, TCMB yılda 8 toplantı yapıyor ve ikisi de takvimini yıl başından
+duyuruyor — aranan şey yılda ~30 satır, hepsi aylar öncesinden kesin. Kaynak sayfaları her gün
+yoklamak kırılganlık ithal etmek olurdu; yılda bir commit ucuzdur. Tarihler resmî kaynaklardan
+alındı (tcmb.gov.tr/takvim, federalreserve.gov/fomccalendars). **TÜFE istisna**: TÜİK her ayın
+3'ünde yayımlıyor (hafta sonuysa sonraki iş günü), yani tarih bir liste değil bir **desen** — o
+yüzden kuralla üretiliyor, tükenmiyor, ve karşılığında `tahmini` işaretleniyor (resmî tatil
+kaymasını bilmiyoruz). Elle bakımın tek gerçek riski **sessiz tükenmedir**: bitince ekran "olay
+yok" der ve sebebi görünmez. Bu yüzden `makroSonTarih()` var ve arayüz son 90 güne girince
+takvimin nerede bittiğini yazıyor (`setup.ts`'in dersi).
+
+**Ekran önce ayrı bir sekme oldu, sonra aynı fazın içinde geri alındı** — ve bu, fazın en
+öğretici kısmı. Ayrımın gerekçesi şuydu: Nakit takvimi "o gün param var mı" (hücrede rakam, gün
+rengi bakiyeden), yeni takvim "o gün ne oluyor" (hücrede tür noktaları, rakam yok) — ve bu ikisi
+aynı 47px'lik kutuda duramaz. Gerekçe doğruydu ama **çıkarılan sonuç yanlıştı**: iki ekranın ay
+şeridi, ızgarası, gün paneli ve liste görünümü aynı bileşenin iki kopyasıydı. Gerçekten çakışmayan
+tek şey hücrenin içeriğiydi, yani ayrılması gereken şey EKRAN değil o hücreydi.
+
+Doğru cevap **iki eşit ekran değil, birincil + katman**: Nakit takvimi olduğu gibi kalır (hücrede
+rakam, gün rengi bakiyeden), piyasa tarihleri üstüne biner — hücrede tek küçük **kare** (planlı
+hareketin yuvarlak noktasından ayrı; aynı hücrede ikisi bulunabiliyor, aynı biçim olsalar
+sayılırlardı), ayrıntısı **zaten var olan** gün panelinde ve liste görünümünde "piyasa" bölümü
+olarak. Üstte tek anahtar, tercih `finans-nakit-piyasa`'da kalıcı.
+
+Motor tarafı bu geri alıştan **hiç etkilenmedi** ve bu, katmanın ucuz olmasının sebebi:
+`takvimOlaylari()` zaten tür süzgeci alıyordu, Nakit ekranı ondan yalnız `PIYASA_TURLERI` istiyor
+(ve `days` **boş** geçiyor — planlı hareketler o ekranda zaten `Day.ev`den geliyor, ikinci kez
+istemek aynı satırı iki kez çizerdi). Silinen tek şey ajandayla birlikte kullanımsız kalan
+`yaklasanOlaylar` ve `DEFTER_TURLERI` oldu: testli ölü kod, kodsuzdan kötüdür.
+
+Katmanın kapsamı bu **ekranın** penceresidir (ayın başı → projeksiyon ufku), yani aylar öncesinin
+ex-date'i burada aranmaz — o soruyu ("hisse o gün neden yarıya indi") Özet'teki "kaçırdığın
+kurumsal olay" kartı zaten cevaplıyor.
+
+**Gün toplamı bilerek yazılmıyor** — `harcama.ts`'in "tüketim vs nakit" tuzağının aynısı: bir kart
+harcaması (harcandığı gün) ile onun ekstre ödemesi (son ödeme günü) aynı parayı iki kez sayar,
+virmanın iki bacağı net sıfırdır, vade değeri net varlıkta zaten duran bir tutardır. Toplam isteyen
+soru Kayıtlar/Özet'e ve `harcamaOzeti()`ne ait. (Katman hâlinde bu kısıt kendiliğinden korunuyor:
+piyasa satırları nakit rakamının yanında değil, ayrı bir bölümde duruyor.)
+
+Motor tarafı ([takvim.ts](../packages/engine/src/takvim.ts)) **yeni matematik içermez** (holdings.ts
+ve corporate.ts'in aynı gerekçesi): geçmiş `tumKayitlar()`ten, gelecek `project()`in `Day.ev`inden,
+kart kesimi `firstCutoff()`ten, vade `depositMaturity()`den geliyor. Tek işi bunları tek zaman
+eksenine dizmek. Testte **ayrışma kapanları** var: gerçekleşen olaylar `tumKayitlar()` ile birebir
+(tutar **ve yön**), planlı olaylar `Day.ev` ile birebir. Bunun için `Day.ev` bir alan kazandı —
+`t: "duzenli" | "kredi" | "ekstre" | "plan"`. Tür bilgisi projeksiyonda zaten biliniyordu; dışarıda
+addan türetmek ("…ekstresi ile bitiyorsa kart") aynı kuralın ikinci, kırılgan kopyası olurdu.
+
+**Kart hesap kesim günü** takvimin kattığı tek yeni bilgi: ekstrenin son ödeme günü projeksiyonda
+vardı, kesim günü hiçbir ekranda yoktu — oysa sorulan soru "bugün harcarsam hangi ekstreye girer".
+Tutarı **yok**, çünkü kesim bir para hareketi değil.
+
+Mobil çekim dört kusur yakaladı ve hiçbiri görülmeden bilinemezdi: ay şeridi seçili aya kaymıyordu
+(şerit "Eylül 2025" yazarken ızgarada Eylül 2026 duruyordu — şerit hangi ayda olunduğunu söylemek
+yerine **yanlış söylüyordu**); yedi tür çipi 390px'te üç satıra sarıp ızgarayı ekranın yarısından
+sonraya itiyordu (Faz 32'de Hareketler'de ölçülen kusurun aynısı); `detay` `etiket`i tekrar
+ediyordu ("Düzenli · Düzenli", "Fed · Fed"); ve katman hâline geçince alt satır bu kez başlığı
+tekrar etti ("Fed faiz kararı (FOMC)" altına "Fed") — piyasa satırının alt yazısı artık yalnız
+`detay` doluysa çiziliyor.
+
+Yan iş — **Faz 36'nın "kaçırılan kurumsal olaylar" kartı elden geçti** (kullanıcı: "hiç şık
+durmamış"). Kusurlar tek tek ölçüldü: başlık 41 karakterle BÜYÜK HARF + harf aralığında 390px'in
+tam satırını yiyordu; iki olay arasında ayırıcı yoktu, yani hangi "Kaydet" düğmesinin hangi olaya
+ait olduğu görünmüyordu; tarih HAM ISO yazıyordu (`2026-08-29` — uygulamanın başka hiçbir yerinde
+öyle değil); "Kaydetmezsen portföyün eksik görünür" ve "(stopaj düşülmemiş)" her satırda
+tekrarlanıp satırı üç sıraya sarıyordu; ve kart kenarlığı + başlık + iki düğme hep marka moruydu,
+yani "sıradaki eylem" rengi hiçbir şeyi öne çıkarmıyordu (Faz 24 kural 2). Şimdi: kısa başlık +
+sayı rozeti, olay başına bir satır açıklama, tür rozeti kendi renginde (temettü yeşil = para
+girişi, bedelsiz mavi = adet değişimi), tek mor "Kaydet", tekrarlanan uyarılar kart dibinde bir
+kez. Ayrıca **dilim 3** eklendi: kaynak zamanla büyüyor ve kaçırılan kayıtlar birikiyor —
+kullanıcının gerçek verisinde 9 kayıtsız temettü vardı, yani kart mobilde ~1000px'e uzayıp Özet'in
+kendisini aşağı itiyordu.
+
+Doğrulama: `pnpm build` temiz, 346 test yeşil (24 yeni engine testi: takvim + makro). Crumb el
+sıkışması gerçek Yahoo ucuna karşı **kendi kod yoluyla** sınandı: çerez alınıyor, jeton beş çağrı
+boyunca önbellekten geliyor, BIST sembolleri doğru tahmin bayrağıyla dönüyor, ETF'ler beklendiği
+gibi 404 verip satır yazmıyor. Mobil 390px'te sayfa taşması yok (`scrollW: 390`); ızgara, gün
+paneli ve liste görünümü katman açıkken stub'a karşı çekildi; kurumsal olay kartı hem 390px'te hem 1280px'te çekildi (masaüstü yerleşimi ilk kez denetlendi). Stub'a `company_events` fikstürü
+eklendi — **iki hâliyle** (duyurulmuş + tahmini), yoksa `~` işaretinin yerleşimi hiç
+denetlenemezdi.
+
+
 ## Doğrulama
 
 - **Faz 0**: ✅ `pnpm build` temiz; 46 engine vitest testi yeşil; gerçek `data/finans.db` ile prod sunucu smoke test edildi (API verisi + derlenmiş arayüz doğrulandı).
@@ -755,9 +867,12 @@ ASELS, 200 adet, doğru tarih), bedelli hesabı (40 adette %150 → 60 lot) ve D
 
 ## Sıralama
 
-Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Faz 0–35 tamamlandı (Faz 5 yayına, 10–13 ürün derinleşmesine, 21+ asistan ve portföy derinleşmesine kadar); yukarıdaki nota bakın — 22-33'ün günlüğü burada değil, CLAUDE.md/README'de.
+Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Faz 0–37 tamamlandı (Faz 5 yayına, 10–13 ürün derinleşmesine, 21+ asistan ve portföy derinleşmesine kadar); yukarıdaki nota bakın — 22-33'ün günlüğü burada değil, CLAUDE.md/README'de.
 
 **Sıradaki iş — numaralı faz değil, açık kalan kalemler (öncelik sırasıyla):**
 1. **E-posta teslim edilebilirliği** (prod engelleyici, bkz. Faz 10) — Resend/Brevo + kendi domain + SPF/DKIM/DMARC; sadece env değişikliği. Bu bitmeden çok-kullanıcı kâğıt üzerinde kalır.
 2. **Deploy disiplini** — Render'da autoDeploy kapalı; her commit sonrası Manual Deploy unutulmamalı (ya da Blueprint'e geçilip otomatikleştirilmeli).
-3. Sonraki ürün fikirleri (henüz seçilmedi): temettü/sermaye olayları, tanım kayıtlarının düzenlenmesi, gün içi fiyat geçmişi, GitHub Actions CI/CD.
+3. Sonraki ürün fikirleri (henüz seçilmedi): gün içi fiyat geçmişi, GitHub Actions CI/CD.
+4. **Makro takvimin yıllık bakımı** (Faz 37): TCMB 2027'nin yalnız ilk yarısını duyurdu, Fed 2027'nin
+   tamamını. İkisi yeni takvimi açıklayınca [makro.ts](../packages/engine/src/makro.ts) güncellenmeli —
+   ekran son 90 güne girince kendisi uyarır.

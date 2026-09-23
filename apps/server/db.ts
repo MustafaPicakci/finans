@@ -234,6 +234,21 @@ CREATE TABLE IF NOT EXISTS corporate_actions (
   currency text NOT NULL DEFAULT 'TRY',
   PRIMARY KEY (symbol, asset_type, date, kind)
 );
+/* Faz 37 — ŞİRKET TAKVİMİ (bilanço tarihleri). GLOBAL, corporate_actions ile aynı gerekçe:
+   bir şirketin bilanço günü herkes için aynıdır. Sembol başına TEK satır (kind + sembol =
+   anahtar), çünkü takvimin işi olan yalnız SIRADAKİ tarih — geçmiş bilanço tarihlerinin
+   defterde bir karşılığı yok. Duyuru gelip tahminin yerini aldığında eski satır kalmasın.
+   tahmini = Yahoo'nun isEarningsDateEstimate bayrağı: tarih duyurulmuş mu, geçen yıldan mı
+   türetilmiş. Aktarılmak zorundadır — tahmini tarihi kesin göstermek sessiz bir yanlış olurdu.
+   NOT: bu blok bir template literal'in içinde — yorumlara backtick YAZMA, string'i kapatır. */
+CREATE TABLE IF NOT EXISTS company_events (
+  symbol text NOT NULL,
+  asset_type text NOT NULL,
+  kind text NOT NULL,
+  date text NOT NULL,
+  tahmini boolean NOT NULL DEFAULT false,
+  PRIMARY KEY (symbol, asset_type, kind)
+);
 /* Faz 27 — referans endeksler (BIST 100, S&P 500, NASDAQ, gram altın, USD/TRY).
    GLOBAL ve kullanıcıdan bağımsız; hepsi TL'ye çevrilmiş halde saklanır (bkz. benchmarks.ts).
    price_history'ye yazılmadı: AssetType kapalı bir birleşim ve TradeForm'un tür açılırını

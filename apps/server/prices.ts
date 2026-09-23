@@ -359,3 +359,96 @@ export async function refreshAll(): Promise<RefreshResult[]> {
   }
   return out;
 }
+
+/* ————— FAZ 37: ŞİRKET TAKVİMİ (bilanço tarihleri) —————
+
+   Yahoo'nun `chart` ucu bilanço tarihi VERMİYOR (`events=earn` BIST'te boş döner — ölçüldü,
+   CLAUDE.md'de de yazılıydı). Veren uç `quoteSummary/calendarEvents`, ama o **crumb** istiyor:
+   çerez al → `/v1/test/getcrumb` ile jeton al → her sorguya `&crumb=` ekle. Bu, projeye giren
+   TEK yeni kırılganlıktır ve bilinçli kabul edildi: alternatifi KAP'tı, o da POST sorgu ucunu
+   bot korumasıyla kapatmış durumda (ölçüldü: Render'ın çıkabildiği bir yol değil, bağlantı hiç
+   kurulmuyor) ve HTML kazımak gerekirdi. Crumb bozulursa kaybedilen şey yalnız bilanço
+   tarihleri olur — takvimin defter tarafı ve makro tarihleri (elle bakımlı, bkz. makro.ts)
+   etkilenmez. Best-effort: hata sessizce boş döner, üst kat çağrıyı atlar.
+
+   TAHMİN BAYRAĞI AKTARILIR, GİZLENMEZ: Yahoo `isEarningsDateEstimate` ile tarihin duyurulmuş
+   mu yoksa geçen yılın tarihinden mi türetildiğini söylüyor. Ölçüldü (22 Eylül 2026): THYAO ve
+   GARAN duyurulmuş (false), ASELS ve BIMAS tahmin (true). Bayrağı düşürüp hepsini aynı biçimde
+   yazmak, uydurulmuş bir tarihi kesin göstermek olurdu. */
+
+let crumbCache: { crumb: string; cookie: string; at: number } | null = null;
+
+/** Çerez + crumb ikilisi (1 saat önbellekli — her sembolde yeniden el sıkışmak gereksiz istek). */
+async function yahooCrumb(): Promise<{ crumb: string; cookie: string } | null> {
+  if (crumbCache && Date.now() - crumbCache.at < 3_600_000) return crumbCache;
+  try {
+    /* Çerez adımı: 404 dönmesi NORMAL — istenen şey gövde değil `set-cookie` başlığı. */
+    const r1 = await fetch("https://fc.yahoo.com", { headers: UA, signal: AbortSignal.timeout(15_000) });
+    const cookie = (r1.headers.getSetCookie?.() ?? []).map((c) => c.split(";")[0]).join("; ");
+    const r2 = await fetch("https://query1.finance.yahoo.com/v1/test/getcrumb", {
+      headers: cookie ? { ...UA, cookie } : UA,
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!r2.ok) return null;
+    const crumb = (await r2.text()).trim();
+    if (!crumb || crumb.length > 64) return null; // HTML/hata sayfası geldiyse jeton değildir
+    crumbCache = { crumb, cookie, at: Date.now() };
+    return crumbCache;
+  } catch {
+    return null;
+  }
+}
+
+/** Sembolün sıradaki bilanço tarihi (+ tarihin tahmini mi olduğu). Yoksa null. */
+export async function yahooEarnings(sym: string): Promise<{ date: string; tahmini: boolean } | null> {
+  const c = await yahooCrumb();
+  if (!c) return null;
+  try {
+    const r = await fetch(
+      `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(sym)}?modules=calendarEvents&crumb=${encodeURIComponent(c.crumb)}`,
+      { headers: c.cookie ? { ...UA, cookie: c.cookie } : UA, signal: AbortSignal.timeout(20_000) },
+    );
+    if (r.status === 401 || r.status === 403) { crumbCache = null; return null; } // jeton bayatladı
+    if (!r.ok) return null;
+    const e: any = (await r.json())?.quoteSummary?.result?.[0]?.calendarEvents?.earnings;
+    const ts = Number(e?.earningsDate?.[0]?.raw);
+    if (!isFinite(ts) || ts <= 0) return null;
+    const d = new Date(ts * 1000);
+    const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    return { date, tahmini: e?.isEarningsDateEstimate === true };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Tutulan sembollerin bilanço tarihlerini `company_events`'e yazar.
+ * Kapsam BIST + ETF: fon/altın/dövizin bilançosu yoktur, kripto zaten şirket değil.
+ * Sembol başına TEK satır (upsert) — geçmiş bilanço tarihlerinin takvimde işi yok, tarih
+ * değiştiğinde (duyuru gelince tahminin yerini alır) eskisi DURMASIN.
+ */
+export async function refreshCompanyEvents(): Promise<{ symbol: string; date: string; tahmini: boolean }[]> {
+  const held = await db.all<{ asset_type: string; symbol: string }>(
+    "SELECT DISTINCT asset_type, symbol FROM trades WHERE asset_type IN ('BIST','ETF')",
+  );
+  const out: { symbol: string; date: string; tahmini: boolean }[] = [];
+  for (const h of held) {
+    /* ETF'ler burada BEKLENEN biçimde 404 döner (bir endeks fonunun bilançosu yoktur) ve satır
+       yazılmaz. Tür yine de kapsamda, çünkü `AssetType`'ta ayrı bir "yabancı hisse" yok:
+       AAPL tutan kullanıcı onu ETF olarak giriyor ve ONUN bilanço tarihi geliyor. Bedeli
+       gerçek ETF başına günde bir 404. */
+    const e = await yahooEarnings(yahooSymbol(h.asset_type, h.symbol));
+    if (!e) continue;
+    await db.run(
+      `INSERT INTO company_events (symbol, asset_type, kind, date, tahmini) VALUES (?,?,'bilanco',?,?)
+       ON CONFLICT (symbol, asset_type, kind) DO UPDATE SET date=excluded.date, tahmini=excluded.tahmini`,
+      h.symbol, h.asset_type, e.date, e.tahmini,
+    );
+    out.push({ symbol: h.symbol, ...e });
+  }
+  /* Geçmişte kalmış tarihler temizlenir: Yahoo bir sembol için tarih vermemeye başlarsa satır
+     sonsuza dek eski tarihi göstermeye devam ederdi ve takvim geçmişte bir "yaklaşan bilanço"
+     çizerdi. Silmek güvenli — sıradaki tarih her turda yeniden yazılıyor. */
+  await db.run("DELETE FROM company_events WHERE date < ?", todayLocal());
+  return out;
+}

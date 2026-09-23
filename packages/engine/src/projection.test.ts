@@ -42,7 +42,7 @@ describe("project", () => {
     const days = project(data, 1);
     const payDay = days.find((d) => d.date.getDate() === 15 && d.date.getMonth() === 0);
     expect(payDay!.net).toBe(5000);
-    expect(payDay!.ev).toEqual([{ n: "Maaş", a: 5000 }]);
+    expect(payDay!.ev).toEqual([{ n: "Maaş", a: 5000, t: "duzenli" }]);
     // ödeme gününden sonraki bakiye kalıcı olarak artmış olmalı
     expect(days[days.length - 1].bal).toBe(5000);
   });
@@ -58,7 +58,7 @@ describe("project", () => {
     const jan = days.find((d) => d.date.getMonth() === 0 && d.date.getDate() === 15)!;
     const feb = days.find((d) => d.date.getMonth() === 1 && d.date.getDate() === 15)!;
     expect(jan.ev).toEqual([]);            // Ocak gerçekleşti → tahminde yok (çift sayım engellendi)
-    expect(feb.ev).toEqual([{ n: "Maaş", a: 5000 }]); // Şubat hâlâ tahminde
+    expect(feb.ev).toEqual([{ n: "Maaş", a: 5000, t: "duzenli" }]); // Şubat hâlâ tahminde
   });
 
   it("from_month/to_month aralığı dışındaki aylarda düzenli kalem işlemez", () => {
@@ -303,7 +303,7 @@ describe("netWorthBreakdown", () => {
     });
     const gun0 = project(data, 1)[0];
     const n = netWorthBreakdown(data);
-    expect(gun0.ev).toEqual([{ n: "Maaş", a: 5_000 }]); // maaş bugün
+    expect(gun0.ev).toEqual([{ n: "Maaş", a: 5_000, t: "duzenli" }]); // maaş bugün
     expect(n.nakit).toBe(10_000);        // banka şu an bunu söylüyor
     expect(gun0.bal).toBe(15_000);       // projeksiyon maaşı işlemiş
     expect(gun0.worth - n.net).toBe(5_000);

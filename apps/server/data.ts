@@ -1,4 +1,4 @@
-import type { AllData, CorporateAction } from "@finans/engine";
+import type { AllData, CompanyEvent, CorporateAction } from "@finans/engine";
 import { db, nowLocal } from "./db.js";
 
 /* ============================================================================
@@ -38,7 +38,7 @@ export async function loadAllData(uid: number, opts: LoadOpts = {}): Promise<All
   const [
     accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs,
     categories, transactions, deposits, recurring_realized, statement_payments, account_entries,
-    transfers, autoPrices, userPrices, price_history, benchmark_history, corporate_actions,
+    transfers, autoPrices, userPrices, price_history, benchmark_history, corporate_actions, company_events,
     globalSettings, userSettings,
   ] = await Promise.all([
     db.all("SELECT * FROM accounts WHERE user_id=? ORDER BY id", uid),
@@ -100,6 +100,20 @@ export async function loadAllData(uid: number, opts: LoadOpts = {}): Promise<All
           uid,
         )
       : Promise.resolve([]),
+    /* Faz 37 — şirket takvimi (bilanço tarihleri). corporate_actions ile aynı iki kural:
+       global tablo ama yalnız KULLANICININ sembolleri anlamlı, ve `gecmis` kapısının
+       arkasında — tek okuyanı takvim sekmesi, asistanın okuma araçları için boşuna çekilmesin.
+       Satır sayısı küçüktür (sembol başına bir) ama kapı tutarlı kalsın: "arayüz mü istiyor,
+       asistan mı" ayrımı tek yerden okunabilmeli. */
+    gecmis
+      ? db.all<CompanyEvent>(
+          `SELECT ce.* FROM company_events ce
+            WHERE EXISTS (SELECT 1 FROM trades t
+                           WHERE t.user_id=? AND t.symbol=ce.symbol AND t.asset_type=ce.asset_type)
+            ORDER BY ce.date`,
+          uid,
+        )
+      : Promise.resolve([]),
     db.all<{ key: string; value: string }>("SELECT key, value FROM settings"),
     db.all<{ key: string; value: string }>("SELECT key, value FROM user_settings WHERE user_id=?", uid),
   ]);
@@ -109,7 +123,7 @@ export async function loadAllData(uid: number, opts: LoadOpts = {}): Promise<All
   return {
     accounts, recurring, recurring_amounts, loans, oneoffs, trades, portfolios, cards, card_txs,
     categories, transactions, deposits, recurring_realized, statement_payments, account_entries, transfers,
-    prices: [...pm.values()], price_history, benchmark_history, corporate_actions,
+    prices: [...pm.values()], price_history, benchmark_history, corporate_actions, company_events,
     // global (fx/tefas) + kullanıcı ayarları (horizon/cash_funds); kullanıcı çakışmada kazanır
     settings: Object.fromEntries([...globalSettings, ...userSettings].map((s) => [s.key, s.value])),
     /* SUNUCUNUN "şimdi"si — fiyat yaşı ("12 dk önce çekildi") bunun `prices.updated_at` ile

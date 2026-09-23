@@ -10,7 +10,7 @@ import {
 } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, tl, fmtPay, fmtMoney, TYPE_COLORS } from "../../theme";
-import { Money, Empty, Aciklama } from "../../ui";
+import { Money, Empty, Aciklama, useSayfalama, DahaFazla } from "../../ui";
 import type { TradePrefill } from "../../AddSheet";
 
 const SETUP_DISMISS_KEY = "finans-setup-dismissed";
@@ -134,6 +134,12 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAcc
   }), [data]);
   const olayKey = (o: KurumsalOneri) => `ca:${o.kind}:${o.asset_type}:${o.symbol}:${o.date}`;
   const gorunenOlaylar = olaylar.filter((o) => !dismissed.includes(olayKey(o)));
+  /* Kart UZUNLUĞU sınırlanır: kaynak (`corporate_actions`) zamanla büyüyen bir dizi ve
+     kaçırılan kayıtlar birikiyor — gerçek veride 9 kayıtsız temettü çıkmıştı, yani kart
+     mobilde ~1000px'e uzuyor ve Özet'in kendisini aşağı itiyordu. Dilim 3, çünkü bu bir liste
+     ekranı değil bir UYARI: amacı "eksik var, şuradan başla" demek. `useSayfalama` + `DahaFazla`
+     ev kuralı (kaç kaydın gizlendiği HER ZAMAN yazılır); 3'ün altında denetim hiç çizilmez. */
+  const sOlay = useSayfalama(gorunenOlaylar, 3, dismissed.length);
   const dismiss = (key: string) => {
     const next = [...dismissed, key];
     setDismissed(next);
@@ -170,56 +176,98 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAcc
 
     {/* Kaçırılan kurumsal olaylar — kurulum kartının ÜSTÜNDE, çünkü bu bir öneri değil
         DÜZELTMEdir: kaydedilmezse portföyün adedi eksik kalır ve K/Z yanlış okunur.
-        Kurulum kartı "şu özelliği de kurabilirsin" der; bu "defterinde eksik var" der. */}
+        Kurulum kartı "şu özelliği de kurabilirsin" der; bu "defterinde eksik var" der.
+
+        DÜZEN (Faz 37'de elden geçti — ilk hâli dağınıktı ve kullanıcı "hiç şık durmamış"
+        dedi). Ölçülen kusurlar ve karşılıkları:
+        · Başlık 390px'te tam satırı yiyordu (41 karakter, BÜYÜK HARF + harf aralığı) → kısaldı,
+          sayı ayrı bir rozete çıktı.
+        · İki olay arasında hiçbir ayırıcı yoktu; "Bedelsizi kaydet" düğmesinin hangi olaya ait
+          olduğu görünmüyordu → her olay kendi bloğu, aralarında çizgi.
+        · Tarih HAM ISO idi ("2026-08-29") — uygulamanın başka hiçbir yerinde öyle yazmıyor.
+        · Her satır kendi içinde "Kaydetmezsen portföyün eksik görünür" ve "(stopaj düşülmemiş)"
+          diyordu; iki olayda aynı cümle iki kez okunuyor ve satırı üç sıraya sarıyordu → ikisi
+          de KART DİBİNE, bir kez yazılan nota indi (brüt notu yalnız temettü varsa çıkar).
+        · Kart kenarlığı + başlık + iki düğme hep marka moruydu; mor "sıradaki eylem" için
+          ayrılmıştır (Faz 24 kural 2) → tek birincil eylem ("Kaydet") mor kaldı, tür rozeti
+          kendi rengini aldı, ikincil eylem sade ghost. */}
     {gorunenOlaylar.length > 0 && (
-      <div style={{ ...css.card, padding: 14, display: "flex", flexDirection: "column", gap: 10, borderColor: T.acc }}>
-        <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: T.acc }}>
-          Defterinde eksik görünen kurumsal olaylar
+      <div style={{ ...css.card, padding: 14, borderColor: T.acc }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+          <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: T.acc }}>
+            Defterinde eksik kayıt
+          </span>
+          <span style={{
+            ...css.mono, fontSize: 11, fontWeight: 700, color: T.acc, background: T.accSoft,
+            borderRadius: 20, padding: "1px 7px", lineHeight: 1.6,
+          }}>{gorunenOlaylar.length}</span>
         </div>
-        {gorunenOlaylar.map((o) => (
-          <div key={olayKey(o)} className="ui-row" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: 0, borderBottom: "none" }}>
-            <div className="row-title" style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 600 }}>
-                <span style={css.mono}>{o.symbol}</span>{" · "}
-                {o.kind === "bedelsiz"
-                  ? `%${Math.round((o.ratio - 1) * 100)} bedelsiz`
-                  : `temettü ${fmtMoney(o.perShare, o.currency, true)}/adet`}
-                <span style={{ fontWeight: 500, color: T.mut3 }}>{" · "}{o.date}</span>
+        {sOlay.gorunen.map((o, i) => {
+          const bedelsiz = o.kind === "bedelsiz";
+          /* Tür rozeti kendi rengini taşır: temettü para GİRİŞİdir (yeşil), bedelsiz adet
+             değişimidir (mavi). Marka moru burada kullanılmaz. */
+          const renk = bedelsiz ? "var(--cat-1)" : T.pos;
+          return (
+            <div key={olayKey(o)} className="ui-row" style={{
+              display: "flex", alignItems: "center", columnGap: 8, rowGap: 3, flexWrap: "wrap",
+              padding: "9px 0 0", borderBottom: "none",
+              ...(i > 0 ? { borderTop: `1px solid ${T.line}`, marginTop: 10 } : {}),
+            }}>
+              <span className="row-lead" style={{
+                fontSize: 10, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase",
+                color: renk, border: `1px solid ${renk}`, borderRadius: 6, padding: "2px 7px", flexShrink: 0,
+              }}>{bedelsiz ? "bedelsiz" : "temettü"}</span>
+              <span className="row-title" style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "baseline", gap: 7 }}>
+                <span style={{ ...css.mono, fontSize: 13.5, fontWeight: 700 }}>{o.symbol}</span>
+                <span style={{ fontSize: 11.5, color: T.mut3, whiteSpace: "nowrap" }}>
+                  {fmtD(parseD(o.date), { day: "numeric", month: "short", year: "numeric" })}
+                </span>
+              </span>
+              <button className="row-end" title="Bu olayı bir daha gösterme" onClick={() => dismiss(olayKey(o))}
+                style={{ background: "none", border: "none", color: T.mut3, cursor: "pointer", fontSize: 15, lineHeight: 1, padding: "4px 2px", minHeight: 0 }}>×</button>
+              <span className="row-break" aria-hidden="true" />
+              {/* Açıklama TEK satır ve kendi sırasında (flexBasis:100%): düğmelerle aynı sıraya
+                  girseydi 390px'te ikisi de kırpılırdı. */}
+              <div style={{ flexBasis: "100%", fontSize: 12, color: T.mut, lineHeight: 1.5 }}>
+                {bedelsiz
+                  ? <><b>{fmtAdet(o.qtyBefore)}</b> adet → <b>+{fmtAdet(o.qty)}</b> adet eklenmeli</>
+                  : <><b>{fmtAdet(o.qty)}</b> adet × {fmtMoney(o.perShare, o.currency, true)} = <b>{fmtMoney(o.amount, o.currency, true)}</b> brüt</>}
+                {!bedelsiz && o.reinvest && (
+                  <span style={{ display: "block", color: T.mut3 }}>
+                    geri yatırım: <b>{fmtAdet(o.reinvest.qty)}</b> adet @ {fmtMoney(o.reinvest.price, o.currency, true)}
+                  </span>
+                )}
               </div>
-              <div style={{ fontSize: 11.5, color: T.mut, marginTop: 1, lineHeight: 1.45 }}>
-                {o.kind === "bedelsiz"
-                  ? <>O tarihte <b>{fmtAdet(o.qtyBefore)}</b> adedin vardı → <b>{fmtAdet(o.qty)}</b> adet daha eklenmeli. Kaydetmezsen portföyün eksik görünür.</>
-                  : <>
-                    <b>{fmtAdet(o.qty)}</b> adet üzerinden <b>{fmtMoney(o.amount, o.currency, true)}</b> brüt
-                    <span title="Yahoo brüt tutarı verir; hesabına stopaj düşülmüş NET tutar girer. Formdaki rakamı ekstrendeki tutarla düzelt.">
-                      {" "}(stopaj düşülmemiş)
-                    </span>
-                    {o.reinvest && <> · geri yatırım: <b>{fmtAdet(o.reinvest.qty)}</b> adet @ {fmtMoney(o.reinvest.price, o.currency, true)}</>}
-                  </>}
+              <div style={{ flexBasis: "100%", display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap", marginTop: 2 }}>
+                {!bedelsiz && o.reinvest && (
+                  <button style={{ ...css.ghost, padding: "6px 12px", fontSize: 12 }}
+                    title="Temettü tutarıyla aynı hisseden alış kaydı aç (önce temettüyü kaydet)"
+                    onClick={() => onKurumsalOlay({
+                      asset_type: o.asset_type, symbol: o.symbol, side: "ALIŞ",
+                      qty: o.reinvest!.qty, price: o.reinvest!.price, date: o.date,
+                    })}>Geri yatır</button>
+                )}
+                <button style={{ ...css.ghost, padding: "6px 12px", fontSize: 12, color: T.acc, borderColor: T.acc }}
+                  onClick={() => onKurumsalOlay(bedelsiz
+                    ? { asset_type: o.asset_type, symbol: o.symbol, side: "BEDELSİZ", qty: o.qty, price: 0, date: o.date }
+                    /* Temettüde `price` = HİSSE BAŞINA tutar (formun kendi temsili), `qty` = adet.
+                       Tutar alanı ikisinin çarpımıdır; brüt geldiği için kullanıcı düzeltebilsin
+                       diye form adet modunda açılır. */
+                    : { asset_type: o.asset_type, symbol: o.symbol, side: "TEMETTÜ", qty: o.qty, price: o.perShare, date: o.date })}>
+                  Kaydet
+                </button>
               </div>
             </div>
-            <button className="row-end" title="Bu olayı bir daha gösterme" onClick={() => dismiss(olayKey(o))}
-              style={{ background: "none", border: "none", color: T.mut3, cursor: "pointer", fontSize: 15, lineHeight: 1, padding: "4px 2px", minHeight: 0 }}>×</button>
-            <span className="row-break" aria-hidden="true" />
-            <button style={{ ...css.ghost, padding: "7px 13px", fontSize: 12.5, color: T.acc, borderColor: T.acc }}
-              onClick={() => onKurumsalOlay(o.kind === "bedelsiz"
-                ? { asset_type: o.asset_type, symbol: o.symbol, side: "BEDELSİZ", qty: o.qty, price: 0, date: o.date }
-                /* Temettüde `price` = HİSSE BAŞINA tutar (formun kendi temsili), `qty` = adet.
-                   Tutar alanı ikisinin çarpımıdır; brüt geldiği için kullanıcı düzeltebilsin
-                   diye form adet modunda açılır. */
-                : { asset_type: o.asset_type, symbol: o.symbol, side: "TEMETTÜ", qty: o.qty, price: o.perShare, date: o.date })}>
-              {o.kind === "bedelsiz" ? "Bedelsizi kaydet" : "Temettüyü kaydet"}
-            </button>
-            {o.kind === "temettu" && o.reinvest && (
-              <button style={{ ...css.ghost, padding: "7px 13px", fontSize: 12.5 }}
-                title="Temettü tutarıyla aynı hisseden alış kaydı aç (önce temettüyü kaydet)"
-                onClick={() => onKurumsalOlay({
-                  asset_type: o.asset_type, symbol: o.symbol, side: "ALIŞ",
-                  qty: o.reinvest!.qty, price: o.reinvest!.price, date: o.date,
-                })}>Geri yatır</button>
-            )}
-          </div>
-        ))}
+          );
+        })}
+        <DahaFazla s={sOlay} ad="olay" yon="fazla" />
+        {/* Kart dibinde BİR KEZ: eskiden her satırda tekrarlanıyordu. Brüt notu yalnız listede
+            temettü varsa çıkar — bedelsizde stopaj diye bir şey yok, yazmak gürültü olurdu. */}
+        <div style={{ fontSize: 11, color: T.mut3, marginTop: 12, lineHeight: 1.5 }}>
+          Kaydetmezsen portföyünün adedi eksik kalır ve düşüş zarar gibi okunur.
+          {gorunenOlaylar.some((o) => o.kind === "temettu") &&
+            " Temettü tutarı brüttür (stopaj düşülmemiş) — hesabına giren net tutarı formda düzeltebilirsin."}
+        </div>
       </div>
     )}
 

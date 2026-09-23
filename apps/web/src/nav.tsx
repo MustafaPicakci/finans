@@ -8,7 +8,7 @@ export type TabKey = "ozet" | "nakit" | "plan" | "kart" | "portfoy" | "kayitlar"
 
 export const NAV: { key: TabKey; label: string; short: string; title: string; sub: string }[] = [
   { key: "ozet", label: "Özet", short: "Özet", title: "Özet", sub: "genel finansal durumun" },
-  { key: "nakit", label: "Nakit Akışı", short: "Nakit", title: "Nakit Akışı", sub: "günlük nakit projeksiyonu" },
+  { key: "nakit", label: "Nakit Akışı", short: "Nakit", title: "Nakit Akışı", sub: "günlük nakit projeksiyonu & piyasa tarihleri" },
   { key: "plan", label: "Plan", short: "Plan", title: "Plan", sub: "düzenli & tek seferlik kalemler" },
   { key: "kart", label: "Kartlar", short: "Kart", title: "Kartlar", sub: "kredi kartı borç takibi" },
   { key: "portfoy", label: "Portföy", short: "Portföy", title: "Portföy", sub: "çok varlıklı yatırım pozisyonların" },
