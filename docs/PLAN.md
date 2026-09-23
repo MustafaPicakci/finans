@@ -154,7 +154,45 @@ Playwright ile (JS render edilen) playground sayfası incelenerek API şeması �
 - Yeni `AssetType`: `ETF` (VOO, QQQ, VTI...) — Yahoo Finance'ten doğrudan (ek son ek gerekmez), USD→TRY çevrimi KRIPTO ile aynı desende.
 - `trades.asset_type` CHECK kısıtı SQLite'ta ALTER edilemediğinden tablo güvenli şekilde yeniden oluşturuldu (id'ler + AUTOINCREMENT sırası korunarak); gerçek veride doğrulandı.
 
-### Doğrulama
+### Faz 38 — Gerçek adresler + açılış parlaması ✅
+
+İki şikâyet, iki ayrı sebep; ikisi de "uygulama her yenilemede kendini sıfırlıyor" hissini veriyordu.
+
+**1. Yenileme Özet'e atıyordu — çünkü hiç router yoktu.** Aktif sekme `useState<TabKey>("ozet")`
+ile yalnız bellekte duruyordu; projede `pushState` kullanan tek iki satır, paylaşım metnini ve
+e-posta token'ını URL'den **temizleyen** satırlardı. Bedeli üç katmanlıydı: yenileme kullanıcıyı
+Özet'e atıyor, tarayıcının geri tuşu sekmeler arasında hiçbir şey yapmıyor, açık ekranın linki
+paylaşılamıyordu.
+
+Çözüm [route.ts](../apps/web/src/route.ts): yol tek gerçek kaynak, `tab` onun türevi. **Hash değil
+gerçek path** seçildi — sunucu tarafında zaten hazırdı (`app.get("*", serveApp)` ve servis
+çalışanının navigasyon yedeği bilinmeyen yolu index.html ile karşılıyor), yani tek satır sunucu
+değişikliği gerekmedi. **Özet'in adresi "/" — "/ozet" değil**: manifest'teki `start_url` ve paylaşım
+hedefinin `action`'ı orası, Özet'i taşımak kurulu PWA'yı her açılışta bir yönlendirmeye sokardı;
+aynı sebeple "/app" (landing'in "Uygulamayı aç" düğmesi) de Özet'e düşer. Sorgu dizesi yol
+değişiminde **bilerek taşınmaz**: uygulamaya sorguyla gelinen iki yol da tek kullanımlıktır
+(`?ekle=` paylaşılan SMS, `?reset=`/`?verify=` e-posta bağlantısı) ve taşınsaydı geri tuşu aynı
+SMS'i ikinci kez gönderirdi — paylaşım akışı bu yüzden `replace` ile gider. Aynı sekmeye ikinci
+kez tıklamak da `push` değil `replace`'tir, yoksa geri tuşu hiçbir yere gitmeyen kopya kayıtlara
+takılırdı (ölçüldü: aynı sekmeye 3 kez tıklamada `history.length` sabit kaldı).
+
+**2. Yenilemede "gelip giden ekran" — iki ayrı parlama, ikisi de `useEffect`'in geç kalmasından.**
+index.html'deki tanıtım bloğunun yanında "React ilk çizimde temizler, kullanıcı bunu hiç görmez"
+yazıyordu ve **yanlıştı**: `<script type="module">` defer'lidir, yani tarayıcı HTML'i boyar, sonra
+880 KB'lik paketi indirir — o pencere boyunca ekranda duran şey tanıtım sayfasıydı. İkincisi tema:
+`data-theme` App.tsx'in bir effect'inde set ediliyordu, yani koyu temadaki kullanıcı her yenilemede
+önce beyaz bir kare görüyordu (ve depoda tercihi olmayıp sistemi koyu olan kullanıcı tersini).
+
+Çözüm [public/boot.js](../apps/web/public/boot.js): paketten önce koşan, temayı `localStorage`'dan
+okuyup `data-theme` + `theme-color` yazan ve `<html>`'e `js` sınıfı ekleyen küçük bir betik; sınıf
+tanıtım bloğunu gizleyip yerine `Yükleniyor…` göstergesini açıyor (renkler themeCSS'in
+`--ground`/`--ink-2` değerleri — açılış iki farklı ekran değil tek bir hâl gibi görünsün).
+**Satır içi script DEĞİL, ayrı dosya, çünkü sunucu `script-src 'self'` CSP'si gönderiyor**: satır
+içi betik dev'de çalışır, prod'da sessizce engellenirdi — en kötü cinsten bir hata. Faz 28'in
+gerekçesi bozulmadı: betiği çalıştırmayan istemcide (Google'ın OAuth marka doğrulaması, önizleme
+botları) sınıf hiç eklenmez, tanıtım metni yerinde kalır — doğrulandı.
+
+## Doğrulama
 `pnpm build` temiz, 57 engine testi yeşil. Kota sıfırlandıktan sonra `returns-by-date` tasarımı gerçek veride **tam** doğrulandı:
 - **Tek istekte 3489 fon fiyatı** toplandı (`prices` + aynı gün `price_history`'de tam senkron) — tahmin edilenin (~150-160) çok üzerinde, TEFAS'ta pay sınıfı/alt kategori dahil gerçekten binlerce fon var.
 - **Tutulan 6 fonun hepsi geldi**: MAC/AFA/KHA (daha önce de gelmişti) + **TP2/PHE/TLY (daha önce hiç gelmeyen 3 fon, artık geliyor)**.
@@ -867,7 +905,7 @@ denetlenemezdi.
 
 ## Sıralama
 
-Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Faz 0–37 tamamlandı (Faz 5 yayına, 10–13 ürün derinleşmesine, 21+ asistan ve portföy derinleşmesine kadar); yukarıdaki nota bakın — 22-33'ün günlüğü burada değil, CLAUDE.md/README'de.
+Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Faz 0–38 tamamlandı (Faz 5 yayına, 10–13 ürün derinleşmesine, 21+ asistan ve portföy derinleşmesine kadar); yukarıdaki nota bakın — 22-33'ün günlüğü burada değil, CLAUDE.md/README'de.
 
 **Sıradaki iş — numaralı faz değil, açık kalan kalemler (öncelik sırasıyla):**
 1. **E-posta teslim edilebilirliği** (prod engelleyici, bkz. Faz 10) — Resend/Brevo + kendi domain + SPF/DKIM/DMARC; sadece env değişikliği. Bu bitmeden çok-kullanıcı kâğıt üzerinde kalır.

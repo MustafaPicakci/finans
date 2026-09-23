@@ -3,7 +3,8 @@ import { project, positions, cardInfos, stmtKey, loanRemaining, portfolioValueTr
 import { api, ApiError, type SessionUser } from "./api";
 import { T, css, fmtMoney, fiyatYasi, FIYAT_YASI_IPUCU, themeCSS, THEME_KEY, CCY_KEY, type ThemeMode } from "./theme";
 import { Center } from "./ui";
-import { NAV, NavIcon, PROFIL_META, TANIMLAR_META, type TabKey } from "./nav";
+import { NAV, NavIcon, PROFIL_META, TANIMLAR_META } from "./nav";
+import { useTabRoute } from "./route";
 import { useBalancesHidden, toggleBalancesHidden } from "./privacy";
 import { Auth, type UrlAuth } from "./features/auth";
 import { Ozet } from "./features/ozet";
@@ -22,7 +23,9 @@ import { AddSheet, type AddState, type KalemPrefill, type TradePrefill } from ".
 export default function App() {
   const [data, setData] = useState<Awaited<ReturnType<typeof api.all>> | null>(null);
   const [err, setErr] = useState("");
-  const [tab, setTab] = useState<TabKey>("ozet");
+  /* Sekme adres çubuğundan gelir (route.ts): yenileme aynı ekranda kalsın, geri tuşu
+     çalışsın, açık ekranın linki paylaşılabilsin. */
+  const [tab, setTab] = useTabRoute();
   const [refreshing, setRefreshing] = useState(false);
   const balancesHidden = useBalancesHidden(); // gizlilik modu: açıkken tüm tutarlar maskelenir
   const [theme, setTheme] = useState<ThemeMode>(() => (localStorage.getItem(THEME_KEY) as ThemeMode) || "light");
@@ -66,9 +69,9 @@ export default function App() {
   }, [reload]);
   useEffect(() => {
     if (!shared) return;
-    setTab("asistan");
-    window.history.replaceState({}, "", window.location.pathname); // metin tüketildi; yenilemede tekrarlanmasın
-  }, [shared]);
+    // `replace`: metin tüketildi — ne yenilemede ne de geri tuşuyla ikinci kez gönderilsin
+    setTab("asistan", true);
+  }, [shared, setTab]);
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem(THEME_KEY, theme);

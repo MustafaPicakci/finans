@@ -13,15 +13,35 @@
     <meta name="apple-mobile-web-app-title" content="Finans" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-    <style>body{margin:0;background:#F4F3F0}</style>
+    <style>
+      /* Renkler themeCSS'in --ground değerleri (apps/web/src/theme.ts); data-theme'i
+         paketten ÖNCE boot.js koyar, yoksa koyu temada her yenileme beyaz parlardı. */
+      html { background: #F4F3F0 }
+      html[data-theme="dark"] { background: #0D0D11 }
+      body { margin: 0; background: inherit }
+      /* Tanıtım bloğu ↔ yükleme göstergesi: hangisinin görüneceğine boot.js karar verir
+         (JS yoksa tanıtım kalır). Gösterge React'in <Center>Yükleniyor…</Center> ekranına
+         benzesin diye aynı --ground/--ink-2 renklerini kullanır — açılış tek bir hâl
+         gibi görünsün, iki farklı ekran gibi değil. */
+      html.js #seo { display: none }
+      #boot { display: none }
+      html.js #boot { min-height: 100dvh; display: grid; place-items: center; color: #68666E; font: 500 15px "Schibsted Grotesk", system-ui, sans-serif }
+      html[data-theme="dark"] #boot { color: #9B99A6 }
+    </style>
+    <script src="/boot.js"></script>
   </head>
   <body>
-    <!-- Faz 28 — JavaScript'siz çekilen HTML'de de uygulamanın ne olduğu görünsün.
-         React `createRoot().render()` ilk çizimde bu içeriği temizler, yani kullanıcı bunu
-         hiç görmez; ama sayfayı JS çalıştırmadan indiren bir istemci (Google'ın OAuth marka
-         doğrulaması, önizleme botları) boş bir kabuk yerine açıklamayı bulur. -->
+    <!-- Faz 28 — JavaScript'siz çekilen HTML'de de uygulamanın ne olduğu görünsün:
+         sayfayı JS çalıştırmadan indiren bir istemci (Google'ın OAuth marka doğrulaması,
+         önizleme botları) boş bir kabuk yerine açıklamayı bulur.
+         Buradaki eski not "React ilk çizimde temizler, kullanıcı bunu hiç görmez" diyordu
+         ve YANLIŞTI: modül script'i defer'lidir, yani bu blok boyanır ve ~880 KB'lik paket
+         inene kadar ekranda kalır — yenilemedeki "gelip giden ekran" oydu. Artık boot.js'in
+         eklediği `js` sınıfı onu gizliyor (bkz. yukarıdaki <style> ve public/boot.js);
+         JS çalıştırmayan istemcide sınıf hiç eklenmez, blok yerinde durur. -->
     <div id="root">
-      <main style="max-width:640px;margin:0 auto;padding:40px 20px;font-family:system-ui,sans-serif;line-height:1.65;color:#0D1322">
+      <div id="boot">Yükleniyor…</div>
+      <main id="seo" style="max-width:640px;margin:0 auto;padding:40px 20px;font-family:system-ui,sans-serif;line-height:1.65;color:#0D1322">
         <h1 style="font-size:22px;margin:0 0 10px">₺ finans — Kişisel Finans Paneli</h1>
         <p style="margin:0 0 12px">
           Nakit hesaplarını, gelir ve giderlerini, kredi taksitlerini, kredi kartı ekstrelerini
