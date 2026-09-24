@@ -1015,10 +1015,24 @@ Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Faz 0–4
    gerekmiyor — posta Google'ın MTA'sından çıktığı için hizalı gidiyor. Bu madde 2026-09-24'e
    kadar "prod engelleyici" olarak duruyordu, oysa iş bitmişti.
 2. **Deploy disiplini** — Render'da autoDeploy kapalı; her commit sonrası Manual Deploy unutulmamalı (ya da Blueprint'e geçilip otomatikleştirilmeli). **Sürüm doğrulama**: yerelde `pnpm build` koşup `apps/web/dist/index.html`'deki `index-<hash>.js` ile `curl -s <url>/app | grep -o 'index-[^"]*\.js'` karşılaştırılır — hash içerikten türer, yani "hangi commit canlıda" sorusuna tek doğru cevabı o verir. `/`'ye bakmak yanıltır (anonim ziyaretçiye landing döner), HTTP koduna bakmak da yanıltır (SPA catch-all'ı olmayan dosyaya da 200 der).
-3. Sonraki ürün fikirleri (henüz seçilmedi): gün içi fiyat geçmişi, ABD borsası için vergi/beyan raporu (tartışıldı,
-   kullanıcı kararıyla beklemede: tarihsel TCMB kuru + FIFO/ortalama eşleştirme + Yİ-ÜFE
-   endekslemesi gerektirir), GitHub Actions CI/CD (**istenmiyor** — push sonrası elle deploy akışı
-   kullanıcının tercihi).
+3. Sonraki ürün fikirleri (henüz seçilmedi): gün içi fiyat geçmişi.
 4. **Makro takvimin yıllık bakımı** (Faz 37): TCMB 2027'nin yalnız ilk yarısını duyurdu, Fed 2027'nin
    tamamını. İkisi yeni takvimi açıklayınca [makro.ts](../packages/engine/src/makro.ts) güncellenmeli —
    ekran son 90 güne girince kendisi uyarır.
+
+**Kapsam dışı — kullanıcı kararıyla kapanmış işler.** Burada durmalarının sebebi unutulmaları
+değil, aksine: bir daha gündeme getirilmesinler diye yazılılar. Kullanıcı kendisi açmadıkça
+teklif edilmezler.
+
+- **ABD borsası vergi/beyan raporu** (2026-09-24'te kapsam dışına alındı). Tasarımı konuşulmuştu:
+  tarihsel **TCMB alış kuru** için yeni bir global tablo (Yahoo spot kuru vergi için geçerli
+  değil ve `benchmark_history` yalnız ~2 yıl geriye gidiyor), FIFO ⇄ ağırlıklı ortalama eşleştirme
+  seçimi (motor ortalama maliyet kullanıyor, vergi sonucu yönteme göre değişir), Yİ-ÜFE
+  endekslemesi için elle bakımlı aylık tablo, brüt temettü + ABD stopajı, yıl bazlı beyan çıktısı.
+  Asıl bulgu da kayıtta kalsın: **dolarda zarar ettiğin bir satış TL'de vergilendirilebilir kâr
+  olabilir** (kur farkı matrahın içindedir), yani panelin gösterdiği K/Z ile beyan rakamı aynı
+  sayı değil. **Birlikte düşen ön koşullar**: TCMB kur tablosu ve Yİ-ÜFE bakımı yalnız bu iş için
+  gerekiyordu, ikisi de gündemde değil.
+- **GitHub Actions CI/CD**: istenmiyor — push sonrası Render'dan elle deploy kullanıcının tercihi.
+- **Dış uptime monitörü**: istenmiyor (2026-09-21). Kendi ping'i uyanık tutar ama uyandıramaz;
+  soğuk başlangıç riski bilerek kabul edildi.
