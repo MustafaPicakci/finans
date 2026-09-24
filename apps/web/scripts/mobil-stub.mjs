@@ -37,6 +37,10 @@ const card_txs = [
   { id: 1, card_id: 1, date: d(-12), name: "Teknoloji mağazası", amount: 18400, installments: 6, category_id: null },
   { id: 2, card_id: 1, date: d(-5), name: "Market alışverişi", amount: 1240.5, installments: 1, category_id: 1 },
   { id: 3, card_id: 2, date: d(-20), name: "Uçak bileti", amount: 7850, installments: 3, category_id: 2 },
+  /* Faz 41.2 — BANKA METNİ GİBİ: büyük harf, Türkçe karaktersiz. Hesap işlemlerinde "Migros
+     market alışverişi" (kategorili) var; katlama olmadan bu satır AYRI bir ad sayılıyor ve
+     hiçbir öneri almıyordu. Fikstürün işi tam olarak o eşleşmeyi denetlenebilir kılmak. */
+  { id: 4, card_id: 1, date: d(-3), name: "MIGROS MARKET ALISVERISI", amount: 980, installments: 1, category_id: null },
 ];
 const trades = [
   { id: 1, date: d(-120), asset_type: "BIST", symbol: "ASELS", side: "ALIŞ", qty: 200, price: 62.4, fee: 12, currency: "TRY", account_id: 4, portfolio_id: 1 },

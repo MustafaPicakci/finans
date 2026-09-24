@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { tumKayitlar, kayitAra, kayitSuz, kayitlariAyaGoreGrupla } from "./kayitlar.js";
+import { tumKayitlar, kayitAra, kayitSuz, kayitlariAyaGoreGrupla, metinSadelestir } from "./kayitlar.js";
 import type { AllData } from "./types.js";
 
 /** Yalnız bu modülün okuduğu alanlar doldurulur; gerisi boş (AllData geniş, testi o boğmasın). */
@@ -16,6 +16,19 @@ const veri = (over: Partial<AllData> = {}): AllData => ({
   account_entries: [], settings: {},
   ...over,
 } as unknown as AllData);
+
+describe("metinSadelestir (arayüzün 'aynı ad' anahtarı da bunu kullanır)", () => {
+  it("büyük I tuzağını kapatır: MIGROS ile Migros aynı anahtara iner", () => {
+    expect(metinSadelestir("MIGROS")).toBe(metinSadelestir("Migros"));
+    // toLocaleLowerCase("tr") TEK BAŞINA yetmez: I → ı olur, i ile eşleşmez
+    expect("MIGROS".toLocaleLowerCase("tr")).not.toBe("Migros".toLocaleLowerCase("tr"));
+  });
+
+  it("Türkçe karakterleri ASCII'ye katlar (şarj/sarj, öğretmen/ogretmen)", () => {
+    expect(metinSadelestir("ŞARJ")).toBe(metinSadelestir("sarj"));
+    expect(metinSadelestir("Öğretmen")).toBe(metinSadelestir("ogretmen"));
+  });
+});
 
 describe("tumKayitlar", () => {
   it("dört kaynağı tek listede birleştirir ve en yeniyi öne alır", () => {

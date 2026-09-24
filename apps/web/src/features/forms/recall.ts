@@ -1,4 +1,4 @@
-import { qtyDelta, type AllData, type AssetType, type Currency, type Trade } from "@finans/engine";
+import { metinSadelestir, qtyDelta, type AllData, type AssetType, type Currency, type Trade } from "@finans/engine";
 
 /* ————— AKILLI HATIRLAMA —————
    Formlar geçmiş kayıtlardan öğrenir: aynı adı ikinci kez girerken tutar/kategori/hesap
@@ -7,7 +7,11 @@ import { qtyDelta, type AllData, type AssetType, type Currency, type Trade } fro
    iki kat sayılır, böylece "eskiden çok girdiğim ama artık girmediğim" kalemler öne çıkmaz. */
 
 /** Ad eşleştirmesi büyük/küçük harf ve boşluk duyarsızdır ("migros" == "Migros ") */
-export const normName = (s: string) => s.trim().toLocaleLowerCase("tr").replace(/\s+/g, " ");
+/** "Aynı ad" anahtarı: Türkçe katlama (engine ile TEK kopya — bkz. metinSadelestir) + boşluk
+    sadeleştirme. Katlama olmadan "MIGROS" ile "Migros" ayrı adlardı: ekstre içe aktarma
+    kategoriyi tahmin edemiyor, toplu kategorileme aynı marketi iki satır gösteriyor ve biri
+    diğerine öneri vermiyordu. */
+export const normName = (s: string) => metinSadelestir(s).trim().replace(/\s+/g, " ");
 
 const RECENT_DAYS = 90;
 const daysAgo = (n: number) => {

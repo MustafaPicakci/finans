@@ -314,8 +314,35 @@ bedeli orada değil: **"çözünürlük gündür" belgelenmiş bir değişmez** 
 seri delik deşik olurdu. Madde kuyruktan düşürülmedi ama sıraya alınmadı; bu fazın işi ölçülebilir
 biçimde daha değerliydi.
 
-Doğrulama: `pnpm build` temiz, 323 engine + 29 sunucu testi yeşil (engine'e dokunulmadı; yeni
-mantık tamamen arayüzde ve `apps/web`'de test yok). Mobil 390px'te modal iki hâliyle çekildi —
+**Faz 41.1 — push öncesi gözden geçirme.** Dört commit prod'a çıkmadan gözden geçirildi ve en
+ağır bulgu şuydu: **Faz 39 engine'in sözleşmesini değiştirdi ama AI katmanı güncellenmedi.**
+`ai/read.ts`'teki `harcama_ozeti` kendi `SELECT`'ini kolon kolon yazıyordu ve `card_txs.category_id`
+o listeye hiç girmedi — asistan her kart harcamasını kategorisiz görüyor, aynı fonksiyonu
+`/api/all` (`SELECT *`) ile besleyen panel doğru rakamı veriyordu. "Asistanın söylediği ekranla
+tanım olarak aynıdır" güvencesi sessizce kırılmıştı; kolon listesi engine'in sözleşmesini İKİNCİ
+bir yerde tekrarlamaktı, `SELECT *`e geçildi (data.ts'in gerekçesinin aynısı). Aynı kökten iki
+metin de yanlıştı: aracın açıklaması "kart harcamasının kategorisi YOKTUR" diyerek modeli
+`grup='kategori'`den caydırıyordu ve systemPrompt o kısıtı KOŞULSUZ sayıyordu — oysa engine artık
+o uyarıyı yalnız kategorisiz kayıt varsa üretiyor.
+Arayüzde dört düzeltme: "aya göre" kırılım en ESKİ 8 ayı gösteriyordu (engine kronolojik döndürür,
+dilim baştan alınıyordu) ve "daha eski" etiketiyle daha YENİ ayları açıyordu; paylaşılan arama
+kutusu iki yarıyı farklı süzüyordu (alttaki liste hesap adını da tarıyor, `harcamaOzeti`
+taramıyordu → engine'e dar tipli opsiyonel `accounts`); toplu kategorilemede döngü ortasında hata
+yazılmış kayıtları bırakıp `reload()`'u atlıyordu (artık `finally`); öneri havuzu yalnız ADA göre
+anahtarlıydı, gruplar `yön+ad` (bir gelir grubuna gider kategorisi önerilip seçici boş kalabiliyordu).
+
+**Faz 41.2 — "MIGROS" ile "Migros" aynı ad.** Gözden geçirmenin bulgu saymadığı ama not düştüğü
+kusur: `normName` yalnız `toLocaleLowerCase("tr")` yapıyordu, yani bu dosyanın en başında yazılı
+I/ı tuzağına takılıyordu. Banka kaynaklı kayıtlar (SMS, ekstre metni) BÜYÜK HARF gelir, elle
+girilenler karışık — aynı market iki grup oluyor ve biri diğerine kategori önermiyordu. Katlama
+(`metinSadelestir`) engine'den dışa açıldı ve `normName` onu çağırıyor: kural tek kopya kaldı ve
+düzeltme üç yeri birden iyileştirdi (form önerileri, ekstre içe aktarmanın kategori tahmini +
+kopya bulması, toplu kategorileme). Stub'a banka metni gibi bir fikstür eklendi
+("MIGROS MARKET ALISVERISI") — 390px'te satırın artık "· önerildi" dediği ve seçicinin "Market"
+ile dolu geldiği çekimle doğrulandı.
+
+Doğrulama: `pnpm build` temiz, 326 engine (+3: hesap adıyla arama, I/ı katlaması, ASCII katlama)
++ 29 sunucu testi yeşil. Mobil 390px'te modal iki hâliyle çekildi —
 dolu liste ve atama SONRASI (satır düştü, sayaç "hepsi kategorilendi", panelin kategorisiz uyarısı
 ve düğme kayboldu). Bunun görülebilmesi için stub'ın `PUT /api/{cardtxs,transactions}/:id`
 yazmaları **gerçekten uygulanır** hâle getirildi — ayar yazmalarında öğrenilen dersin aynısı:

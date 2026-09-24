@@ -114,8 +114,16 @@ export function tumKayitlar(data: AllData): Kayit[] {
 const TR_KATLA: Record<string, string> = {
   ı: "i", i: "i", ş: "s", ğ: "g", ü: "u", ö: "o", ç: "c", â: "a", î: "i", û: "u",
 };
-const sadelestir = (s: string) =>
+/** Metni karşılaştırılabilir hâle getirir (Türkçe küçültme + ASCII katlama).
+    **Faz 41.2'de dışa açıldı**: arayüzün `normName`'i (formların "aynı ad" anahtarı, ekstre içe
+    aktarmanın kategori tahmini ve kopya bulması, toplu kategorilemenin gruplaması) yalnız
+    `toLocaleLowerCase("tr")` yapıyordu, yani **"MIGROS" ile "Migros" iki ayrı ad sayılıyordu** —
+    tam da bu dosyanın en başında yazılı I/ı tuzağı. Banka kaynaklı kayıtlar (SMS, ekstre metni)
+    BÜYÜK HARF gelir, elle girilenler karışık: aynı market iki grup oluyor ve biri diğerine
+    kategori önermiyordu. Katlamanın tek kopya kalması kuralı arayüz için de geçerli. */
+export const metinSadelestir = (s: string) =>
   s.toLocaleLowerCase("tr").replace(/[ıişğüöçâîû]/g, (ch) => TR_KATLA[ch] ?? ch);
+const sadelestir = metinSadelestir;
 
 /** Tek bir metnin sorguya uyup uymadığı. Birden çok kelime VE ile bağlanır ("market garanti"
     → ikisi de geçmeli), çünkü kullanıcı hatırladığı parçaları arka arkaya yazar; OR sonuçları
