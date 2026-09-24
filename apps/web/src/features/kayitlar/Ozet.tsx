@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import { harcamaOzeti, type AllData, type HarcamaGrup, type HarcamaTemeli } from "@finans/engine";
 import { T, css, fmtMoney } from "../../theme";
 import { FiltreSeridi, useSayfalama, DahaFazla } from "../../ui";
+import { KategorileModal, kategorisizGruplar } from "./Kategorile";
 
 /* ————— HARCAMA ÖZETİ (Faz 40) —————
    `harcamaOzeti` Faz 35'te yazıldı ama YALNIZ asistan çağırıyordu: "bu ay ne harcadım"ın cevabı
@@ -40,9 +41,10 @@ const fmtKalemAdi = (ad: string, grup: HarcamaGrup): string => {
 };
 
 export function HarcamaOzetiKarti(
-  { data, baslangic, sorgu, turSuzgeciAcik }:
-  { data: AllData; baslangic: string; sorgu: string; turSuzgeciAcik: boolean },
+  { data, reload, baslangic, sorgu, turSuzgeciAcik }:
+  { data: AllData; reload: () => void; baslangic: string; sorgu: string; turSuzgeciAcik: boolean },
 ) {
+  const [kategorile, setKategorile] = useState(false);
   const [temel, setTemel] = useState<HarcamaTemeli>("tuketim");
   const [grup, setGrup] = useState<Exclude<HarcamaGrup, "yok">>("kategori");
 
@@ -63,6 +65,12 @@ export function HarcamaOzetiKarti(
 
   /* Kırılım listesi kategori/kart sayısıyla sınırlı (monoton büyümez) ama "aya göre" + "Tümü"
      dönemi uzun bir liste üretebilir; dilim o yüzden var. Süzgeç değişince başa sarar. */
+  /* Düğmenin sayısı modalın listesiyle aynı fonksiyondan gelir (bkz. kategorisizGruplar). */
+  const kategorisiz = useMemo(
+    () => kategorisizGruplar(data, { baslangic, sorgu, ekstreTxIds }),
+    [data, baslangic, sorgu, ekstreTxIds],
+  );
+
   const s = useSayfalama(o.kalemler, 8, `${temel}|${grup}|${baslangic}|${sorgu}`);
   const enBuyuk = o.kalemler.reduce((m, k) => Math.max(m, k.gider), 0);
 
@@ -129,6 +137,19 @@ export function HarcamaOzetiKarti(
         {turSuzgeciAcik && <div>Tür süzgeci özete uygulanmaz: özet hesap işlemlerini ve kart harcamalarını kapsar (virman ve portföy kapsam dışı).</div>}
         {ekstreIdYok && <div>Ekstre ödemelerinin kaydı bu yanıtta yok (eski sürüm) — ödemeler toplamdan elenemedi.</div>}
       </div>
+
+      {/* Uyarı bir EYLEM istiyorsa eylemi de sunmalı: "kategorisiz kovada N TL var" deyip
+          düzeltmeyi kayıtları tek tek açmaya bırakmak, pratikte hiç yapılmayacak bir iş
+          bırakmaktı (Faz 41). Düğme yalnız kategorisiz kayıt varken çıkar. */}
+      {kategorisiz.length > 0 && (
+        <button style={{ ...css.btn, marginTop: 10 }} onClick={() => setKategorile(true)}>
+          Kategorile ({kategorisiz.length} ad)
+        </button>
+      )}
+      {kategorile && (
+        <KategorileModal data={data} reload={reload} onClose={() => setKategorile(false)}
+          baslangic={baslangic} sorgu={sorgu} ekstreTxIds={ekstreTxIds} />
+      )}
     </div>
   );
 }

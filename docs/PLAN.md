@@ -275,6 +275,54 @@ ay kırılımıyla ayrı ayrı çekildi, `scrollW: 390`, taşan öğe yok; stub'
 
 ---
 
+## Faz 41 — Kategorisiz kayıtların toplu kategorilenmesi ✅
+
+Faz 39 kolonu açtı, Faz 40 kırılımı ekrana getirdi — ama **gerçek veride ikisi de bir uyarıdan
+ibaretti**: geçmiş kart harcamalarının hepsi kategorisiz (kolon yokken girilememişti; geriye
+dönük tahmin bilerek yapılmadı) ve tek düzeltme yolu kayıtları TEK TEK açmaktı. Dokuz aylık kart
+harcaması için bu, pratikte hiç yapılmayacak bir iş demek. **Uyarı bir eylem istiyorsa eylemi de
+sunmalı** — yoksa dürüst ama işe yaramaz bir cümle olur.
+
+**Birim kayıt değil AD.** Aynı yere yapılan 14 "Migros" harcaması tek bir karardır; 14 kez
+sorulursa iş bitmez. Satırlar `normName` ile gruplanır (recall.ts'in aynı anahtarı — Türkçe
+küçültme + boşluk sadeleştirme; iki kopya olsa arayüzün "aynı ad" tanımı iki yerde ayrışırdı),
+seçim grubun tamamına yazılır ve liste **tutara göre** sıralanır: birkaç satır doldurup çıkan
+kullanıcı bile uyarıdaki rakamın çoğunu kapatır.
+
+Üç kural, üçü de bir hatayı önlüyor:
+- **Öneri var, otomatik yazma yok.** Aynı adla daha önce kategorilenmiş kayıt varsa seçici önden
+  dolu gelir (recall'un form davranışı), ama kullanıcı onaylamadan tek satır değişmez — Faz 36'nın
+  "öneri kayıt yazmaz" kuralı.
+- **Gruplama anahtarı `yön + ad`.** Aynı ad hem gelir hem gider olabilir ("Kira" ödenir ve tahsil
+  edilir) ve kategori listesi türe göre süzülüyor; tek grupta toplasaydık bir gider kategorisi
+  gelir kaydına yazılabilirdi.
+- **Ekstre ödemeleri listede yok.** Onlar harcama değil, kart borcunun kapanışı (tüketim
+  temelinde zaten eleniyorlar); kategori vermek aynı parayı ikinci kez anlamlandırırdı.
+
+Sayaç ile modalın listesi **aynı fonksiyondan** gelir (`kategorisizGruplar`) — iki kopya olsaydı
+düğme "3 ad" deyip modal 5 satır açabilirdi. `transactions` için PUT tam gövde ister ve bakiye
+etkisini geri alıp yeniden uygular; aynı değerlerle çağrıldığı için bakiye değişmez.
+
+**Kuyruğun sırası bu turda bilerek bozuldu.** Sıradaki madde "gün içi fiyat geçmişi"ydi ve
+ölçülünce kötü bir takas olduğu görüldü: `price_history` bugün 212.484 satır / 25 MB ve **günde
+3.514 satır** büyüyor (kullanıcının tuttuğu sembol sayısı 26 — büyümenin ~%99'u kimsenin tutmadığı
+TEFAS fonları, bu bilinçli bir sigorta çünkü TEFAS geriye doldurulamıyor). Gün içi veri bunun
+üstüne sembol başına ~32 nokta/gün ekler, `(symbol, asset_type, date)` anahtarını kırar ve asıl
+bedeli orada değil: **"çözünürlük gündür" belgelenmiş bir değişmez** ve `sliceValueHistory` /
+`bucketValueHistory` / `twrSeries` / `monthlyTwr` ona dayanıyor (Faz 13/27/32). Kazanç yalnız
+"bugünün eğrisi" — üstelik BIST fiyatı zaten ~15 dk gecikmeli ve Render ücretsiz katmanı uyuyunca
+seri delik deşik olurdu. Madde kuyruktan düşürülmedi ama sıraya alınmadı; bu fazın işi ölçülebilir
+biçimde daha değerliydi.
+
+Doğrulama: `pnpm build` temiz, 323 engine + 29 sunucu testi yeşil (engine'e dokunulmadı; yeni
+mantık tamamen arayüzde ve `apps/web`'de test yok). Mobil 390px'te modal iki hâliyle çekildi —
+dolu liste ve atama SONRASI (satır düştü, sayaç "hepsi kategorilendi", panelin kategorisiz uyarısı
+ve düğme kayboldu). Bunun görülebilmesi için stub'ın `PUT /api/{cardtxs,transactions}/:id`
+yazmaları **gerçekten uygulanır** hâle getirildi — ayar yazmalarında öğrenilen dersin aynısı:
+catch-all `{ok:true}` derse reload eski satırı geri getirir ve "sonrası" hiç denetlenemez.
+
+---
+
 ## Doğrulama
 `pnpm build` temiz, 57 engine testi yeşil. Kota sıfırlandıktan sonra `returns-by-date` tasarımı gerçek veride **tam** doğrulandı:
 - **Tek istekte 3489 fon fiyatı** toplandı (`prices` + aynı gün `price_history`'de tam senkron) — tahmin edilenin (~150-160) çok üzerinde, TEFAS'ta pay sınıfı/alt kategori dahil gerçekten binlerce fon var.
@@ -1006,7 +1054,7 @@ denetlenemezdi.
 
 ## Sıralama
 
-Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Faz 0–40 tamamlandı (Faz 5 yayına, 10–13 ürün derinleşmesine, 21+ asistan ve portföy derinleşmesine kadar); yukarıdaki nota bakın — 22-33'ün günlüğü burada değil, CLAUDE.md/README'de.
+Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Faz 0–41 tamamlandı (Faz 5 yayına, 10–13 ürün derinleşmesine, 21+ asistan ve portföy derinleşmesine kadar); yukarıdaki nota bakın — 22-33'ün günlüğü burada değil, CLAUDE.md/README'de.
 
 **Sıradaki iş — numaralı faz değil, açık kalan kalemler (öncelik sırasıyla):**
 1. ~~E-posta teslim edilebilirliği~~ — **çözüldü (Faz 28)**: gönderim yolu `MAIL_PROVIDER` ile
@@ -1015,7 +1063,14 @@ Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Faz 0–4
    gerekmiyor — posta Google'ın MTA'sından çıktığı için hizalı gidiyor. Bu madde 2026-09-24'e
    kadar "prod engelleyici" olarak duruyordu, oysa iş bitmişti.
 2. **Deploy disiplini** — Render'da autoDeploy kapalı; her commit sonrası Manual Deploy unutulmamalı (ya da Blueprint'e geçilip otomatikleştirilmeli). **Sürüm doğrulama**: yerelde `pnpm build` koşup `apps/web/dist/index.html`'deki `index-<hash>.js` ile `curl -s <url>/app | grep -o 'index-[^"]*\.js'` karşılaştırılır — hash içerikten türer, yani "hangi commit canlıda" sorusuna tek doğru cevabı o verir. `/`'ye bakmak yanıltır (anonim ziyaretçiye landing döner), HTTP koduna bakmak da yanıltır (SPA catch-all'ı olmayan dosyaya da 200 der).
-3. Sonraki ürün fikirleri (henüz seçilmedi): gün içi fiyat geçmişi.
+3. Sonraki ürün fikirleri (henüz seçilmedi): **gün içi fiyat geçmişi — ölçüldü, önerilmiyor**
+   (Faz 41'in sonundaki gerekçe: günlük çözünürlük belgelenmiş bir değişmez ve dört fonksiyon ona
+   dayanıyor, kazanç yalnız "bugünün eğrisi"). Kuyrukta başka seçilmiş bir ürün işi yok.
+   Ayrıca **`price_history`'nin büyümesi** izlenmeli: günde 3.514 satır, yılda ~150 MB ve %99'u
+   kimsenin tutmadığı TEFAS fonları. Bugün sorun değil (25 MB / Neon ücretsiz 0,5 GB ≈ 3 yıl) ve
+   `/api/all` zaten kullanıcının sembolleriyle sınırlı gönderiyor, yani kullanıcıya yansımıyor —
+   ama bir gün saklama kuralı gerekecek. **Kural silme demektir, yani kullanıcı onayı ister**;
+   tutulan sembollerin geçmişi asla silinmemeli (TEFAS geriye doldurulamıyor).
 4. **Makro takvimin yıllık bakımı** (Faz 37): TCMB 2027'nin yalnız ilk yarısını duyurdu, Fed 2027'nin
    tamamını. İkisi yeni takvimi açıklayınca [makro.ts](../packages/engine/src/makro.ts) güncellenmeli —
    ekran son 90 güne girince kendisi uyarır.

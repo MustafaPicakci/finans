@@ -100,7 +100,7 @@ export function Kayitlar({ data, reload }: { data: AllData; reload: () => void }
 
   return (<>
     {ozet && (
-      <HarcamaOzetiKarti data={data} baslangic={sinceOf(donem)} sorgu={sorgu} turSuzgeciAcik={tur !== "hepsi"} />
+      <HarcamaOzetiKarti data={data} reload={reload} baslangic={sinceOf(donem)} sorgu={sorgu} turSuzgeciAcik={tur !== "hepsi"} />
     )}
     <div style={css.card}>
       {/* Kart başlığı yok: üst çubuk zaten "Kayıtlar" diyor, ikinci kez yazmak yer israfı.

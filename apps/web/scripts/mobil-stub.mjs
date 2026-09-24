@@ -251,6 +251,19 @@ createServer(async (req, res) => {
     try { Object.assign(all.settings, JSON.parse(govde || "{}")); } catch { /* bozuk gövde: yok say */ }
     return json({ ok: true });
   }
+  /* KAYIT DÜZENLEMELERİ DE GERÇEKTEN UYGULANIR (Faz 41) — ayar yazmalarıyla aynı gerekçe:
+     catch-all {ok:true} derse toplu kategorileme ekranında seçim yapılır, reload sonrası satır
+     ESKİ hâliyle geri gelir ve "sonrası" (satırın sönmesi, sayacın düşmesi, panelin uyarısının
+     kaybolması) hiç görülemez. Yalnız gövdedeki alanlar birleştirilir, doğrulama yapılmaz. */
+  const duzenle = url.pathname.match(/^\/api\/(cardtxs|transactions)\/(\d+)$/);
+  if (duzenle && req.method === "PUT") {
+    let govde = "";
+    for await (const parca of req) govde += parca;
+    const liste = duzenle[1] === "cardtxs" ? all.card_txs : all.transactions;
+    const satir = liste.find((x) => x.id === Number(duzenle[2]));
+    if (satir) { try { Object.assign(satir, JSON.parse(govde || "{}")); } catch { /* bozuk gövde */ } }
+    return json({ ok: true });
+  }
   if (url.pathname.startsWith("/api/")) return json({ ok: true });
   try {
     const p = url.pathname === "/" ? "/index.html" : url.pathname;
