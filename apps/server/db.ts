@@ -350,6 +350,11 @@ ALTER TABLE recurring ADD COLUMN IF NOT EXISTS category_id integer REFERENCES ca
 ALTER TABLE recurring ADD COLUMN IF NOT EXISTS auto boolean NOT NULL DEFAULT false;
 -- Faz 8.2: kart otomatik ödeme talimatı — doluysa vadesi gelen ekstre cron ile bu hesaptan ödenir
 ALTER TABLE cards ADD COLUMN IF NOT EXISTS pay_account_id integer REFERENCES accounts(id) ON DELETE SET NULL;
+-- Faz 39: kart harcamasının kategorisi. ON DELETE SET NULL (transactions.category_id ile aynı
+-- kural): kategori silinmesi harcamayı SİLMEZ, yalnız kategorisiz bırakır. Mevcut satırlar NULL
+-- kalır, yani "kategorisi girilmemiş" — geriye dönük bir tahmin YAPILMAZ (adından kategori
+-- türetmek Faz 35'in "ekstre ödemesini adından tanıma" hatasının aynısı olurdu).
+ALTER TABLE card_txs ADD COLUMN IF NOT EXISTS category_id integer REFERENCES categories(id) ON DELETE SET NULL;
 -- Faz 21: trades artık pozisyon OLAYLARI defteri — temettü ve bedelsiz de birer satır.
 -- Inline CHECK'in adı Postgres'te trades_side_check olur; drop+add ile idempotent güncellenir
 -- (ADD CONSTRAINT tek başına ikinci açılışta "already exists" hatası verirdi).

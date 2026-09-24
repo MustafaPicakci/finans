@@ -25,10 +25,18 @@ import { metinEsler } from "./kayitlar.js";
    Kapsam dışı iki tür bilinçlidir: `transfers` (virman) kendi hesapların arası, para sistemden
    çıkmaz; `trades` (portföy) harcama değil varlık dönüşümüdür (para kaybolmaz, biçim değiştirir).
 
-   ÖNEMLİ KISIT — kart harcamasının KATEGORİSİ YOKTUR (`card_txs`'te kolon yok). Kategori
-   kırılımı bu yüzden yalnız hesap/nakit işlemlerini anlatır; kartın tamamı tek kovada durur ve
-   bu çıktıda açıkça yazılır. Faz 4'ün Rapor sekmesinin "neredeyse boş" görünmesinin ve Faz
-   26'da kaldırılmasının yapısal sebebi tam olarak budur — rakamı sunarken saklanmaz. */
+   KART HARCAMASININ KATEGORİSİ (Faz 39). Bu satırlar eskiden kategorisizdi — `card_txs`'te
+   kolon yoktu — ve kategori kırılımı yalnız hesap/nakit işlemlerini anlatıyordu. Harcamanın çoğu
+   kartta olduğu için ekran YAPISAL olarak yarım cevap veriyordu: Faz 4'ün Rapor sekmesinin
+   "neredeyse boş" görünmesinin ve Faz 26'da kaldırılmasının sebebi tam olarak budur.
+   Artık kolon var ve kategorisi girilmiş kart harcaması hesap işlemleriyle **AYNI kovaya** girer:
+   sorulan şey "para hangi işe gitti"dir, hangi ödeme aracıyla ödendiği değil — market alışverişi
+   kartla da yapılsa markettir.
+   Kalan kısıt yapısal değil, VERİ GİRİŞİ kısıtıdır: kategorisi girilmemiş kart harcaması
+   "Kart harcaması (kategorisiz)" kovasında durur, uyarı YALNIZ o kova doluysa çıkar ve kategori
+   girilince kendiliğinden susar. Hesap işlemlerinin "(kategorisiz)" kovasıyla birleştirilmez,
+   çünkü ikisinin düzeltme yolu farklıdır (biri işlem, diğeri kart harcaması düzenlenerek) ve ayrı
+   durunca eksiğin hangi kaynakta olduğu görünür. */
 
 export type HarcamaTemeli = "tuketim" | "nakit";
 export type HarcamaGrup = "yok" | "ay" | "kategori" | "kart";
@@ -72,7 +80,7 @@ export type HarcamaOzeti = {
     ekstre_odemesi: boolean;
     /** "tuketim" temelinde çifte saymayı önlemek için dışarıda bırakılan ekstre ödemesi toplamı */
     haric_ekstre_odemesi: number;
-    /** kategori kırılımında kartın düştüğü kova (kart harcamasının kategorisi yok) */
+    /** kategorisi GİRİLMEMİŞ kart harcaması toplamı (girilmişse kendi kategorisine yazılır) */
     kategorisiz_kart_gideri: number;
   };
   /** kullanıcıya AYNEN aktarılması gereken kısıtlar */
@@ -133,12 +141,15 @@ export function harcamaOzeti(veri: HarcamaVeri, s: HarcamaSecenek): HarcamaOzeti
     for (const c of veri.card_txs) {
       if (!araliktaMi(c.date)) continue;
       const kart = kartAdi.get(c.card_id) ?? "kart";
-      if (metin && !metinEsler(`${c.name} ${kart}`, metin)) continue;
+      /* Bilinmeyen id (silinmiş ya da başka kiracının kategorisi) kategorisiz sayılır —
+         `katAdi` yalnız BU kullanıcının kategorilerini taşır, uydurulacak bir ad yok. */
+      const kategori = c.category_id != null ? katAdi.get(c.category_id) ?? null : null;
+      if (metin && !metinEsler(`${c.name} ${kart}${kategori ? ` ${kategori}` : ""}`, metin)) continue;
       const tutar = Math.abs(c.amount);
       adet++;
       gider += tutar;
-      kategorisizKart += tutar;
-      koy(grup === "ay" ? c.date.slice(0, 7) : grup === "kategori" ? KART_KOVA : kart, { gider: tutar });
+      if (kategori == null) kategorisizKart += tutar;
+      koy(grup === "ay" ? c.date.slice(0, 7) : grup === "kategori" ? kategori ?? KART_KOVA : kart, { gider: tutar });
     }
   }
 
@@ -153,8 +164,8 @@ export function harcamaOzeti(veri: HarcamaVeri, s: HarcamaSecenek): HarcamaOzeti
     }
     if (grup === "kategori" && kategorisizKart > 0) {
       uyari.push(
-        `Kart harcamalarının kategorisi yok: ${r2(kategorisizKart)} TL "${KART_KOVA}" kovasında. ` +
-        "Kategori kırılımı yalnız hesap/nakit işlemlerini anlatır.",
+        `${r2(kategorisizKart)} TL kart harcamasının kategorisi girilmemiş — "${KART_KOVA}" ` +
+        "kovasında duruyor. Harcamayı düzenleyip kategori seçilirse kendi kategorisine geçer.",
       );
     }
   } else {

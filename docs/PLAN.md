@@ -192,6 +192,52 @@ içi betik dev'de çalışır, prod'da sessizce engellenirdi — en kötü cinst
 gerekçesi bozulmadı: betiği çalıştırmayan istemcide (Google'ın OAuth marka doğrulaması, önizleme
 botları) sınıf hiç eklenmez, tanıtım metni yerinde kalır — doğrulandı.
 
+## Faz 39 — Kart harcamasının kategorisi ✅
+
+**Sorun yapısaldı, eksik özellik değil.** `card_txs`'te kategori kolonu yoktu; `harcamaOzeti`
+kategori kırılımı verirken kartın TAMAMINI "Kart harcaması (kategorisiz)" kovasına koymak ve bunu
+bir `uyari` ile söylemek zorundaydı. Harcamanın çoğu kartta olduğu için kategori kırılımı
+kullanıcının parasının küçük bir kısmını anlatıyordu — Faz 4'ün Rapor sekmesinin "neredeyse boş"
+görünmesinin ve Faz 26'da kaldırılmasının sebebi tam olarak buydu. Uyarı dürüsttü ama
+düzeltilemezdi: kullanıcının yapabileceği bir şey yoktu.
+
+**Karar: kategori kart harcamasına da ait.** Sorulan şey "para hangi işe gitti"dir, hangi ödeme
+aracıyla ödendiği değil — market alışverişi kartla da yapılsa markettir. Bu yüzden kategorisi
+girilmiş kart harcaması hesap işlemleriyle **aynı kovaya** girer, ayrı bir "kart" kovası tutulmaz.
+
+Yapılanlar:
+- `card_txs.category_id` (nullable, `ON DELETE SET NULL` — `transactions` ile aynı kural).
+  Mevcut satırlar NULL kalır; **geriye dönük tahmin yapılmadı**: addan kategori türetmek, Faz 35'te
+  bilerek reddedilen "ekstre ödemesini adından tanıma" hatasının aynısı olurdu.
+- `harcamaOzeti`: kart satırı kendi kategorisine yazılır. `kategorisiz_kart_gideri` artık
+  kartın tamamı değil **yalnız kategorisi girilmemiş kısım**; uyarı yalnız o kova doluysa çıkar ve
+  kategori girilince kendiliğinden susar — yapısal kısıt, düzeltilebilir bir veri girişi kısıtına
+  dönüştü. Bilinmeyen/silinmiş id kategorisiz sayılır (ad uydurulmaz).
+- `kayitlar.ts`: kategori kart satırının `detay`ına girer, yani **aramada da taranır** — gelir-gider
+  satırında zaten öyleydi, iki tür aynı sorguyla bulunmalı.
+- Uç: jenerik `crud("cardtxs", …)` kolon listesine bir satır. `realizeOccurrence` **düzenli
+  giderin kategorisini karta taşır** — öncesinde aynı kalem hesaba düşünce kategoriyi koruyor,
+  karta düşünce sessizce kaybediyordu (iki hedef farklı davranıyordu).
+- Arayüz: `CardTxForm`'a "Kategori (ops.)" alanı (kendi satırında — üst satır 390px'te zaten beş
+  alan taşıyor), `recall.ts` adı yazılan harcamanın kategorisini de hatırlar, Kart sekmesi satırında
+  "kart · kategori" görünür. Asistanın `kart_harcamasi_ekle` aracı da `category_id` alır (onay
+  kartındaki özete kategori adı yazılır).
+
+Doğrulama: `pnpm build` üç pakette temiz, **322 engine** (+6: aynı kovada birleşme, kategorisiz
+kovanın kalması, kısmi giriş, silinmiş kategori, kategori adıyla arama ve bir **ayrışma kapanı** —
+kategori kalemlerinin toplamı = toplam gider) + 29 sunucu testi yeşil. İzole test DB'sinde
+(`finans_faz39_test`, kendi rolüyle — gerçek yerel veriye dokunulmadı) uçtan uca: kategorili POST,
+alansız POST → NULL, PUT ile değiştirme, PUT ile açıkça boşaltma, `/api/all` alanı taşıyor, düzenli
+kart gideri gerçekleştirilince kategori taşındı, kategori silinince harcama **durdu** ve kategorisiz
+kaldı. Çok kiracılık: ikinci kullanıcı A'nın harcamasında PUT/DELETE → **404**, A'nın satırı
+bit bit aynı; B, A'nın kategori id'siyle kendi kaydını yazsa bile **adı görmüyor** ("—"), yani
+`crud`'un sahiplik doğrulamaması (bu `POST /transactions` ile aynı, bilinen davranış) bir sızıntı
+üretmiyor. Mobil 390px: stub'a kategori fikstürü **iki hâliyle** eklendi (kategorili + kategorisiz,
+yoksa kategorisiz satırın yerleşimi hiç denetlenemezdi); Kart sekmesi ve form `scrollW: 390`,
+taşan öğe yok.
+
+---
+
 ## Doğrulama
 `pnpm build` temiz, 57 engine testi yeşil. Kota sıfırlandıktan sonra `returns-by-date` tasarımı gerçek veride **tam** doğrulandı:
 - **Tek istekte 3489 fon fiyatı** toplandı (`prices` + aynı gün `price_history`'de tam senkron) — tahmin edilenin (~150-160) çok üzerinde, TEFAS'ta pay sınıfı/alt kategori dahil gerçekten binlerce fon var.
@@ -713,6 +759,24 @@ düşmediğinde) + `kartBorcu + krediBorcu === Day.debt` (üçüncü bir borç t
 Bugüne hareket düştüğünde iki tanımın ayrıştığı ve **ayrışmanın yönü** de ayrı bir testte yazılı,
 kimse yanlış olanı "düzeltmeye" kalkmasın diye.
 
+**Modelin araç seçimi — 2026-09-24'te ölçüldü** (fazın açık kalan tek doğrulaması; 21 Eylül'de
+Gemini kotası engellemişti). Testlerin ölçemediği şey buydu: araçlar doğru çalışıyor da model
+doğru olanı mı çağırıyor? Arayüzde yalnız nihai cevap görünür, bu yüzden geçici bir script
+`READ_TOOLS`'un `run`'larını sarıp `runAgent`'ı doğrudan çağırdı (bitince silindi). **Altı soru,
+altısında doğru araç ve doğru argüman:** "bu ay ne kadar harcadım" → `harcama_ozeti`
+(`temel=tuketim`, 16.318 TL), "hesabımdan ne çıktı" → **aynı araç `temel=nakit`** (39.343,79 TL —
+ikisinin farklı olması tam olarak temel ayrımının işe yaradığının kanıtı), "son üç ay" → TEK çağrı
+`grup=ay` (üç çağrı değil), "net varlığım" → `net_varlik`, "bu ayı çıkarır mıyım" → `nakit_durumu`,
+"kategorilere göre" → `grup=kategori`. **`uyari` alanı her cevapta kullanıcıya aktarıldı** — ekstre
+ödemesinin toplamın dışında olduğu ve kart harcamalarının kategorisiz tek kovada durduğu, modelin
+kendi cümlesiyle yazıldı; rakamın anlamını değiştiren iki kısıt sessiz kalmadı. `net_varlik`'in
+nakit bileşeni bağımsız SQL ile çaprazlandı: `Σ accounts.balance` = 34.371,99 (çapa bugünün gerçek
+bakiyesi) ve `Σ account_entries.amount` ile birebir eşit (Faz 15 değişmezi).
+Yan bulgu: `withKeyFallback` canlıda çalıştı (1. anahtarın kotası doldu → 2. anahtara geçti,
+soru cevaplandı). Bir soru ilk denemede Google'ın **503 "high demand"**ine düştü ve yeniden
+denemede geçti — sağlayıcı kapasitesi, kod değil (teşhis yöntemi CLAUDE.md'de değil, deploy
+notlarında).
+
 ---
 
 ## Faz 36 — Kaçırılan bedelsiz/temettü, DRIP, bedelli akışı ✅
@@ -905,12 +969,19 @@ denetlenemezdi.
 
 ## Sıralama
 
-Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Faz 0–38 tamamlandı (Faz 5 yayına, 10–13 ürün derinleşmesine, 21+ asistan ve portföy derinleşmesine kadar); yukarıdaki nota bakın — 22-33'ün günlüğü burada değil, CLAUDE.md/README'de.
+Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Faz 0–39 tamamlandı (Faz 5 yayına, 10–13 ürün derinleşmesine, 21+ asistan ve portföy derinleşmesine kadar); yukarıdaki nota bakın — 22-33'ün günlüğü burada değil, CLAUDE.md/README'de.
 
 **Sıradaki iş — numaralı faz değil, açık kalan kalemler (öncelik sırasıyla):**
-1. **E-posta teslim edilebilirliği** (prod engelleyici, bkz. Faz 10) — Resend/Brevo + kendi domain + SPF/DKIM/DMARC; sadece env değişikliği. Bu bitmeden çok-kullanıcı kâğıt üzerinde kalır.
-2. **Deploy disiplini** — Render'da autoDeploy kapalı; her commit sonrası Manual Deploy unutulmamalı (ya da Blueprint'e geçilip otomatikleştirilmeli).
-3. Sonraki ürün fikirleri (henüz seçilmedi): gün içi fiyat geçmişi, GitHub Actions CI/CD.
+1. ~~E-posta teslim edilebilirliği~~ — **çözüldü (Faz 28)**: gönderim yolu `MAIL_PROVIDER` ile
+   açıkça seçiliyor ve prod'da `gmail` (Gmail API, 443) kullanılıyor; Render giden SMTP portlarını
+   engellediği için HTTP yolu bir tercih değil zorunluluktu. Domain + SPF/DKIM/DMARC artık
+   gerekmiyor — posta Google'ın MTA'sından çıktığı için hizalı gidiyor. Bu madde 2026-09-24'e
+   kadar "prod engelleyici" olarak duruyordu, oysa iş bitmişti.
+2. **Deploy disiplini** — Render'da autoDeploy kapalı; her commit sonrası Manual Deploy unutulmamalı (ya da Blueprint'e geçilip otomatikleştirilmeli). **Sürüm doğrulama**: yerelde `pnpm build` koşup `apps/web/dist/index.html`'deki `index-<hash>.js` ile `curl -s <url>/app | grep -o 'index-[^"]*\.js'` karşılaştırılır — hash içerikten türer, yani "hangi commit canlıda" sorusuna tek doğru cevabı o verir. `/`'ye bakmak yanıltır (anonim ziyaretçiye landing döner), HTTP koduna bakmak da yanıltır (SPA catch-all'ı olmayan dosyaya da 200 der).
+3. Sonraki ürün fikirleri (henüz seçilmedi): gün içi fiyat geçmişi, ABD borsası için vergi/beyan raporu (tartışıldı,
+   kullanıcı kararıyla beklemede: tarihsel TCMB kuru + FIFO/ortalama eşleştirme + Yİ-ÜFE
+   endekslemesi gerektirir), GitHub Actions CI/CD (**istenmiyor** — push sonrası elle deploy akışı
+   kullanıcının tercihi).
 4. **Makro takvimin yıllık bakımı** (Faz 37): TCMB 2027'nin yalnız ilk yarısını duyurdu, Fed 2027'nin
    tamamını. İkisi yeni takvimi açıklayınca [makro.ts](../packages/engine/src/makro.ts) güncellenmeli —
    ekran son 90 güne girince kendisi uyarır.

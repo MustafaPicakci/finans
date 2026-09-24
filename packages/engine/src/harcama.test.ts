@@ -6,8 +6,8 @@ const kat = (id: number, name: string, kind: "income" | "expense" = "expense"): 
   ({ id, name, kind, color: null });
 const tx = (id: number, date: string, name: string, amount: number, category_id: number | null = null): Transaction =>
   ({ id, date, name, amount, category_id, account_id: 1 });
-const ktx = (id: number, date: string, name: string, amount: number, card_id = 1, installments = 1): CardTx =>
-  ({ id, card_id, date, name, amount, installments });
+const ktx = (id: number, date: string, name: string, amount: number, card_id = 1, installments = 1,
+  category_id: number | null = null): CardTx => ({ id, card_id, date, name, amount, installments, category_id });
 const kart = (id: number, name: string): Card =>
   ({ id, name, limit_amount: 0, statement_day: 1, due_day: 10 });
 
@@ -97,7 +97,21 @@ describe("harcamaOzeti", () => {
     expect(o.kalemler.map((k) => [k.ad, k.gider])).toEqual([["Market", 500], ["Ulaşım", 100], ["(kategorisiz)", 50]]);
   });
 
-  it("KART HARCAMASININ KATEGORİSİ YOKTUR: tamamı tek kovada durur ve bu açıkça uyarılır", () => {
+  /* ————— kart harcamasının kategorisi (Faz 39) ————— */
+  it("kategorisi girilmiş kart harcaması hesap işlemiyle AYNI kovaya girer", () => {
+    const o = harcamaOzeti(veri({
+      categories: [kat(1, "Market")],
+      transactions: [tx(1, "2026-03-05", "Pazar", -200, 1)],
+      card_txs: [ktx(1, "2026-03-06", "Migros", 800, 1, 1, 1)],
+    }), { ...AY, grup: "kategori" });
+    // soru "para hangi işe gitti"dir, hangi araçla ödendiği değil → tek kova
+    expect(o.kalemler.map((k) => [k.ad, k.gider])).toEqual([["Market", 1000]]);
+    expect(o.kapsam.kategorisiz_kart_gideri).toBe(0);
+    // kova doluyken uyarı çıkmaz: kısıt yapısal değil, veri girişi kısıtıydı ve giriş yapılmış
+    expect(o.uyari.join(" ")).not.toContain("kategorisi girilmemiş");
+  });
+
+  it("kategorisi GİRİLMEMİŞ kart harcaması ayrı kovada durur ve uyarı çıkar", () => {
     const o = harcamaOzeti(veri({
       categories: [kat(1, "Market")],
       transactions: [tx(1, "2026-03-05", "Pazar", -200, 1)],
@@ -105,9 +119,42 @@ describe("harcamaOzeti", () => {
     }), { ...AY, grup: "kategori" });
     expect(o.kalemler.find((k) => k.ad === "Kart harcaması (kategorisiz)")!.gider).toBe(800);
     expect(o.kapsam.kategorisiz_kart_gideri).toBe(800);
-    expect(o.uyari.join(" ")).toContain("Kart harcamalarının kategorisi yok");
-    // kategori kırılımı kartın 800'ünü açıklamaz ama TOPLAM onu içerir — ikisi çelişmemeli
+    expect(o.uyari.join(" ")).toContain("kategorisi girilmemiş");
+    // kategori kırılımı kartın 800'ünü bir işe bağlamaz ama TOPLAM onu içerir — ikisi çelişmemeli
     expect(o.gider).toBe(1000);
+  });
+
+  it("kısmi giriş: yalnız kategorisi olmayan kısım kart kovasında sayılır", () => {
+    const o = harcamaOzeti(veri({
+      categories: [kat(1, "Market"), kat(2, "Ulaşım")],
+      card_txs: [
+        ktx(1, "2026-03-05", "Migros", 800, 1, 1, 1),
+        ktx(2, "2026-03-06", "Taksi", 150, 1, 1, 2),
+        ktx(3, "2026-03-07", "Bilinmeyen", 300),
+      ],
+    }), { ...AY, grup: "kategori" });
+    expect(o.kalemler.map((k) => [k.ad, k.gider])).toEqual([
+      ["Market", 800], ["Kart harcaması (kategorisiz)", 300], ["Ulaşım", 150],
+    ]);
+    expect(o.kapsam.kategorisiz_kart_gideri).toBe(300);
+  });
+
+  it("silinmiş/tanınmayan kategori id'si kategorisiz sayılır, ad uydurulmaz", () => {
+    const o = harcamaOzeti(veri({
+      categories: [kat(1, "Market")],
+      card_txs: [ktx(1, "2026-03-06", "Migros", 800, 1, 1, 99)],
+    }), { ...AY, grup: "kategori" });
+    expect(o.kalemler.map((k) => k.ad)).toEqual(["Kart harcaması (kategorisiz)"]);
+    expect(o.kapsam.kategorisiz_kart_gideri).toBe(800);
+  });
+
+  it("AYRIŞMA KAPANI: kategori kalemlerinin toplamı = toplam gider", () => {
+    const o = harcamaOzeti(veri({
+      categories: [kat(1, "Market")],
+      transactions: [tx(1, "2026-03-05", "Pazar", -200, 1), tx(2, "2026-03-06", "Şey", -50)],
+      card_txs: [ktx(1, "2026-03-07", "Migros", 800, 1, 1, 1), ktx(2, "2026-03-08", "?", 300)],
+    }), { ...AY, grup: "kategori" });
+    expect(o.kalemler.reduce((s, k) => s + k.gider, 0)).toBe(o.gider);
   });
 
   it("karta göre gruplar; kart dışı işlemler ayrı kovada", () => {
@@ -127,6 +174,15 @@ describe("harcamaOzeti", () => {
   });
 
   /* ————— metin süzgeci ————— */
+  it("kart harcaması KATEGORİ adıyla da bulunur (gelir-giderde zaten öyleydi)", () => {
+    const o = harcamaOzeti(veri({
+      categories: [kat(1, "Ulaşım")],
+      card_txs: [ktx(1, "2026-03-05", "Taksi", 150, 1, 1, 1), ktx(2, "2026-03-06", "Migros", 800)],
+    }), { ...AY, metin: "ulasim" });
+    expect(o.gider).toBe(150);
+    expect(o.adet).toBe(1);
+  });
+
   it("metin süzgeci Türkçe'ye toleranslı ve İKİ kaynakta da çalışır", () => {
     const v = veri({
       transactions: [tx(1, "2026-03-05", "MIGROS alışveriş", -100), tx(2, "2026-03-06", "Kira", -5000)],

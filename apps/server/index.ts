@@ -619,9 +619,12 @@ async function realizeOccurrence(
   if (!mark.changes) return false; // zaten gerçekleşmiş
   const date = occurrenceDate(ym, r.day);
   if (r.card_id != null && r.kind === "expense") {
+    /* Faz 39 — kalemin kategorisi kart harcamasına da taşınır. Öncesinde kolon yoktu, yani
+       kategorisi tanımlı bir düzenli gider karta düştüğünde kategorisi SESSİZCE kayboluyordu
+       (hesaba düşen aynı kalem kategoriyi koruyordu); aynı kalemin iki hedefi farklı davranıyordu. */
     const info = await t.run(
-      "INSERT INTO card_txs (card_id,date,name,amount,installments,user_id) VALUES (?,?,?,?,?,?) RETURNING id",
-      r.card_id, date, r.name, amt.amount, 1, uid,
+      "INSERT INTO card_txs (card_id,date,name,amount,installments,category_id,user_id) VALUES (?,?,?,?,?,?,?) RETURNING id",
+      r.card_id, date, r.name, amt.amount, 1, opts?.category_id ?? r.category_id ?? null, uid,
     );
     await t.run("UPDATE recurring_realized SET card_tx_id=? WHERE recurring_id=? AND ym=?", info.id, r.id, ym);
   } else {
@@ -872,6 +875,7 @@ crud("cards", "cards", [
 crud("cardtxs", "card_txs", [
   { name: "card_id", required: true }, { name: "date", required: true },
   { name: "name", required: true }, { name: "amount", required: true }, { name: "installments" },
+  { name: "category_id" }, // Faz 39 (ops.) — kategorisiz kart harcaması hâlâ geçerli bir kayıt
 ]);
 
 /* ---- kart ekstresi ödeme (Faz 8.2) ----

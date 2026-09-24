@@ -168,8 +168,9 @@ export const ROUTE_TOOLS: RouteTool[] = [
     parameters: obj({
       card_id: S.int("Kart id"), date: S.str(DATE), name: S.str("Açıklama"),
       amount: S.num("Toplam tutar (pozitif, TRY)"), installments: S.int("Taksit sayısı (varsayılan 1)"),
+      category_id: S.int("Gider kategorisi id (opsiyonel) — bağlamdaki kategori listesinden seç"),
     }, ["card_id", "date", "name", "amount"]),
-    summary: (a, n) => `Kart harcaması: ${n.card(a.card_id)} · ${a.name} · ${money(a.amount)}${Number(a.installments) > 1 ? ` · ${a.installments} taksit` : ""} · ${a.date}`,
+    summary: (a, n) => `Kart harcaması: ${n.card(a.card_id)} · ${a.name} · ${money(a.amount)}${Number(a.installments) > 1 ? ` · ${a.installments} taksit` : ""}${a.category_id != null ? ` · ${n.category(a.category_id)}` : ""} · ${a.date}`,
     undo: undoById("cardtxs"),
   },
   {

@@ -284,7 +284,10 @@ export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => 
             <Row key={t.id} last={i === arr.length - 1 && kartTxS.toplam === kartTxS.gosterilen}>
               <span className="row-lead" style={{ ...css.mono, fontSize: 12, color: T.mut, width: 74 }}>{fmtD(parseD(t.date), { day: "2-digit", month: "short", year: "2-digit" })}</span>
               <span className="row-title" style={{ flex: 1, fontSize: 13, minWidth: 0 }}>
-                {t.name} <span style={{ color: T.mut, fontSize: 11 }}>{card?.name}</span>
+                {t.name} <span style={{ color: T.mut, fontSize: 11 }}>
+                  {[card?.name, t.category_id != null ? data.categories.find((c) => c.id === t.category_id)?.name : null]
+                    .filter(Boolean).join(" · ")}
+                </span>
                 {t.installments > 1 && (
                   <span style={{ fontSize: 11, color: T.acc, marginLeft: 6 }}>
                     {t.installments - remaining.length}/{t.installments} ödendi

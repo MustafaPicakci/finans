@@ -59,7 +59,7 @@ export function kalemSuggestions(data: AllData): KalemSuggestion[] {
 
 /** Kart harcamalarının hatırlanan hali */
 export type CardTxSuggestion = {
-  name: string; amount: number; card_id: number; installments: number;
+  name: string; amount: number; card_id: number; installments: number; category_id?: number | null;
   count: number; score: number; last: string;
 };
 
@@ -70,12 +70,12 @@ export function cardTxSuggestions(data: AllData): CardTxSuggestion[] {
     if (!key) continue;
     const e = by.get(key);
     if (!e) {
-      by.set(key, { dates: [t.date], s: { name: t.name.trim(), amount: t.amount, card_id: t.card_id, installments: t.installments || 1, count: 1, score: 0, last: t.date } });
+      by.set(key, { dates: [t.date], s: { name: t.name.trim(), amount: t.amount, card_id: t.card_id, installments: t.installments || 1, category_id: t.category_id ?? null, count: 1, score: 0, last: t.date } });
       continue;
     }
     e.dates.push(t.date);
     e.s.count++;
-    if (t.date >= e.s.last) e.s = { ...e.s, name: t.name.trim(), amount: t.amount, card_id: t.card_id, installments: t.installments || 1, last: t.date };
+    if (t.date >= e.s.last) e.s = { ...e.s, name: t.name.trim(), amount: t.amount, card_id: t.card_id, installments: t.installments || 1, category_id: t.category_id ?? null, last: t.date };
   }
   return [...by.values()]
     .map(({ s, dates }) => ({ ...s, score: scoreOf(dates) }))

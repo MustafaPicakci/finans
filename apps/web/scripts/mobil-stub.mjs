@@ -30,10 +30,13 @@ const cards = [
   { id: 1, name: "Akbank Axess", limit_amount: 60000, statement_day: 25, due_day: 10, pay_account_id: 1 },
   { id: 2, name: "Garanti Bonus", limit_amount: 35000, statement_day: 15, due_day: 3, pay_account_id: null },
 ];
+/* Faz 39 — kategori İKİ HÂLİYLE duruyor (company_events'in `tahmini` fikstürüyle aynı gerekçe):
+   biri kategorili (satırda "kart · kategori" görünür), biri kategorisiz (yalnız kart adı).
+   Hepsi kategorili olsaydı kategorisiz satırın yerleşimi hiç denetlenemezdi. */
 const card_txs = [
-  { id: 1, card_id: 1, date: d(-12), name: "Teknoloji mağazası", amount: 18400, installments: 6 },
-  { id: 2, card_id: 1, date: d(-5), name: "Market alışverişi", amount: 1240.5, installments: 1 },
-  { id: 3, card_id: 2, date: d(-20), name: "Uçak bileti", amount: 7850, installments: 3 },
+  { id: 1, card_id: 1, date: d(-12), name: "Teknoloji mağazası", amount: 18400, installments: 6, category_id: null },
+  { id: 2, card_id: 1, date: d(-5), name: "Market alışverişi", amount: 1240.5, installments: 1, category_id: 1 },
+  { id: 3, card_id: 2, date: d(-20), name: "Uçak bileti", amount: 7850, installments: 3, category_id: 2 },
 ];
 const trades = [
   { id: 1, date: d(-120), asset_type: "BIST", symbol: "ASELS", side: "ALIŞ", qty: 200, price: 62.4, fee: 12, currency: "TRY", account_id: 4, portfolio_id: 1 },

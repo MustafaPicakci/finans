@@ -59,9 +59,13 @@ export function tumKayitlar(data: AllData): Kayit[] {
 
   for (const c of data.card_txs) {
     const taksit = c.installments > 1 ? ` · ${c.installments} taksit` : "";
+    /* Faz 39 — kart harcamasının kategorisi `detay`a girer, yani ARAMADA da taranır
+       (gelir-gider satırında kategori zaten oradaydı; iki tür aynı sorguyla bulunmalı). */
+    const kategori = c.category_id != null ? katAdi.get(c.category_id) : null;
     out.push({
       key: `kart:${c.id}`, tur: "kart", id: c.id, date: c.date,
-      ad: c.name || ISIM_YOK, detay: `${kartAdi.get(c.card_id) ?? "kart"}${taksit}`,
+      ad: c.name || ISIM_YOK,
+      detay: [kartAdi.get(c.card_id) ?? "kart", kategori].filter(Boolean).join(" · ") + taksit,
       /* Kart harcaması nakdi O GÜN oynatmaz (ekstre gününde oynar), ama harcamadır —
          yön "çıkış"tır. Ekstre ödemesi ayrı bir gelir-gider kaydı olarak da listede görünür;
          bu yüzden bu liste TOPLAM ÜRETMEZ (ikisini toplamak aynı parayı iki kez sayardı). */

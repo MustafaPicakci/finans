@@ -184,22 +184,32 @@ export function KalemForm({ data, reload, onClose, prefill, edit }: FormProps & 
 /** Kart harcaması → ekstreye işlenir, son ödeme günü nakit akışına düşer */
 export function CardTxForm({ data, reload, onClose, prefill, edit }: FormProps & { prefill?: CardTxPrefill; edit?: CardTx }) {
   const [tf, setTf] = useState(() => edit
-    ? { card_id: edit.card_id, date: edit.date, name: edit.name, amount: String(edit.amount), installments: String(edit.installments) }
+    ? {
+      card_id: edit.card_id, date: edit.date, name: edit.name, amount: String(edit.amount),
+      installments: String(edit.installments), category_id: edit.category_id ? String(edit.category_id) : "",
+    }
     : {
       card_id: prefill?.card_id ?? 0, date: todayStr(), name: prefill?.name ?? "",
       amount: prefill ? String(prefill.amount) : "", installments: String(prefill?.installments ?? 1),
+      category_id: "",
     });
   const nameRef = useRef<HTMLInputElement>(null);
   const sugs = useMemo(() => cardTxSuggestions(data), [data]);
-  /** geçmişten seçildi: tutar/kart/taksit son kaydından dolar */
+  /** geçmişten seçildi: tutar/kart/taksit/kategori son kaydından dolar */
   const pick = (s: CardTxSuggestion) =>
-    setTf((t) => ({ ...t, name: s.name, amount: String(s.amount), card_id: s.card_id, installments: String(s.installments) }));
+    setTf((t) => ({
+      ...t, name: s.name, amount: String(s.amount), card_id: s.card_id, installments: String(s.installments),
+      category_id: s.category_id != null ? String(s.category_id) : t.category_id,
+    }));
   useEffect(() => { if (!edit && data.cards.length === 1 && tf.card_id === 0) setTf((s) => ({ ...s, card_id: data.cards[0].id })); }, [data.cards]);
   const ok = tf.card_id > 0 && !!tf.name && num(tf.amount) > 0 && !!tf.date && +tf.installments >= 1;
   const reason = tf.card_id === 0 ? "Kart seçilmeli" : !tf.name ? "Açıklama gerekli" : !(num(tf.amount) > 0) ? "Tutar 0'dan büyük olmalı" : null;
   const save = async (andNew: boolean) => {
     if (!ok) return;
-    const body = { card_id: tf.card_id, date: tf.date, name: tf.name, amount: num(tf.amount), installments: +tf.installments };
+    const body = {
+      card_id: tf.card_id, date: tf.date, name: tf.name, amount: num(tf.amount), installments: +tf.installments,
+      category_id: tf.category_id ? +tf.category_id : null,
+    };
     if (edit) { await api.put(`cardtxs/${edit.id}`, body); reload(); onClose(); return; }
     await api.post("cardtxs", body);
     reload();
@@ -222,6 +232,13 @@ export function CardTxForm({ data, reload, onClose, prefill, edit }: FormProps &
         </Field>
         <AmountField label="Toplam tutar (TL)" value={tf.amount} onChange={(v) => setTf({ ...tf, amount: v })} />
         <Field label="Taksit"><input style={css.input} inputMode="numeric" placeholder="1" value={tf.installments} onChange={(e) => setTf({ ...tf, installments: e.target.value })} /></Field>
+      </div>
+      {/* Faz 39 — kart harcamasının kategorisi. Kendi satırında, çünkü üstteki satır 390px'te
+          zaten beş alan taşıyor. Kategori girilmezse kayıt geçerlidir, yalnız harcama özetinde
+          "kategorisi girilmemiş" kovasında durur. */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+        <KategoriAlani label="Kategori (ops.)" data={data} reload={reload} value={tf.category_id}
+          onChange={(v) => setTf({ ...tf, category_id: v })} kind="expense" />
       </div>
       {ok && +tf.installments > 1 && (
         <div style={{ fontSize: 12, color: T.mut, marginTop: 8 }}>

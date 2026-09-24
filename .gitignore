@@ -3,3 +3,6 @@ dist
 data
 *.log
 .env
+
+# Claude Code yerel yapılandırması (oturuma özgü izinler + kilit dosyası — paylaşılacak bir şey yok)
+.claude/
