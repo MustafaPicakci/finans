@@ -139,6 +139,17 @@ describe("harcamaOzeti", () => {
     expect(o.kapsam.kategorisiz_kart_gideri).toBe(300);
   });
 
+  it("uyarıdaki tutar Türkçe biçimlidir (metin insana gösterilir, aynen aktarılır)", () => {
+    const o = harcamaOzeti(veri({
+      transactions: [tx(1, "2026-03-05", "Akbank ekstresi", -12480)],
+      card_txs: [ktx(1, "2026-03-06", "Migros", 18400)],
+      ekstreTxIds: [1],
+    }), { ...AY, grup: "kategori" });
+    expect(o.uyari.join(" ")).toContain("12.480,00 TL");   // ham "12480 TL" değil
+    expect(o.uyari.join(" ")).toContain("18.400,00 TL");
+    expect(o.kapsam.haric_ekstre_odemesi).toBe(12480);     // sayısal alan HAM kalır (makine tarafı)
+  });
+
   it("silinmiş/tanınmayan kategori id'si kategorisiz sayılır, ad uydurulmaz", () => {
     const o = harcamaOzeti(veri({
       categories: [kat(1, "Market")],

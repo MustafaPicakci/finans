@@ -54,7 +54,8 @@ export async function loadAllData(uid: number, opts: LoadOpts = {}): Promise<All
     db.all("SELECT * FROM transactions WHERE user_id=? ORDER BY date DESC, id DESC", uid),
     db.all("SELECT * FROM deposits WHERE user_id=? ORDER BY open_date, id", uid),
     db.all("SELECT recurring_id, ym FROM recurring_realized WHERE user_id=?", uid),
-    db.all("SELECT card_id, due FROM statement_payments WHERE user_id=?", uid),
+    // tx_id (Faz 40): harcama özetinin tüketim temeli ekstre ödemesini bununla eler — bkz. types.ts
+    db.all("SELECT card_id, due, tx_id FROM statement_payments WHERE user_id=?", uid),
     // Faz 15 — hesap hareket defteri: yeniden eskiye (yürüyen bakiye istemcide bugünden geriye çözülür)
     db.all("SELECT * FROM account_entries WHERE user_id=? ORDER BY date DESC, id DESC", uid),
     db.all("SELECT * FROM transfers WHERE user_id=? ORDER BY date DESC, id DESC", uid),

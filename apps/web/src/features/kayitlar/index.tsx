@@ -7,6 +7,7 @@ import { api } from "../../api";
 import { T, css, fmtMoney } from "../../theme";
 import { Empty, Row, SilDugmesi, FiltreSeridi, useSayfalama, DahaFazla } from "../../ui";
 import { EditSheet, type EditTarget } from "../../EditSheet";
+import { HarcamaOzetiKarti } from "./Ozet";
 
 /* ————— KAYITLAR —————
    Eski "Rapor" sekmesinin yerine geçti (Faz 26). Rapor dört jenerik parça gösteriyordu
@@ -16,8 +17,14 @@ import { EditSheet, type EditTarget } from "../../EditSheet";
    vermiyordu — "elimizdeki veriyle ne çizebiliriz"in cevabıydı.
 
    Bu ekran tek bir soruya cevap verir: **"şu kaydı nerede/ne zaman girmiştim?"** Bugüne dek
-   bunun için üç sekme dolaşmak gerekiyordu. Grafik yok, toplam yok (türler arası toplam
-   yanıltıcı olurdu — bkz. engine/kayitlar.ts), yalnız arama + süzme + düzeltme.
+   bunun için üç sekme dolaşmak gerekiyordu. Grafik yok, yalnız arama + süzme + düzeltme.
+
+   **Faz 40 — ALTTAKİ LİSTE hâlâ toplam üretmez**, o yasak yerinde: türler arası ham toplam
+   yanıltıcıdır (kart harcaması + onun ekstre ödemesi aynı parayı iki kez sayar, virman hiç para
+   hareketi değildir — bkz. engine/kayitlar.ts). Üstteki "Harcama Özeti" kartı ayrı bir bölümdür
+   ve tam da o tuzağı çözen `harcamaOzeti`'ni çağırır: bir TEMEL seçtirir ve hangisini kullandığını
+   yazar. Aynı süzgeçleri (dönem + arama) paylaşırlar, yani iki rakam hiçbir zaman farklı satır
+   kümesini anlatmaz. Panel `finans-kayitlar-ozet` ile kapatılabilir.
 
    Kategori yönetimi burada DEĞİL: nadiren dokunulan bir tanım, sık kullanılan bir arama
    ekranının dibinde durunca tam da Rapor'un hatasını tekrarlıyordu. Tanımlar ekranına taşındı;
@@ -50,6 +57,15 @@ export function Kayitlar({ data, reload }: { data: AllData; reload: () => void }
   const [sorgu, setSorgu] = useState("");
   const [tur, setTur] = useState<KayitTuru | "hepsi">("hepsi");
   const [donem, setDonem] = useState(3);
+  /* Tercih kalıcı (nakit sekmesinin piyasa katmanıyla aynı desen). Varsayılan AÇIK: panelin
+     var olma sebebi zaten rakamın görünmesi; arama yapan kullanıcı onu bir kez kapatabilsin. */
+  const [ozet, setOzet] = useState(() => {
+    try { return localStorage.getItem("finans-kayitlar-ozet") !== "0"; } catch { return true; }
+  });
+  const ozetCevir = () => setOzet((v) => {
+    try { localStorage.setItem("finans-kayitlar-ozet", v ? "0" : "1"); } catch { /* özel pencere */ }
+    return !v;
+  });
 
   const [editing, setEditing] = useState<EditTarget | null>(null);
 
@@ -83,13 +99,23 @@ export function Kayitlar({ data, reload }: { data: AllData; reload: () => void }
   };
 
   return (<>
+    {ozet && (
+      <HarcamaOzetiKarti data={data} baslangic={sinceOf(donem)} sorgu={sorgu} turSuzgeciAcik={tur !== "hepsi"} />
+    )}
     <div style={css.card}>
       {/* Kart başlığı yok: üst çubuk zaten "Kayıtlar" diyor, ikinci kez yazmak yer israfı.
           Sayaç süzgecin ne kadarını gösterdiğini söyler — "kayıt yok" ile "süzgeç dar" farkı. */}
-      <div style={{ fontSize: 12, color: T.mut, textAlign: "right", marginBottom: 4 }}>
-        {suzulmus.length === hepsi.length
-          ? `${hepsi.length} kayıt`
-          : `${hepsi.length} kayıttan ${suzulmus.length} tanesi`}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 4 }}>
+        <button onClick={ozetCevir} title="harcama/gelir toplamı ve kırılımı" style={{
+          borderRadius: 20, padding: "5px 10px", background: ozet ? T.panel : "transparent",
+          border: `1px solid ${ozet ? T.line : "transparent"}`, color: ozet ? T.acc : T.mut,
+          cursor: "pointer", fontSize: 11.5, fontFamily: T.disp, fontWeight: ozet ? 700 : 400, whiteSpace: "nowrap",
+        }}>özet</button>
+        <span style={{ fontSize: 12, color: T.mut }}>
+          {suzulmus.length === hepsi.length
+            ? `${hepsi.length} kayıt`
+            : `${hepsi.length} kayıttan ${suzulmus.length} tanesi`}
+        </span>
       </div>
 
       <FiltreSeridi>

@@ -122,7 +122,11 @@ const all = {
   oneoffs: [{ id: 1, date: d(12), name: "Vergi ödemesi", amount: -8400 }],
   portfolios: [{ id: 1, name: "Alfa Portföy", note: null }, { id: 2, name: "Emeklilik", note: null }],
   deposits: [{ id: 1, name: "32 gün vadeli", principal: 50000, rate: 42.5, open_date: d(-20), term_days: 32, withholding: 15, account_id: 1 }],
-  recurring_realized: [], statement_payments: [],
+  recurring_realized: [],
+  /* Faz 40 — ekstre ödemesi fikstürü: transactions#5 "Akbank Axess ekstresi" bir ödeme kaydıdır
+     ve harcama özetinin tüketim temeli onu ELEMEK zorunda (kart harcaması zaten sayıldı).
+     tx_id olmadan eleme yapılamaz, yani bu satır olmadan panelin asıl kuralı hiç denetlenemezdi. */
+  statement_payments: [{ card_id: 1, due: d(-15), tx_id: 5 }],
   account_entries: [
     { id: 1, account_id: 1, date: d(-1), amount: -1247.9, kind: "islem", source_table: "transactions", source_id: 1, note: "Migros market alışverişi", created_at: `${d(-1)} 19:00:00` },
     { id: 2, account_id: 1, date: d(-8), amount: -1890.25, kind: "islem", source_table: "transactions", source_id: 4, note: "Elektrik faturası", created_at: `${d(-8)} 12:00:00` },

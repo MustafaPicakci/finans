@@ -52,8 +52,13 @@ export type Card = { id: number; name: string; limit_amount: number; statement_d
     eski sunucu/PWA önbelleğinden gelen yanıtta) yoktur — kategorisi olmayan kart harcaması
     "kategorisi girilmemiş" sayılır, uydurulmaz. */
 export type CardTx = { id: number; card_id: number; date: string; name: string; amount: number; installments: number; category_id?: number | null };
-/** Bir kart ekstresinin (card_id + son ödeme günü) ödendiğini işaretler — borçtan ve projeksiyondan düşer */
-export type StatementPayment = { card_id: number; due: string };
+/** Bir kart ekstresinin (card_id + son ödeme günü) ödendiğini işaretler — borçtan ve projeksiyondan düşer.
+    `tx_id` **Faz 40'ta açıldı**: ödemenin deftere yazdığı `transactions` satırı. Ekstre ödemesini
+    ADINDAN tanımak mümkün değil ("Akbank ekstresi" elle de yazılabilir), oysa harcama özetinin
+    tüketim temeli onu elemek ZORUNDA (yoksa kart harcaması + onun ödemesi aynı parayı iki kez
+    sayar). Sunucu bunu zaten tutuyordu, yalnız `/api/all`'a koymuyordu — istemci doğru toplamı
+    hesaplayamıyordu. Opsiyonel: eski sunucu/PWA önbelleği taşımaz (o zaman eleme yapılamaz). */
+export type StatementPayment = { card_id: number; due: string; tx_id?: number | null };
 export type Price = { symbol: string; asset_type: string; price: number; source: string; updated_at: string; currency?: Currency };
 export type Category = { id: number; name: string; kind: "income" | "expense"; color: string | null };
 /** Gerçekleşen harcama/gelir defteri — projeksiyon sistemine (recurring/loan/card) bağlı değildir */

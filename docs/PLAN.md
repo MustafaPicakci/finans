@@ -238,6 +238,43 @@ taşan öğe yok.
 
 ---
 
+## Faz 40 — Harcama özetinin ekranı ✅
+
+Faz 35 `harcamaOzeti`'ni yazdı ama **yalnız asistan çağırıyordu**: "bu ay ne harcadım" sorusunun
+cevabı vardı, ekranı yoktu — asistanla konuşmayan kullanıcı için rakam hiç yoktu. Faz 39 ikinci ön
+koşulu kapattı (kart harcamasının kategorisi), yani kırılım ilk kez kullanıcının parasının
+tamamını anlatabiliyordu. Bu faz yalnız sunumu ekledi; **engine'de yeni matematik yok**.
+
+**Faz 26'nın "toplam yok" kararıyla çelişmiyor ve bu ayrım önemli.** O kararın gerekçesi "toplam
+yanlıştır" değil, *türler arası HAM toplam yanıltıcıdır*di (kart harcaması + onun ekstre ödemesi
+aynı parayı iki kez sayar, virman hiç para hareketi değildir). `harcamaOzeti` tam olarak bunu
+çözüyor: temel seçtiriyor ve hangisini kullandığını yazıyor. Kayıtlar ekranındaki **liste hâlâ
+toplam üretmiyor**; özet ayrı bir karttır ve neyi saydığını söyler.
+
+Yapılanlar:
+- [Ozet.tsx](../apps/web/src/features/kayitlar/Ozet.tsx): gider/gelir/net + kırılım (kategori |
+  ay | kart) + oran çubuğu. **Dönem ve arama üstteki şeritten gelir** — ayrı bir tarih seçici,
+  aynı ekranda birbirini tutmayan iki rakam demekti; panelin kendi kontrolleri yalnız temel ve
+  kırılım. Tür süzgeci özete uygulanmaz ve bu **sessiz bırakılmaz** (kapsam dışı tür seçiliyse
+  panel yazar). `uyari` satırları katlanmadan basılır: rakamın anlamını onlar belirliyor.
+- `statement_payments.tx_id` **`/api/all`'a açıldı**. Sunucu bunu Faz 8.2'den beri tutuyordu ama
+  göndermiyordu; tüketim temeli ekstre ödemesini adından tanıyamaz ve elemek zorundadır, yani
+  alan olmadan arayüz doğru toplamı hesaplayamazdı. Alan yoksa (eski sunucu/PWA önbelleği) panel
+  "elenemedi" der — sessizce şişmiş bir rakam vermez.
+- İlk çekimde üç kusur görüldü ve düzeltildi: gelir kategorisi kırılımda **"₺0,00"** görünüyordu
+  (satır yalnız gideri yazıyordu → gelir de yazılıyor), gideri olmayan kalemde çubuğun "en az %2"
+  tabanı sıfırı küçük bir gider gibi gösteriyordu (çubuk hiç çizilmiyor), ve `uyari` ham sayı
+  basıyordu ("12480 TL" → `tr-TR` ile "12.480,00 TL"; bu **engine'de** düzeltildi, yani asistanın
+  aktardığı cümle de düzeldi — `kapsam` alanları ham kaldı, orası makine tarafı). Ay etiketi de
+  biçimlendi: engine "2026-09" döndürüyor, alttaki liste aynı ayı "EYLÜL 2026" yazıyordu.
+
+Doğrulama: `pnpm build` temiz, **323 engine** (+1: uyarının Türkçe biçimi — kimse `tr-TR`
+biçimlemesini "sadeleştirip" geri almasın) + 29 sunucu testi yeşil. Mobil 390px: panel kategori ve
+ay kırılımıyla ayrı ayrı çekildi, `scrollW: 390`, taşan öğe yok; stub'a ekstre ödemesi fikstürü
+(`tx_id` ile) eklendi — o satır olmadan panelin ASIL kuralı (ödemeyi eleme) hiç denetlenemezdi.
+
+---
+
 ## Doğrulama
 `pnpm build` temiz, 57 engine testi yeşil. Kota sıfırlandıktan sonra `returns-by-date` tasarımı gerçek veride **tam** doğrulandı:
 - **Tek istekte 3489 fon fiyatı** toplandı (`prices` + aynı gün `price_history`'de tam senkron) — tahmin edilenin (~150-160) çok üzerinde, TEFAS'ta pay sınıfı/alt kategori dahil gerçekten binlerce fon var.
@@ -969,7 +1006,7 @@ denetlenemezdi.
 
 ## Sıralama
 
-Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Faz 0–39 tamamlandı (Faz 5 yayına, 10–13 ürün derinleşmesine, 21+ asistan ve portföy derinleşmesine kadar); yukarıdaki nota bakın — 22-33'ün günlüğü burada değil, CLAUDE.md/README'de.
+Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Faz 0–40 tamamlandı (Faz 5 yayına, 10–13 ürün derinleşmesine, 21+ asistan ve portföy derinleşmesine kadar); yukarıdaki nota bakın — 22-33'ün günlüğü burada değil, CLAUDE.md/README'de.
 
 **Sıradaki iş — numaralı faz değil, açık kalan kalemler (öncelik sırasıyla):**
 1. ~~E-posta teslim edilebilirliği~~ — **çözüldü (Faz 28)**: gönderim yolu `MAIL_PROVIDER` ile

@@ -88,6 +88,11 @@ export type HarcamaOzeti = {
 };
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
+/* Uyarı metinleri İNSANA gösterilir (panelde aynen basılır, asistan aynen aktarır) — ham
+   "12480 TL" ekranda biçimlenmemiş görünüyordu. Sayısal alanlar (`kapsam`) ham kalır: onlar
+   makine tarafıdır. */
+const tutarTr = (n: number) =>
+  `${r2(n).toLocaleString("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} TL`;
 const KATEGORISIZ = "(kategorisiz)";
 const KART_KOVA = "Kart harcaması (kategorisiz)";
 const KART_DISI = "Kart dışı (hesap/nakit)";
@@ -160,11 +165,11 @@ export function harcamaOzeti(veri: HarcamaVeri, s: HarcamaSecenek): HarcamaOzeti
       "sayılmadı (aynı para iki kez sayılmasın).",
     );
     if (haricEkstre > 0) {
-      uyari.push(`Bu aralıkta ${r2(haricEkstre)} TL ekstre ödemesi vardı ve toplamın DIŞINDA.`);
+      uyari.push(`Bu aralıkta ${tutarTr(haricEkstre)} ekstre ödemesi vardı ve toplamın DIŞINDA.`);
     }
     if (grup === "kategori" && kategorisizKart > 0) {
       uyari.push(
-        `${r2(kategorisizKart)} TL kart harcamasının kategorisi girilmemiş — "${KART_KOVA}" ` +
+        `${tutarTr(kategorisizKart)} kart harcamasının kategorisi girilmemiş — "${KART_KOVA}" ` +
         "kovasında duruyor. Harcamayı düzenleyip kategori seçilirse kendi kategorisine geçer.",
       );
     }
