@@ -104,6 +104,10 @@ const transactions = [
   { id: 3, date: d(-5), name: "Ağustos maaşı", amount: 68500, category_id: 3, account_id: 2 },
   { id: 4, date: d(-8), name: "Elektrik faturası", amount: -1890.25, category_id: 4, account_id: 1 },
   { id: 5, date: d(-15), name: "Akbank Axess ekstresi", amount: -12480, category_id: null, account_id: 1 },
+  /* Faz 41.4 — AYNI ADLI KATEGORİ eşleşmesi: "Faturalar" kategorisi var, bu kayıt kategorisiz.
+     Geçmişte aynı adla kategorilenmiş kayıt YOK, yani öneri yalnız ad eşleşmesinden gelebilir —
+     fikstürün işi tam olarak o yolu denetlenebilir kılmak. */
+  { id: 6, date: d(-4), name: "FATURALAR", amount: -2350, category_id: null, account_id: 1 },
 ];
 const recurring = [
   { id: 1, kind: "income", name: "Maaş", day: 15, from_month: null, to_month: null, account_id: 2, card_id: null, category_id: 3, auto: true },

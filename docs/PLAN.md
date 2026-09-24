@@ -350,8 +350,21 @@ Satır artık kart/hesap adını yazıyor, modalın içine sayaçlı bir kaynak 
 (Hepsi | Kart harcaması | Hesap işlemi) ve bu turda uzayan yedi satırlık kapsam açıklaması
 `Aciklama` arkasına alındı (Faz 24 kural 3) — 390px'te listeyi ekranın yarısına itiyordu.
 
+**Faz 41.4 — "kategorisi dolu geliyor ama kategorisiz kayıtlarda gösteriliyor" (canlıdan).**
+Kullanıcı haklıydı ve kusur benim sunumumdaydı: öneri, seçicinin İÇİNE önden seçili yazılıyordu,
+yani dolu bir seçici kayıtlı kategoriden ayırt edilemiyordu. Kod "öneri kayıt yazmaz" kuralını
+uyguluyordu ama ekran tam tersini gösteriyordu. Öneri artık **ayrı bir düğme**: seçici "Kategori
+seç…"de durur, düğme tek dokunuşla yazar, dokunulmadıkça hiçbir şey değişmez.
+Aynı turda **ikinci bir öneri kaynağı** eklendi: aynı adlı KATEGORİ. Öncesinde öneri yalnız
+"geçmişte aynı adla kategorilenmiş kayıt" varsa çıkıyordu; oysa "Maaş" adlı kayıt için "Maaş"
+adlı bir kategori duruyorsa eşleşme apaçık — kullanıcının verisinde maaş/kira satırları tam da
+bu yüzden önerisiz geliyordu. Karşılaştırma `normName` ile, yani "AIDAT" ile "Aidat" da eşleşir
+(Faz 41.2'nin katlaması). Satır kontrolleri tek kapta toplandı: dar ekranda kısa adlı satırda
+düğme başlığın yanına, uzun adlıda alta düşüyor ve liste dişli görünüyordu.
+
 Doğrulama: `pnpm build` temiz, 326 engine (+3: hesap adıyla arama, I/ı katlaması, ASCII katlama)
-+ 29 sunucu testi yeşil. Mobil 390px'te modal iki hâliyle çekildi —
++ 29 sunucu testi yeşil. Stub'a "FATURALAR" fikstürü eklendi (kategorisiz, geçmişte aynı adla
+kategorilenmiş kaydı YOK) — ad eşleşmesinden gelen öneri ancak böyle denetlenebiliyor. Mobil 390px'te modal iki hâliyle çekildi —
 dolu liste ve atama SONRASI (satır düştü, sayaç "hepsi kategorilendi", panelin kategorisiz uyarısı
 ve düğme kayboldu). Bunun görülebilmesi için stub'ın `PUT /api/{cardtxs,transactions}/:id`
 yazmaları **gerçekten uygulanır** hâle getirildi — ayar yazmalarında öğrenilen dersin aynısı:

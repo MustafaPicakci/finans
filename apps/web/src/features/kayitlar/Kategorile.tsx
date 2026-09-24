@@ -87,9 +87,15 @@ export function kategorisizGruplar(data: AllData, { baslangic, sorgu, ekstreTxId
   for (const k of ham) {
     const yon: "gider" | "gelir" = k.tur === "kart" || k.amount < 0 ? "gider" : "gelir";
     const anahtar = `${yon}|${normName(k.name)}`;
+    /* İkinci öneri kaynağı: AYNI ADLI KATEGORİ. Geçmişte kategorilenmiş bir kayıt yoksa öneri de
+       çıkmıyordu — oysa "Maaş" adlı kayıt için "Maaş" adlı bir kategori duruyorsa eşleşme
+       apaçık. Ad karşılaştırması `normName` ile, yani "AIDAT" ile "Aidat" da eşleşir. */
+    const adEsi = data.categories.find(
+      (c) => c.kind === (yon === "gelir" ? "income" : "expense") && normName(c.name) === normName(k.name),
+    );
     const g = m.get(anahtar) ?? {
       anahtar, ad: k.name, yon, toplam: 0, kayitlar: [],
-      oneri: oneriler.get(anahtar)?.cat ?? null,
+      oneri: oneriler.get(anahtar)?.cat ?? adEsi?.id ?? null,
       kaynak: k.tur === "kart" ? "kart" as GrupKaynak : "hesap" as GrupKaynak, kaynakAdi: k.ek,
     };
     g.toplam += Math.abs(k.amount);
@@ -205,17 +211,37 @@ export function KategorileModal(
                 <div style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.ad}</div>
                 <div style={{ fontSize: 11, color: T.mut }}>
                   {g.kaynakAdi} · {g.kayitlar.length} kayıt · {g.yon === "gelir" ? "gelir" : "gider"}
-                  {g.oneri != null && durum == null && !secim[g.anahtar] ? " · önerildi" : ""}
                 </div>
               </div>
               <span style={{ ...css.mono, fontSize: 13, flexShrink: 0 }}>{fmtMoney(g.toplam, "TRY", true)}</span>
+              {/* Kontroller tek kapta: öneri düğmesi ile seçici birlikte sarmalı, yoksa dar
+                  ekranda kısa adlı satırda düğme başlığın yanına, uzun adlıda alta düşüyor ve
+                  liste dişli görünüyordu. */}
+              <div style={{ display: "flex", gap: 8, flex: "1 1 200px", justifyContent: "flex-end" }}>
               {durum === "bitti"
                 ? <span style={{ fontSize: 12, color: T.pos, flexShrink: 0, minWidth: 96, textAlign: "right" }}>✓ yazıldı</span>
-                : (
+                : (<>
+                  {/* Öneri ÖNDEN SEÇİLİ GÖSTERİLMEZ: dolu bir seçici kayıtlı kategoriden ayırt
+                      edilemiyordu ("kategorisi dolu görünüyor ama kategorisiz listesinde" —
+                      kullanıcı geri bildirimi). Öneri artık açık bir EYLEM: tek dokunuşla yazar,
+                      dokunulmadıkça hiçbir şey değişmez (Faz 36'nın "öneri kayıt yazmaz" kuralı
+                      ekranda da böyle görünmeli). */}
+                  {g.oneri != null && !secim[g.anahtar] && (
+                    <button type="button" disabled={durum === "calisiyor"}
+                      onClick={() => uygula(g, String(g.oneri))}
+                      title="önerilen kategoriyi bu adın tüm kayıtlarına yaz"
+                      style={{
+                        flexShrink: 0, padding: "6px 10px", borderRadius: 8, cursor: "pointer",
+                        background: "transparent", border: `1px solid ${T.acc}`, color: T.acc,
+                        fontSize: 12, fontFamily: T.disp, fontWeight: 700,
+                      }}>
+                      {data.categories.find((c) => c.id === g.oneri)?.name ?? "öneri"} ✓
+                    </button>
+                  )}
                   <select
                     style={{ ...css.input, width: "auto", flex: "0 1 150px", padding: "6px 8px", fontSize: 12.5 }}
                     disabled={durum === "calisiyor"}
-                    value={secim[g.anahtar] ?? (g.oneri != null ? String(g.oneri) : "")}
+                    value={secim[g.anahtar] ?? ""}
                     onChange={(e) => uygula(g, e.target.value)}
                   >
                     <option value="">Kategori seç…</option>
@@ -223,7 +249,8 @@ export function KategorileModal(
                       .filter((c: Category) => c.kind === (g.yon === "gelir" ? "income" : "expense"))
                       .map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </select>
-                )}
+                </>)}
+              </div>
             </div>
           );
         })}
