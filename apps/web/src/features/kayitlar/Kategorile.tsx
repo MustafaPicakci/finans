@@ -62,16 +62,19 @@ export function kategorisizGruplar(data: AllData, { baslangic, sorgu, ekstreTxId
   }
 
   /* Öneri havuzu: aynı adla daha önce KATEGORİLENMİŞ kayıtların en yenisi. Kart ve hesap
-     kayıtları ortak havuz — "Migros"u hesaptan kategorilediysen kart harcaması da onu önerir. */
+     kayıtları ortak havuz — "Migros"u hesaptan kategorilediysen kart harcaması da onu önerir.
+     Anahtar GRUPLARLA AYNI olmalı (`yön|ad`): yalnız ada göre anahtarlanınca bir gelir grubuna
+     gider kategorisi önerilebiliyordu; satır "· önerildi" yazarken seçici BOŞ kalıyordu, çünkü
+     o kategori gelir listesinde yok. */
   const oneriler = new Map<string, { date: string; cat: number }>();
-  const gor = (name: string, date: string, cat: number | null | undefined) => {
+  const gor = (name: string, date: string, amount: number, kart: boolean, cat: number | null | undefined) => {
     if (cat == null) return;
-    const k = normName(name);
+    const k = `${kart || amount < 0 ? "gider" : "gelir"}|${normName(name)}`;
     const v = oneriler.get(k);
     if (!v || date > v.date) oneriler.set(k, { date, cat });
   };
-  data.card_txs.forEach((c) => gor(c.name, c.date, c.category_id));
-  data.transactions.forEach((t) => gor(t.name, t.date, t.category_id));
+  data.card_txs.forEach((c) => gor(c.name, c.date, -Math.abs(c.amount), true, c.category_id));
+  data.transactions.forEach((t) => gor(t.name, t.date, t.amount, false, t.category_id));
 
   const m = new Map<string, Grup>();
   for (const k of ham) {
@@ -79,7 +82,7 @@ export function kategorisizGruplar(data: AllData, { baslangic, sorgu, ekstreTxId
     const anahtar = `${yon}|${normName(k.name)}`;
     const g = m.get(anahtar) ?? {
       anahtar, ad: k.name, yon, toplam: 0, kayitlar: [],
-      oneri: oneriler.get(normName(k.name))?.cat ?? null,
+      oneri: oneriler.get(anahtar)?.cat ?? null,
     };
     g.toplam += Math.abs(k.amount);
     g.kayitlar.push(k);
@@ -125,10 +128,16 @@ export function KategorileModal(
         }
       }
       setKaydedilen((x) => ({ ...x, [g.anahtar]: "bitti" }));
-      reload();
     } catch (e) {
       setKaydedilen((x) => { const y = { ...x }; delete y[g.anahtar]; return y; });
-      setHata(`"${g.ad}" kaydedilemedi: ${e instanceof Error ? e.message : "bilinmeyen hata"}`);
+      setHata(`"${g.ad}" kaydedilemedi: ${e instanceof Error ? e.message : "bilinmeyen hata"}`
+        + " — yazılabilenler kaydedildi, liste tazelendi.");
+    } finally {
+      /* reload HER durumda: döngü ortasında hata alınırsa (ör. 40 kayıtlık bir grupta dakikalık
+         istek sınırına takılmak) bir kısmı YAZILMIŞ olur; tazelemeden dönersek hem modal hem
+         panel sayacı o grubu hâlâ tamamen kategorisiz gösterir ve kullanıcı yazılmış kayıtları
+         ikinci kez yazmaya çalışır. */
+      reload();
     }
   };
 
@@ -137,7 +146,8 @@ export function KategorileModal(
       <div style={{ fontSize: 12.5, color: T.mut, marginBottom: 10, lineHeight: 1.5 }}>
         Aynı adlı kayıtlar tek satırda toplandı — seçtiğin kategori o adın <b>tüm</b> kayıtlarına
         yazılır ve satır listeden düşer. Yanlış seçersen kaydı aşağıdaki listeden düzenleyebilirsin.
-        Ekstre ödemeleri burada yok (onlar harcama değil, kart borcunun kapanışı).
+        Liste <b>seçili dönemi</b> kapsar (üstteki şerit) — daha eskileri de düzeltmek için dönemi
+        "Tümü" yap. Ekstre ödemeleri burada yok (onlar harcama değil, kart borcunun kapanışı).
       </div>
 
       {gruplar.length === 0

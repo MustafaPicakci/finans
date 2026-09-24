@@ -186,8 +186,9 @@ export const READ_TOOLS: ReadTool[] = [
       "temel='tuketim' (varsayılan): kart harcamaları harcandığı gün tam tutarıyla sayılır, ekstre " +
       "ödemeleri sayılmaz (aynı para iki kez sayılmasın). temel='nakit': yalnız hesaptan geçenler " +
       "(ekstre ödemesi dahil, kart harcaması hariç). " +
-      "grup ile kırılım al: 'ay' (aylık karşılaştırma), 'kategori' (kart harcamasının kategorisi YOKTUR, " +
-      "tamamı tek kovada durur), 'kart'. Kartın hangi ekstreye ne yansıdığı BAŞKA bir soru → kart_ekstreleri.",
+      "grup ile kırılım al: 'ay' (aylık karşılaştırma), 'kategori' (kart harcaması da kategorisine " +
+      "girer; kategorisi GİRİLMEMİŞ olanlar tek kovada toplanır ve bunu 'uyari' söyler), 'kart'. " +
+      "Kartın hangi ekstreye ne yansıdığı BAŞKA bir soru → kart_ekstreleri.",
     parameters: {
       type: "object",
       properties: {
@@ -204,21 +205,28 @@ export const READ_TOOLS: ReadTool[] = [
       const bitis = a.bitis ? String(a.bitis) : bugun;
       /* Tarih süzgeci SQL'de: engine zaten yeniden süzüyor ama bütün defteri belleğe çekmenin
          anlamı yok (transactions/card_txs zamanla monoton büyür). */
-      const [transactions, card_txs, categories, cards, ekstre] = await Promise.all([
+      /* `SELECT *` bilinçli (Faz 41 gözden geçirmesi): burada kolonlar ELLE sayılıyordu ve Faz
+         39'da eklenen `card_txs.category_id` bu listeye girmedi — asistan her kart harcamasını
+         kategorisiz görüyor, ekrandaki panel doğru rakamı veriyordu. Yani "asistanın rakamı
+         ekranla tanım olarak aynıdır" güvencesi sessizce kırılmıştı. Kolon listesi tutmak,
+         engine'in sözleşmesini İKİNCİ bir yerde tekrarlamaktır; `/api/all`'ın yükleyicisi
+         (data.ts) de bu yüzden `SELECT *` kullanıyor. Tarih süzgeci kalıyor: bütün defteri
+         belleğe çekmenin anlamı yok. */
+      const [transactions, card_txs, categories, cards, accounts, ekstre] = await Promise.all([
         db.all<Transaction>(
-          "SELECT id, date, name, amount, category_id, account_id FROM transactions WHERE user_id=? AND date BETWEEN ? AND ?",
-          uid, baslangic, bitis),
+          "SELECT * FROM transactions WHERE user_id=? AND date BETWEEN ? AND ?", uid, baslangic, bitis),
         db.all<CardTx>(
-          "SELECT id, card_id, date, name, amount, installments FROM card_txs WHERE user_id=? AND date BETWEEN ? AND ?",
-          uid, baslangic, bitis),
+          "SELECT * FROM card_txs WHERE user_id=? AND date BETWEEN ? AND ?", uid, baslangic, bitis),
         db.all<Category>("SELECT id, name, kind, color FROM categories WHERE user_id=?", uid),
         db.all<Card>("SELECT * FROM cards WHERE user_id=?", uid),
+        // yalnız metin süzgeci için: arama hesap adını da taramalı (bkz. harcama.ts HarcamaVeri)
+        db.all<{ id: number; name: string }>("SELECT id, name FROM accounts WHERE user_id=?", uid),
         /* Ekstre ödemesi olan transaction id'leri. Engine bunu adından ÇIKARAMAZ ("Akbank
            ekstresi" elle de yazılabilir), kaynağı `statement_payments.tx_id`dir. */
         db.all<{ tx_id: number }>("SELECT tx_id FROM statement_payments WHERE user_id=? AND tx_id IS NOT NULL", uid),
       ]);
       return harcamaOzeti(
-        { transactions, card_txs, categories, cards, ekstreTxIds: ekstre.map((e) => e.tx_id) },
+        { transactions, card_txs, categories, cards, accounts, ekstreTxIds: ekstre.map((e) => e.tx_id) },
         {
           baslangic, bitis,
           temel: (a.temel as HarcamaTemeli) ?? "tuketim",

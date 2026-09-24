@@ -59,20 +59,30 @@ export function HarcamaOzetiKarti(
     && data.statement_payments.length > 0;
 
   const o = useMemo(() => harcamaOzeti(
-    { transactions: data.transactions, card_txs: data.card_txs, categories: data.categories, cards: data.cards, ekstreTxIds },
+    {
+      transactions: data.transactions, card_txs: data.card_txs, categories: data.categories,
+      /* accounts YALNIZ metin süzgeci için: alttaki liste hesap adını da tarıyor, bu fonksiyon
+         taramıyordu — paylaşılan arama kutusu iki yarıyı farklı satır kümesine süzüyordu. */
+      cards: data.cards, accounts: data.accounts, ekstreTxIds,
+    },
     { baslangic: baslangic || "0000-01-01", bitis: bugun(), temel, grup, metin: sorgu },
-  ), [data.transactions, data.card_txs, data.categories, data.cards, ekstreTxIds, baslangic, sorgu, temel, grup]);
+  ), [data.transactions, data.card_txs, data.categories, data.cards, data.accounts, ekstreTxIds, baslangic, sorgu, temel, grup]);
 
-  /* Kırılım listesi kategori/kart sayısıyla sınırlı (monoton büyümez) ama "aya göre" + "Tümü"
-     dönemi uzun bir liste üretebilir; dilim o yüzden var. Süzgeç değişince başa sarar. */
   /* Düğmenin sayısı modalın listesiyle aynı fonksiyondan gelir (bkz. kategorisizGruplar). */
   const kategorisiz = useMemo(
     () => kategorisizGruplar(data, { baslangic, sorgu, ekstreTxIds }),
     [data, baslangic, sorgu, ekstreTxIds],
   );
 
-  const s = useSayfalama(o.kalemler, 8, `${temel}|${grup}|${baslangic}|${sorgu}`);
-  const enBuyuk = o.kalemler.reduce((m, k) => Math.max(m, k.gider), 0);
+  /* Kırılım listesi kategori/kart sayısıyla sınırlı (monoton büyümez) ama "aya göre" + "Tümü"
+     uzun bir liste üretebilir; dilim o yüzden var, süzgeç değişince başa sarar.
+     "ay" TERS ÇEVRİLİR: engine kronolojik döndürür (sıralanabilir olması bilinçli) ama dilim
+     baştan alındığı için "1 yıl"/"Tümü" seçilince kart EN ESKİ 8 ayı gösteriyor, içinde
+     bulunulan ayı "daha fazla"nın arkasına saklıyordu — üstelik etiket "daha eski" diyorken
+     açılan aylar daha YENİydi. Alttaki kayıt listesi de yeniden eskiye akıyor. */
+  const kalemler = useMemo(() => (grup === "ay" ? [...o.kalemler].reverse() : o.kalemler), [o.kalemler, grup]);
+  const s = useSayfalama(kalemler, 8, `${temel}|${grup}|${baslangic}|${sorgu}`);
+  const enBuyuk = kalemler.reduce((m, k) => Math.max(m, k.gider), 0);
 
   return (
     <div style={css.card}>
@@ -102,7 +112,7 @@ export function HarcamaOzetiKarti(
         </select>
       </FiltreSeridi>
 
-      {o.kalemler.length === 0
+      {kalemler.length === 0
         ? <div style={{ fontSize: 13, color: T.mut, padding: "10px 0" }}>Bu süzgeçle harcama yok.</div>
         : s.gorunen.map((k) => (
           <div key={k.ad} style={{ padding: "7px 0", borderBottom: `1px solid ${T.line}` }}>
@@ -128,7 +138,8 @@ export function HarcamaOzetiKarti(
             </div>
           </div>
         ))}
-      <DahaFazla s={s} ad="kalem" />
+      {/* "ay" zamansal (yeniden eskiye) → "daha eski"; kategori/kart tutara göre → "daha fazla" */}
+      <DahaFazla s={s} ad="kalem" yon={grup === "ay" ? "eski" : "fazla"} />
 
       {/* `uyari` rakamın ANLAMINI değiştirir (hangi temel, ne elendi, ne eksik) — katlanmaz,
           asistanın cevabında da aynen aktarılıyor (Faz 35 kuralı). */}

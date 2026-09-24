@@ -44,6 +44,13 @@ export type HarcamaGrup = "yok" | "ay" | "kategori" | "kart";
 /** Özetin ihtiyaç duyduğu veri. `AllData`'nın tamamı gerekmez; `Pick` ile daraltmak hem çağıranın
     ne yüklemesi gerektiğini söyler hem de "bu fonksiyon başka neye bakıyor olabilir"i kapatır. */
 export type HarcamaVeri = Pick<AllData, "transactions" | "card_txs" | "categories" | "cards"> & {
+  /** Yalnız METİN SÜZGECİ için (Faz 41 gözden geçirmesi): Kayıtlar ekranının listesi hesap adını
+      da tarıyor (`Kayit.detay`), bu fonksiyon taramıyordu — aynı arama kutusu üstteki toplamla
+      alttaki listeyi FARKLI satır kümesine süzüyordu ("garanti" yazınca liste dolu, özet boş).
+      Opsiyonel: verilmezse davranış eskisi gibi (ad + kategori). Tip dar tutuldu (`Account[]`
+      değil): burada yalnız AD kullanılıyor, bakiye/tür isteyen bir imza çağıranı gereksiz veri
+      yüklemeye zorlar — asistan bu yüzden `SELECT id, name` ile yetiniyor. */
+  accounts?: readonly { id: number; name: string }[];
   /** Ekstre ödemesi olarak yazılmış `transactions` id'leri (`statement_payments.tx_id`).
       DIŞARIDAN gelir çünkü `AllData.statement_payments` yalnız (card_id, due) taşır — engine
       bir ekstre ödemesini adından ayırt edemez ("Akbank ekstresi" elle de yazılabilir). */
@@ -107,6 +114,7 @@ export function harcamaOzeti(veri: HarcamaVeri, s: HarcamaSecenek): HarcamaOzeti
 
   const katAdi = new Map(veri.categories.map((c) => [c.id, c.name]));
   const kartAdi = new Map(veri.cards.map((c) => [c.id, c.name]));
+  const hesapAdi = new Map((veri.accounts ?? []).map((a) => [a.id, a.name]));
   const ekstre = new Set(veri.ekstreTxIds ?? []);
 
   let gider = 0, gelir = 0, adet = 0;
@@ -131,7 +139,8 @@ export function harcamaOzeti(veri: HarcamaVeri, s: HarcamaSecenek): HarcamaOzeti
       haricEkstre += Math.abs(t.amount);
       continue;
     }
-    if (metin && !metinEsler(`${t.name} ${kategori}`, metin)) continue;
+    const hesap = t.account_id != null ? hesapAdi.get(t.account_id) ?? "" : "";
+    if (metin && !metinEsler(`${t.name} ${kategori} ${hesap}`, metin)) continue;
     adet++;
     if (t.amount < 0) {
       gider += -t.amount;

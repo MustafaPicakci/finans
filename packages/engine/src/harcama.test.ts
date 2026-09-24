@@ -185,6 +185,17 @@ describe("harcamaOzeti", () => {
   });
 
   /* ————— metin süzgeci ————— */
+  it("hesap adıyla da aranabilir (ekrandaki liste onu tarıyordu, özet taramıyordu)", () => {
+    const v = veri({
+      accounts: [{ id: 1, name: "Garanti Vadesiz" }],
+      transactions: [tx(1, "2026-03-05", "Market", -100), { ...tx(2, "2026-03-06", "Kira", -5000), account_id: 2 }],
+    });
+    const o = harcamaOzeti(v, { ...AY, metin: "garanti" });
+    expect(o.gider).toBe(100); // yalnız hesabı Garanti olan kayıt
+    // accounts verilmezse eski davranış: hesap adı taranmaz, eşleşme çıkmaz
+    expect(harcamaOzeti({ ...v, accounts: undefined }, { ...AY, metin: "garanti" }).gider).toBe(0);
+  });
+
   it("kart harcaması KATEGORİ adıyla da bulunur (gelir-giderde zaten öyleydi)", () => {
     const o = harcamaOzeti(veri({
       categories: [kat(1, "Ulaşım")],
