@@ -187,7 +187,7 @@ Seçilen model **function calling** desteklemek zorundadır (asistanın tek işi
 
 Render'ın ücretsiz katmanı **15 dakika gelen istek olmazsa** süreci uyutur; sonraki ilk istek 30-60 saniye bekler. Panel için katlanılır, ama "harcama SMS'ini paylaş → kaydet" akışını kullanılamaz hâle getirir. İki katmanlı çözüm:
 
-**1. Uygulamanın kendini uyanık tutması (kodda, hazır).** `KEEPALIVE_URL` (ya da `APP_URL`) tanımlıysa ve `NODE_ENV=production` ise, uygulama 10 dakikada bir kendi genel adresindeki `/api/health` ucunu yoklar. Bu Render'ın saydığı türden gelen trafiktir, yani süreç uyumaz. **Ama yalnız uyanık tutar, uyandırmaz:** deploy, çökme ya da kota bitimiyle süreç bir kez uyursa kendi cron'u da durmuş olur.
+**1. Uygulamanın kendini uyanık tutması (kodda, hazır).** `KEEPALIVE_URL` (ya da `APP_URL`) tanımlıysa ve `NODE_ENV=production` ise, uygulama 10 dakikada bir kendi genel adresindeki `/api/ping` ucunu yoklar (kasıtlı olarak `/api/health` **değil**: sağlık ucu veritabanına `SELECT 1` atar ve Neon gibi "boşta uyuyan" bir Postgres'te her yoklama compute'u en az 5 dakika uyandırır — yani Render'ın uyku sorununu veritabanı kotasından ödemek olurdu. `/api/ping` yalnız `{ok:true}` döner). Bu Render'ın saydığı türden gelen trafiktir, yani süreç uyumaz. **Ama yalnız uyanık tutar, uyandırmaz:** deploy, çökme ya da kota bitimiyle süreç bir kez uyursa kendi cron'u da durmuş olur.
 
 **2. Dışarıdan uptime monitörü (asıl güvence, 2 dakikalık kurulum).** Ücretsiz seçenekler: [cron-job.org](https://cron-job.org), [UptimeRobot](https://uptimerobot.com), [Better Stack](https://betterstack.com). Kurulum aynı:
 

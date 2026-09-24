@@ -243,8 +243,7 @@ api.post("/auth/resend-verify", async (c) => {
 });
 
 /* ---- sağlık ucu (Faz 23) — GUARD'TAN ÖNCE, bilinçli olarak herkese açık ----
-   İki iş görür: (1) dış uptime monitörünün yokladığı adres, (2) uygulamanın kendini
-   uyanık tutmak için attığı ping'in hedefi. Veri sızdırmaz: yalnız süreç ve DB canlı mı.
+   DIŞ uptime monitörünün yokladığı adres. Veri sızdırmaz: yalnız süreç ve DB canlı mı.
    DB'ye erişilemiyorsa 503 döner — monitör "ayakta ama kullanılamaz" durumunu da yakalasın
    (yaşandı: uygulama çalışıyordu, Postgres kapalıydı, hata 'Sunucu hatası' diye görünüyordu). */
 api.get("/health", async (c) => {
@@ -252,6 +251,17 @@ api.get("/health", async (c) => {
   try { await db.get("SELECT 1 AS ok"); } catch { return c.json({ ok: false, db: false }, 503); }
   return c.json({ ok: true, db: true, ms: Date.now() - t0 });
 });
+
+/* ---- uyanık tutma ucu — /health'in DB'ye DOKUNMAYAN kardeşi, guard'tan önce ----
+   Kendi kendine attığımız keepalive ping'i (aşağıda) eskiden /health'i yokluyordu ve bu
+   YANLIŞ HEDEFTİ: Render'ın süreci uyutmaması için gereken tek şey GELEN HTTP trafiğidir,
+   DB'nin yoklanması değil. Ama /health'in `SELECT 1`'i Neon'un compute'unu uyandırıyordu ve
+   Neon uyandığı her seferde en az 5 dk açık kalıyor (scale-to-zero eşiği) — yani 10 dakikada
+   bir ping, ücretsiz planın aylık compute saatinin yarısını Render'ın uyku sorununa harcıyordu
+   (ölçüldü: kota ayın ortasında bitti). Burada sorgu YOK, bu yüzden DB uyanmaz.
+   /health olduğu gibi kaldı: onun işi zaten "DB canlı mı" demek ve onu DIŞ monitör yoklar
+   (tetiklenme sıklığı bizim değil, monitörün kararı). */
+api.get("/ping", (c) => c.json({ ok: true }));
 
 /* ---- guard: bundan sonraki tüm /api rotaları geçerli oturum ister ---- */
 api.use("*", async (c, next) => {
@@ -1324,7 +1334,8 @@ cron.schedule("*/15 * * * *", runScheduledJobs);
    Render ücretsiz katmanı 15 dk GELEN İSTEK olmazsa süreci uyutur; sonraki ilk istek 30-60 sn
    bekler. Telefondan "SMS paylaş → kaydet" akışı bu beklemeyle kullanılamaz hâle geliyordu.
    Kendi genel adresimize 10 dakikada bir istek atmak bunu önler (istek internetten döndüğü için
-   Render'ın saydığı türden gelen trafiktir).
+   Render'ın saydığı türden gelen trafiktir). Hedef `/api/ping` — DB'ye dokunmayan uç; gerekçesi
+   orada yazılı (yanlış hedef seçmek Neon'un aylık compute kotasını yiyordu).
    DÜRÜST KISIT: bu yalnız UYANIK TUTAR, uyandırmaz — süreç bir kez uykuya dalarsa (deploy, çökme,
    kotanın bitmesi) kendi cron'u da durmuş olur ve onu ancak DIŞARIDAN bir istek uyandırır. Asıl
    güvence bu yüzden dış bir uptime monitörüdür (bkz. README); bu ping onun tamamlayıcısı.
@@ -1332,11 +1343,11 @@ cron.schedule("*/15 * * * *", runScheduledJobs);
 const keepaliveUrl = (process.env.KEEPALIVE_URL || process.env.APP_URL || "").replace(/\/+$/, "");
 if (isProd && keepaliveUrl) {
   cron.schedule("*/10 * * * *", () => {
-    fetch(`${keepaliveUrl}/api/health`, { signal: AbortSignal.timeout(20_000) })
-      .then((r) => { if (!r.ok) console.warn(`[keepalive] sağlık ucu ${r.status} döndü`); })
+    fetch(`${keepaliveUrl}/api/ping`, { signal: AbortSignal.timeout(20_000) })
+      .then((r) => { if (!r.ok) console.warn(`[keepalive] ping ucu ${r.status} döndü`); })
       .catch((e: Error) => console.warn(`[keepalive] ping başarısız: ${e.message}`));
   });
-  console.log(`[keepalive] 10 dk'da bir ${keepaliveUrl}/api/health yoklanacak`);
+  console.log(`[keepalive] 10 dk'da bir ${keepaliveUrl}/api/ping yoklanacak`);
 }
 
 const port = Number(process.env.PORT || 8787);
