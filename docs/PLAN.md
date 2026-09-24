@@ -341,6 +341,15 @@ kopya bulması, toplu kategorileme). Stub'a banka metni gibi bir fikstür eklend
 ("MIGROS MARKET ALISVERISI") — 390px'te satırın artık "· önerildi" dediği ve seçicinin "Market"
 ile dolu geldiği çekimle doğrulandı.
 
+**Faz 41.3 — "kart harcamaları dışında şeyler de geliyor" (kullanıcı geri bildirimi, canlıdan).**
+Modal kategorisiz HESAP işlemlerini de topluyor ve bu doğru: onlar da kırılımda "(kategorisiz)"
+kovasına düşüyor, yani kapsam dışı bırakmak rakamı eksik bırakırdı. Kusur kapsamda değil
+SUNUMDAYDI — satır kaynağını hiç yazmıyordu (`ek` alanı toplanıyor ama render edilmiyordu), o
+yüzden panelin kart uyarısından gelen kullanıcı listede "Maaş" görünce ne olduğunu anlamıyordu.
+Satır artık kart/hesap adını yazıyor, modalın içine sayaçlı bir kaynak süzgeci geldi
+(Hepsi | Kart harcaması | Hesap işlemi) ve bu turda uzayan yedi satırlık kapsam açıklaması
+`Aciklama` arkasına alındı (Faz 24 kural 3) — 390px'te listeyi ekranın yarısına itiyordu.
+
 Doğrulama: `pnpm build` temiz, 326 engine (+3: hesap adıyla arama, I/ı katlaması, ASCII katlama)
 + 29 sunucu testi yeşil. Mobil 390px'te modal iki hâliyle çekildi —
 dolu liste ve atama SONRASI (satır düştü, sayaç "hepsi kategorilendi", panelin kategorisiz uyarısı

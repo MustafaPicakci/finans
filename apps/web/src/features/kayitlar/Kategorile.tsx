@@ -2,7 +2,7 @@ import React, { useMemo, useState } from "react";
 import { metinEsler, type AllData, type Category } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, fmtMoney } from "../../theme";
-import { Modal, useSayfalama, DahaFazla } from "../../ui";
+import { Modal, FiltreSeridi, Aciklama, useSayfalama, DahaFazla } from "../../ui";
 import { normName } from "../forms/recall";
 
 /* ————— TOPLU KATEGORİLEME (Faz 41) —————
@@ -32,7 +32,14 @@ type Kayit =
   | { tur: "kart"; id: number; date: string; name: string; amount: number; ek: string }
   | { tur: "islem"; id: number; date: string; name: string; amount: number; ek: string; account_id: number | null };
 
-export type Grup = { anahtar: string; ad: string; yon: "gider" | "gelir"; toplam: number; kayitlar: Kayit[]; oneri: number | null };
+export type GrupKaynak = "kart" | "hesap" | "karisik";
+export type Grup = {
+  anahtar: string; ad: string; yon: "gider" | "gelir"; toplam: number; kayitlar: Kayit[];
+  oneri: number | null;
+  /** hangi kart/hesap (tek kaynaktan geliyorsa adı, karışıksa "kart + hesap") — satırda YAZILIR:
+      kaynağı göstermeyen satır kafa karıştırıyordu ("Maaş" neden burada?). */
+  kaynak: GrupKaynak; kaynakAdi: string;
+};
 
 export type Kapsam = { baslangic: string; sorgu: string; ekstreTxIds: number[] };
 
@@ -83,9 +90,13 @@ export function kategorisizGruplar(data: AllData, { baslangic, sorgu, ekstreTxId
     const g = m.get(anahtar) ?? {
       anahtar, ad: k.name, yon, toplam: 0, kayitlar: [],
       oneri: oneriler.get(anahtar)?.cat ?? null,
+      kaynak: k.tur === "kart" ? "kart" as GrupKaynak : "hesap" as GrupKaynak, kaynakAdi: k.ek,
     };
     g.toplam += Math.abs(k.amount);
     g.kayitlar.push(k);
+    const bu: GrupKaynak = k.tur === "kart" ? "kart" : "hesap";
+    if (g.kaynak !== bu) { g.kaynak = "karisik"; g.kaynakAdi = "kart + hesap"; }
+    else if (g.kaynakAdi !== k.ek) g.kaynakAdi = `${g.kaynak === "kart" ? "kart" : "hesap"} (${new Set(g.kayitlar.map((x) => x.ek)).size})`;
     m.set(anahtar, g);
   }
   /* Büyükten küçüğe: kategorisiz kalan paranın en büyük parçası en tepede — birkaç satır
@@ -97,14 +108,25 @@ export function KategorileModal(
   { data, reload, onClose, baslangic, sorgu, ekstreTxIds }:
   { data: AllData; reload: () => void; onClose: () => void } & Kapsam,
 ) {
+  /* Kaynak süzgeci: modal, kategorisiz HESAP işlemlerini de topluyor (onlar da kırılımda
+     "(kategorisiz)" kovasına düşüyor, yani listede olmaları doğru) — ama panelin uyarısı kart
+     harcamasından söz ettiği için "Maaş" satırını görmek şaşırtıyordu. Çözüm satırı gizlemek
+     değil KAYNAĞINI YAZMAK + tek dokunuşla daraltabilmek. */
+  const [kaynak, setKaynak] = useState<"hepsi" | "kart" | "hesap">("hepsi");
   const [secim, setSecim] = useState<Record<string, string>>({});
   const [kaydedilen, setKaydedilen] = useState<Record<string, "calisiyor" | "bitti">>({});
   const [hata, setHata] = useState<string | null>(null);
 
-  const gruplar = useMemo(
+  const tumGruplar = useMemo(
     () => kategorisizGruplar(data, { baslangic, sorgu, ekstreTxIds }),
     [data, baslangic, sorgu, ekstreTxIds],
   );
+  const gruplar = useMemo(
+    () => (kaynak === "hepsi" ? tumGruplar : tumGruplar.filter((g) => g.kaynak === kaynak || g.kaynak === "karisik")),
+    [tumGruplar, kaynak],
+  );
+  const sayi = (k: "hepsi" | "kart" | "hesap") =>
+    k === "hepsi" ? tumGruplar.length : tumGruplar.filter((g) => g.kaynak === k || g.kaynak === "karisik").length;
 
   const s = useSayfalama(gruplar, 12, `${baslangic}|${sorgu}`);
   const kalan = gruplar.filter((g) => kaydedilen[g.anahtar] !== "bitti").length;
@@ -143,15 +165,35 @@ export function KategorileModal(
 
   return (
     <Modal title="Kategorisiz kayıtlar" onClose={onClose}>
-      <div style={{ fontSize: 12.5, color: T.mut, marginBottom: 10, lineHeight: 1.5 }}>
+      {/* Faz 24 kural 3: bir kez okunan uzun metin katlanır. Görünür kalan TEK cümle, eylemin
+          ne yaptığını söyleyen cümledir (seçim tüm gruba yazılır) — gerisi kapsam açıklaması
+          ve ⓘ arkasında duruyor; yedi satırlık paragraf listeyi ekranın yarısına itiyordu. */}
+      <div style={{ fontSize: 12.5, color: T.mut, lineHeight: 1.5 }}>
         Aynı adlı kayıtlar tek satırda toplandı — seçtiğin kategori o adın <b>tüm</b> kayıtlarına
-        yazılır ve satır listeden düşer. Yanlış seçersen kaydı aşağıdaki listeden düzenleyebilirsin.
-        Liste <b>seçili dönemi</b> kapsar (üstteki şerit) — daha eskileri de düzeltmek için dönemi
-        "Tümü" yap. Ekstre ödemeleri burada yok (onlar harcama değil, kart borcunun kapanışı).
+        yazılır.
       </div>
+      <Aciklama k="toplu-kategori" label="listede ne var, ne yok?">
+        Liste <b>seçili dönemi</b> kapsar (üstteki şerit) — daha eskileri de düzeltmek için dönemi
+        "Tümü" yap. Kart harcamalarının yanında <b>kategorisiz hesap işlemleri</b> de burada
+        (maaş, kira…): onlar da kırılımda "(kategorisiz)" kovasına düşüyor — yalnız kartı görmek
+        için üstteki süzgeci kullan. Ekstre ödemeleri listede yok (harcama değil, kart borcunun
+        kapanışı). Yanlış seçersen kaydı Kayıtlar listesinden düzenleyebilirsin.
+      </Aciklama>
+
+      <FiltreSeridi>
+        {([["hepsi", "Hepsi"], ["kart", "Kart harcaması"], ["hesap", "Hesap işlemi"]] as const).map(([k, etiket]) => (
+          <button key={k} type="button" onClick={() => setKaynak(k)} style={{
+            padding: "6px 10px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: T.disp,
+            fontWeight: kaynak === k ? 700 : 500,
+            background: kaynak === k ? T.panel : "transparent",
+            border: `1px solid ${kaynak === k ? T.line : "transparent"}`,
+            color: kaynak === k ? T.acc : T.mut,
+          }}>{etiket} ({sayi(k)})</button>
+        ))}
+      </FiltreSeridi>
 
       {gruplar.length === 0
-        ? <div style={{ fontSize: 13, color: T.mut }}>Bu dönemde kategorisiz kayıt yok.</div>
+        ? <div style={{ fontSize: 13, color: T.mut }}>Bu süzgeçle kategorisiz kayıt yok.</div>
         : s.gorunen.map((g) => {
           const durum = kaydedilen[g.anahtar];
           return (
@@ -162,7 +204,7 @@ export function KategorileModal(
               <div style={{ flex: "1 1 150px", minWidth: 0 }}>
                 <div style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.ad}</div>
                 <div style={{ fontSize: 11, color: T.mut }}>
-                  {g.kayitlar.length} kayıt · {g.yon === "gelir" ? "gelir" : "gider"}
+                  {g.kaynakAdi} · {g.kayitlar.length} kayıt · {g.yon === "gelir" ? "gelir" : "gider"}
                   {g.oneri != null && durum == null && !secim[g.anahtar] ? " · önerildi" : ""}
                 </div>
               </div>
