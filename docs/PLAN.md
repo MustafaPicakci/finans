@@ -370,6 +370,34 @@ ve düğme kayboldu). Bunun görülebilmesi için stub'ın `PUT /api/{cardtxs,tr
 yazmaları **gerçekten uygulanır** hâle getirildi — ayar yazmalarında öğrenilen dersin aynısı:
 catch-all `{ok:true}` derse reload eski satırı geri getirir ve "sonrası" hiç denetlenemez.
 
+**Faz 41.5 — keepalive artık DB'yi uyandırmıyor (Neon compute kotası).** Kullanıcı Neon
+dashboard'unda "You've used all of your monthly compute allowance" mesajını gördü ve sordu.
+Teşhis koddan çıktı: **Neon compute'u 5 dk boşta kalınca uyutur, yani DB'ye DOKUNAN her yoklama
+en az 5 dakikalık bir pencere satın alır** — maliyeti belirleyen şey sorgu sayısı değil, *kaç
+kez uyandırıldığı*. İki kaynak vardı ve ikisi de bizimdi: Faz 23'ün keepalive'ı 10 dakikada bir
+`/api/health`'i (yani `SELECT 1`) yokluyordu, `runScheduledJobs` ise 15 dakikada bir dört sorgu
+atıyordu (`refreshAll` portföy boşken bile `SELECT` + fx `UPSERT` yapar). Araları hep ≤10 dk
+olduğu için compute saatte ~40 dk açık kalıyordu: **≈450 compute-saat/ay, ücretsiz kota 191.9.**
+
+Keepalive'ın hedefi baştan yanlıştı ve bu ancak fatura üzerinden görüldü: Render'ın süreci
+uyutmaması için gereken tek şey **gelen HTTP trafiğidir**, DB'nin yoklanması değil — yani
+Render'ın uyku sorununu veritabanı kotasından ödüyorduk. Çözüm sorgusuz bir ikiz uç:
+`GET /api/ping` (guard'tan önce, `{ok:true}`). `/api/health` olduğu gibi kaldı, çünkü onun işi
+zaten "DB canlı mı" demek ve onu **dış** monitör çağırır — sıklığı bizim kararımız değil.
+
+Kalan kaynak (15 dk'lık cron, ≈240 saat/ay) **kullanıcı kararıyla ertelendi**: `*/15` → `*/30`
+tek satırdır, ~120 saate iner ve kaybı yoktur (otonom işlerin telafi pencereleri 45/10 gün,
+BIST fiyatı zaten ~15 dk gecikmeli) — ama kullanıcı "ileride zorunda kalırsak" dedi ve bu
+yazılı duruyor ki kesinti olduğunda ilk hamlenin ne olduğu aranmasın. Kota gerçekten biterse
+belirti nettir: `/api/health` **503**, giriş dahil her şey durur, **veri silinmez**, ayın 1'inde
+kendiliğinden döner.
+
+Doğrulama: `pnpm build` temiz. Yerelde ölçüldü — `/api/ping` 200 `{"ok":true}` (DB'ye gitmiyor),
+`/api/health` `{"ok":true,"db":true,"ms":11}` (davranışı değişmedi), `/api/all` hâlâ **401**
+(guard'tan önce tanımlanan yeni uç başka bir şeyi açmadı). Prod'a push'landı (`f57a175`);
+Manual Deploy edilene dek eski süreç `/health`'i yoklamaya devam eder, yani kotayı rahatlatan an
+deploy anıdır.
+
 ---
 
 ## Doğrulama
@@ -1123,6 +1151,10 @@ Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Faz 0–4
 4. **Makro takvimin yıllık bakımı** (Faz 37): TCMB 2027'nin yalnız ilk yarısını duyurdu, Fed 2027'nin
    tamamını. İkisi yeni takvimi açıklayınca [makro.ts](../packages/engine/src/makro.ts) güncellenmeli —
    ekran son 90 güne girince kendisi uyarır.
+5. **Neon compute kotası** (Faz 41.5): keepalive düzeltildi ama 15 dk'lık `runScheduledJobs`
+   hâlâ ≈240 compute-saat/ay harcıyor, ücretsiz kota 191.9. Kesinti olursa (belirtisi:
+   `/api/health` 503, veri kaybı YOK, ayın 1'inde döner) ilk hamle tek satır: `*/15` → `*/30`.
+   Kullanıcı kararıyla erteli — kendiliğinden gündeme getirilmez.
 
 **Kapsam dışı — kullanıcı kararıyla kapanmış işler.** Burada durmalarının sebebi unutulmaları
 değil, aksine: bir daha gündeme getirilmesinler diye yazılılar. Kullanıcı kendisi açmadıkça
