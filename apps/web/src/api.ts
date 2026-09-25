@@ -62,7 +62,9 @@ export const api = {
      chat yalnız PLAN üretir (hiçbir kayıt oluşmaz); execute kullanıcının onayladığı planı
      uygular. Sohbet artık sunucuda yaşar: geçmiş istekle GİTMEZ, sunucu kendi okur — yani
      mesajlar cihaza bağlı değildir ve istemci uydurma bir "asistan" turu enjekte edemez. */
-  aiStatus: () => fetch("/api/ai/status").then((r) => j<{ enabled: boolean; model: string | null }>(r)),
+  /* `neden`: "anahtar" = sunucuda AI_API_KEY yok, "kapali" = kullanıcı kendi kapattı. İkisi
+     ayrı çünkü arayüzün söyleyeceği şey ayrı (env kurulumu vs geri açma düğmesi). */
+  aiStatus: () => fetch("/api/ai/status").then((r) => j<{ enabled: boolean; model: string | null; neden: "anahtar" | "kapali" | null }>(r)),
   /** Son harekete göre sıralı; sayfalama keyset (son satırın `at` + `id`'si imleçtir) */
   aiKonusmalar: (imlec?: { at: string; id: number }) =>
     fetch(`/api/ai/conversations${imlec ? `?beforeAt=${encodeURIComponent(imlec.at)}&beforeId=${imlec.id}` : ""}`)

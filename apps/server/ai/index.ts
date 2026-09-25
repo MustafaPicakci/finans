@@ -327,8 +327,30 @@ async function gecmisOku(uid: number, convId: number): Promise<ChatTurn[]> {
 /* ---------------- HTTP uçları ---------------- */
 type RateLimiter = (key: string, max: number, windowMs: number) => boolean;
 
+/* Asistan KULLANICI BAŞINA kapatılabilir ve varsayılan AÇIKTIR.
+   Sebep: asistan her istekte hesap/kart/kategori adlarını BAKİYELERİYLE birlikte seçili
+   model sağlayıcısına gönderiyor (context.ts) — arayüz bunu katlamadan söylüyor ama bir
+   TERCİH değildi: env'de anahtar varsa herkes için açıktı ve "ben bunu kullanmıyorum"
+   diyebilmenin yolu yoktu. Ayar `user_settings`'te çünkü tek bir opt-out için tablo
+   açmaya değmez (cash_funds / drip_symbols deseninin aynısı).
+   "0" = kapalı; KAYIT YOKKEN AÇIK sayılır — yani mevcut kullanıcılar için hiçbir şey değişmez. */
+const asistanAcik = async (uid: number): Promise<boolean> => {
+  const r = await db.get<{ value: string }>(
+    "SELECT value FROM user_settings WHERE user_id=? AND key='ai_enabled'", uid,
+  );
+  return r?.value !== "0";
+};
+
 export function mountAi(api: any, deps: { invoke: Invoke; rateLimited: RateLimiter }): void {
-  api.get("/ai/status", (c: any) => c.json({ enabled: !!getProvider(), model: getProvider()?.label ?? null }));
+  /* `neden` şart: "sunucuda anahtar yok" ile "kullanıcı kapattı" tamamen farklı iki durum ve
+     arayüzün söyleyeceği şey de farklı (birinde env kurulumu anlatılır, diğerinde geri açma
+     düğmesi gösterilir). Tek bir `enabled:false` ikisini ayırt edilemez kılıyordu. */
+  api.get("/ai/status", async (c: any) => {
+    const p = getProvider();
+    if (!p) return c.json({ enabled: false, model: null, neden: "anahtar" });
+    if (!(await asistanAcik(c.get("user").id))) return c.json({ enabled: false, model: p.label, neden: "kapali" });
+    return c.json({ enabled: true, model: p.label, neden: null });
+  });
 
   /* ---- konuşmalar ---- */
 
@@ -441,6 +463,11 @@ export function mountAi(api: any, deps: { invoke: Invoke; rateLimited: RateLimit
   api.post("/ai/chat", async (c: any) => {
     const uid = c.get("user").id;
     if (!getProvider()) return c.json({ error: "Asistan yapılandırılmadı (AI_API_KEY eksik)" }, 503);
+    /* Kapatma SUNUCUDA da zorlanır, yalnız arayüzde gizlenmez: ayarın anlamı "verim
+       sağlayıcıya gitmesin" ve veri tam bu uçtan çıkıyor. Yalnız /ai/chat korunur —
+       execute/undo sağlayıcıya hiçbir şey göndermez (onaylanmış planı uygular), onları
+       da kapatmak kapatma anından önce onaylanmış bir planı yarı yolda bırakırdı. */
+    if (!(await asistanAcik(uid))) return c.json({ error: "Asistan kapalı (Hesabım'dan açabilirsin)" }, 403);
     if (deps.rateLimited(`ai:${uid}`, 30, 5 * 60_000)) return c.json({ error: "Çok fazla istek, biraz sonra tekrar dene" }, 429);
     const b = await c.req.json().catch(() => null);
     const text = b && typeof b.message === "string" ? b.message.trim().slice(0, 4000) : "";

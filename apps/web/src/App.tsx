@@ -473,7 +473,7 @@ export default function App() {
               onSellFund={(p: TradePrefill) => setAdd({ kind: "trade", tradePrefill: p })}
               onKurumsalOlay={(p: TradePrefill) => setAdd({ kind: "trade", tradePrefill: p })} />}
             {tab === "hesaplar" && <Hesaplar data={data} reload={reload} />}
-            {tab === "profil" && <Profil user={user} onDeleted={() => { setUser(null); setData(null); }} />}
+            {tab === "profil" && <Profil user={user} data={data} reload={reload} onDeleted={() => { setUser(null); setData(null); }} />}
             {tab === "tanimlar" && <Tanimlar data={data} reload={reload} />}
             {tab === "nakit" && <Nakit days={days} data={data} />}
             {tab === "plan" && <Plan data={data} reload={reload} onRealize={(p) => openAdd("kalem", p)} />}

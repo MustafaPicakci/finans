@@ -58,7 +58,8 @@ export function Asistan({ reload, initialText, onConsumed }: {
   initialText?: string | null;
   onConsumed?: () => void;
 }) {
-  const [status, setStatus] = useState<{ enabled: boolean; model: string | null } | null>(null);
+  type Durum = { enabled: boolean; model: string | null; neden: "anahtar" | "kapali" | null };
+  const [status, setStatus] = useState<Durum | null>(null);
   const [liste, setListe] = useState<AiKonusma[]>([]);
   const [dahaVar, setDahaVar] = useState(false);
   const [listeAcik, setListeAcik] = useState(false);
@@ -114,7 +115,7 @@ export function Asistan({ reload, initialText, onConsumed }: {
       const devam = oturumSohbet && ks.some((k) => k.id === oturumSohbet) ? oturumSohbet : null;
       if (devam) await sohbetYukle(devam);
       else setListeAcik(ks.length > 0 && !paylasimliAcilis.current);
-    }).catch(() => setStatus({ enabled: false, model: null }));
+    }).catch(() => setStatus({ enabled: false, model: null, neden: "anahtar" }));
     return () => { iptal = true; };
   }, [listeYukle, sohbetYukle]);
 
@@ -216,16 +217,37 @@ export function Asistan({ reload, initialText, onConsumed }: {
     send(initialText, true);
   }, [initialText, status, send, onConsumed]);
 
+  /* Kapalı ekranı İKİ HÂLLİ: kullanıcının kendi kapattığı durumda env kurulumunu anlatmak
+     anlamsız (ve "bir şey bozuk" izlenimi verir) — orada gereken tek şey geri açma düğmesi,
+     ve kararı burada da verebilmeli: ayarın yaşadığı yer Hesabım ama kullanıcı asistanı
+     ararken buraya geliyor, "git şu sekmeyi bul" demek gereksiz bir yolculuk. */
   if (status && !status.enabled) {
     return (
       <div style={{ ...css.card }}>
         <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 8 }}>Asistan kapalı</div>
-        <div style={{ fontSize: 13.5, color: T.mut, lineHeight: 1.6 }}>
-          Sunucuda <code style={{ fontFamily: T.mono }}>AI_API_KEY</code> tanımlı değil. Ücretsiz bir anahtarla açabilirsin:
-          Google AI Studio (varsayılan, <code style={{ fontFamily: T.mono }}>AI_PROVIDER=gemini</code>) veya
-          OpenAI uyumlu bir servis (<code style={{ fontFamily: T.mono }}>AI_PROVIDER=openai</code> + <code style={{ fontFamily: T.mono }}>AI_BASE_URL</code>).
-          Ayrıntılar <code style={{ fontFamily: T.mono }}>apps/server/.env.example</code> dosyasında.
-        </div>
+        {status.neden === "kapali" ? (<>
+          <div style={{ fontSize: 13.5, color: T.mut, lineHeight: 1.6, marginBottom: 12 }}>
+            Asistanı Hesabım ekranından kapatmışsın. Açtığında yazdığın mesajlar ve hesap/kart/kategori
+            adların (bakiyelerle birlikte) yanıtı üretmesi için seçili model sağlayıcısına gönderilir.
+          </div>
+          <button style={css.btn} onClick={async () => {
+            await api.put("settings", { ai_enabled: "1" });
+            reload(); // ayar `data.settings`'te de yaşıyor (Hesabım'daki anahtar onu okuyor)
+            setStatus(await api.aiStatus());
+            /* Liste elle yüklenir: açılış efekti `[listeYukle, sohbetYukle]`'ye bağlı, yani
+               status değişince yeniden koşmaz — kapatmadan önce sohbeti olan kullanıcı
+               yoksa boş bir ekrana düşerdi. */
+            const ks = await listeYukle();
+            setListeAcik(!!ks && ks.length > 0);
+          }}>Asistanı aç</button>
+        </>) : (
+          <div style={{ fontSize: 13.5, color: T.mut, lineHeight: 1.6 }}>
+            Sunucuda <code style={{ fontFamily: T.mono }}>AI_API_KEY</code> tanımlı değil. Ücretsiz bir anahtarla açabilirsin:
+            Google AI Studio (varsayılan, <code style={{ fontFamily: T.mono }}>AI_PROVIDER=gemini</code>) veya
+            OpenAI uyumlu bir servis (<code style={{ fontFamily: T.mono }}>AI_PROVIDER=openai</code> + <code style={{ fontFamily: T.mono }}>AI_BASE_URL</code>).
+            Ayrıntılar <code style={{ fontFamily: T.mono }}>apps/server/.env.example</code> dosyasında.
+          </div>
+        )}
       </div>
     );
   }

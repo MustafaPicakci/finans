@@ -209,7 +209,15 @@ createServer(async (req, res) => {
     return json({ user: process.env.CIKIS ? null : { id: 1, email: "demo@finans.local" } });
   }
   if (url.pathname === "/api/all") return json(all);
-  if (url.pathname === "/api/ai/status") return json({ enabled: true, model: "gemini/gemini-3.6-flash (2 anahtar)" });
+  /* Durum ucu gerçek sunucuyla AYNI kuralı uygular (`ai_enabled` yoksa AÇIK, "0" ise kapalı)
+     ve `neden` döner — yoksa Hesabım'daki anahtarı kapatıp Asistan'a bakınca stub "AI_API_KEY
+     eksik" ekranını gösterirdi, yani denetlenmek istenen ekranın yanlış hâli. */
+  if (url.pathname === "/api/ai/status") {
+    const model = "gemini/gemini-3.6-flash (2 anahtar)";
+    return json(all.settings.ai_enabled === "0"
+      ? { enabled: false, model, neden: "kapali" }
+      : { enabled: true, model, neden: null });
+  }
   /* Asistan (Faz 34): sohbet sunucuda yaşadığından stub'ın da bir sohbeti olması gerekir —
      yoksa sekme boş açılır ve mobilde asıl bakılacak şeyler (sohbet listesi, onay kartı,
      mesaj altındaki "geri al") hiç render edilmez. Bellekte küçük bir depo yeter: model

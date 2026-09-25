@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { api } from "../../api";
+import { api, type AllData } from "../../api";
 import { T, css } from "../../theme";
 
 /* ————— HESABIM (KULLANICI hesabı) —————
@@ -10,11 +10,24 @@ import { T, css } from "../../theme";
 
    Ana menüde yer almaz (menü zaten sekiz sekme): kenar çubuğundaki kullanıcı kartından ve
    mobildeki ⋯ menüsünden açılır — yani kullanıcı kimliğinin durduğu yerden. */
-export function Profil({ user, onDeleted }: { user: { email: string }; onDeleted: () => void }) {
+export function Profil({ user, data, reload, onDeleted }: {
+  user: { email: string };
+  data: AllData;
+  reload: () => void;
+  onDeleted: () => void;
+}) {
   const [confirm, setConfirm] = useState(false);
   const [pw, setPw] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+
+  /* Asistan anahtarı: kayıt yokken AÇIK sayılır (sunucudaki `asistanAcik` ile aynı kural —
+     iki yerde iki varsayılan olursa ekran ile davranış ayrışır). */
+  const aiAcik = data.settings.ai_enabled !== "0";
+  const aiDegistir = async (acik: boolean) => {
+    await api.put("settings", { ai_enabled: acik ? "1" : "0" });
+    reload();
+  };
 
   const download = async () => {
     try {
@@ -43,6 +56,22 @@ export function Profil({ user, onDeleted }: { user: { email: string }; onDeleted
           <div style={{ fontSize: 12.5, color: T.mut3, overflow: "hidden", textOverflow: "ellipsis" }}>{user.email}</div>
         </div>
       </div>
+    </div>
+
+    {/* Asistan anahtarı burada, çünkü bu bir GİZLİLİK tercihi: asistanı kullanmak verinin bir
+        kısmının üçüncü bir servise gitmesi demek ve bu ekran "verilerin" ekranı. Varsayılan
+        AÇIK — anahtarın işi asistanı tanıtmak değil, kullanmak istemeyene kapatma yolu vermek. */}
+    <div style={css.card}>
+      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Asistan</div>
+      <div style={{ fontSize: 12.5, color: T.mut, marginBottom: 12, lineHeight: 1.5 }}>
+        Asistanı kullandığında yazdığın mesajlar ve <b>hesap/kart/kategori adların (bakiyelerle birlikte)</b>
+        {" "}yanıtı üretmesi için seçili model sağlayıcısına gönderilir. Kullanmak istemiyorsan kapat —
+        sekme gizlenmez ama sağlayıcıya hiçbir şey gitmez.
+      </div>
+      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: T.text, cursor: "pointer" }}>
+        <input type="checkbox" checked={aiAcik} onChange={(e) => aiDegistir(e.target.checked)} />
+        Asistan açık
+      </label>
     </div>
 
     <div style={css.card}>
