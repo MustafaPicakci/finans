@@ -366,7 +366,8 @@ ALTER TABLE trades ADD CONSTRAINT trades_side_check CHECK (side IN ('ALIŞ','SAT
 -- Faz 16: hesap türü (mevcut hesapların hepsi 'banka' sayılır) + son mutabakat damgası
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'banka';
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS last_recon_date text;
-ALTER TABLE accounts ADD COLUMN IF NOT EXISTS last_recon_balance double precision;
+-- last_recon_balance burada GERİ EKLENMEZ (E2EE aşama 5c): zarfa taşındı; geri eklense her açılışta
+-- boş olarak dönerdi (bkz. check-zarf-sema.ts). CREATE TABLE'da var, çok eski kurulumda yoksa göç atlar.
 -- Faz 6: e-posta doğrulama. ADD ... DEFAULT true → MEVCUT (owner) kullanıcılar doğrulanmış sayılır
 -- (kilitlenmesin); ardından default'u false'a çevir → YENİ kayıtlar aktivasyon ister. İkisi de idempotent.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified boolean NOT NULL DEFAULT true;

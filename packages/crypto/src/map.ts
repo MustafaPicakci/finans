@@ -16,6 +16,17 @@ export const ZARF = {
   portfolios: ["name", "note"],
   oneoffs: ["name", "amount"],
   loans: ["name", "amount", "total"],
+  /* ——— defter grubu (aşama 5c): hepsi account_entries üzerinden birbirine bağlı ——— */
+  accounts: ["name", "last_recon_balance"],
+  account_entries: ["amount", "note"],
+  transactions: ["name", "amount"],
+  card_txs: ["name", "amount", "installments"],
+  cards: ["name", "limit_amount"],
+  transfers: ["amount", "note"],
+  trades: ["qty", "price", "fee"],
+  deposits: ["name", "principal", "rate", "term_days", "withholding"],
+  recurring: ["name"],
+  recurring_amounts: ["amount"],
 } as const satisfies Record<string, readonly string[]>;
 
 export type ZarfliTablo = keyof typeof ZARF;
@@ -40,6 +51,27 @@ export const DUZ: Record<ZarfliTablo, Record<string, string>> = {
   portfolios: {},
   oneoffs: { date: "tarih — projeksiyon/takvim sıralaması; tutar ve ad zarfta" },
   loans: { first_date: "ilk taksit tarihi — takvim; tutar ve ad zarfta" },
+  accounts: { kind: "hesap türü (banka/nakit/aracı) — ikon ve gruplama", last_recon_date: "son mutabakat günü — 'bayat' hatırlatması; tutarı zarfta" },
+  account_entries: {
+    account_id: "FK", date: "tarih — defter sıralaması", kind: "hareket türü (işlem/virman/açılış…) — tutar değil",
+    source_table: "geri alma bununla WHERE yapar (revertEntries) — şifrelenirse düzenle/sil çalışmaz",
+    source_id: "geri alma bununla WHERE yapar (revertEntries)", created_at: "sunucunun yazma damgası",
+  },
+  transactions: { date: "tarih — sıralama, dönem süzgeci", category_id: "FK", account_id: "FK" },
+  card_txs: { card_id: "FK", date: "tarih — ekstreye düşme (kesim günü) hesabı istemcide ama sıralama sunucuda", category_id: "FK" },
+  cards: { statement_day: "kesim günü — ekstre takvimi", due_day: "son ödeme günü — ekstre takvimi", pay_account_id: "FK (ödeme talimatı)" },
+  transfers: { date: "tarih", from_account_id: "FK", to_account_id: "FK" },
+  trades: {
+    date: "tarih", asset_type: "varlık türü — fiyat kaynağı seçimi", side: "işlem türü (ALIŞ/SATIŞ/…) — adet/fiyat değil",
+    symbol: "KULLANICI KARARI: sembol düz — fiyat cron'u neyi çekeceğini buradan bilir", currency: "para birimi — fiyat çevrimi",
+    account_id: "FK", portfolio_id: "FK",
+  },
+  deposits: { open_date: "açılış tarihi — vade takvimi", account_id: "FK" },
+  recurring: {
+    kind: "gelir/gider", day: "ayın günü — takvim", from_month: "yaşam penceresi", to_month: "yaşam penceresi",
+    account_id: "FK", card_id: "FK", category_id: "FK", auto: "otomatik gerçekleştirme bayrağı",
+  },
+  recurring_amounts: { recurring_id: "FK + birincil anahtar", from_month: "BİRİNCİL ANAHTAR — şifreli olsa ON CONFLICT hiç tetiklenmezdi" },
 };
 
 /** Zarf biçimleri. `p1` = DÜZ METİN zarf (aşama 5: tesisat şifrelemeden önce çalışsın,

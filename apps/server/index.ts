@@ -5,7 +5,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { logger } from "hono/logger";
 import cron from "node-cron";
-import { REC_AMOUNT_BEGIN, type Card } from "@finans/engine";
+import { REC_AMOUNT_BEGIN } from "@finans/engine";
 import { db, initDb, nowLocal, todayLocal, TENANT_TABLES, GLOBAL_SETTING_KEYS, type TxClient } from "./db.js";
 import { loadAllData } from "./data.js";
 import { refreshAll, backfillPriceHistory, refreshCorporateActions, refreshCompanyEvents } from "./prices.js";
@@ -422,19 +422,23 @@ function crud(route: string, table: string, cols: Col[]) {
    Aşama 1b'de sunucuda YEDEK hesaplar vardı (asistan tutar göndermiyordu); asistanın döngüsü
    tarayıcıya taşınıp aynı boru hattına bağlanınca (aşama 4–5a) yedekler SİLİNDİ. Şifreli
    dünyada zaten yapamayacaklardı: qty, price, card_txs.amount sunucuya opak olacak.
-   Eksik tutar artık TAHMİN EDİLMEZ, reddedilir — sessizce yanlış hesaplanmış bir tutar,
-   açıkça reddedilmiş bir istekten kötüdür. */
-const istemciTutari = (v: unknown): number | null =>
-  v !== undefined && v !== null && v !== "" && Number.isFinite(Number(v)) ? Number(v) : null;
+   Aşama 5c'de tutarlar ZARFA girdi: sunucu onları artık görmüyor bile — yalnız istemcinin kurduğu
+   zarfları (kayıt + hareket) yazıyor. */
 
-type EntryMeta = { date: string; kind: "islem" | "portfoy" | "mevduat" | "duzeltme" | "acilis" | "virman"; note: string; source_table?: string; source_id?: number };
-async function applyEntry(t: TxClient, uid: number, accountId: number | null, amount: number, m: EntryMeta): Promise<void> {
-  if (accountId == null || !amount) return; // hesapsız kayıt deftere girmez; 0 tutar defteri kirletmez
+/* E2EE aşama 5c: hareketin TUTARI ve NOTU zarfta (`enc`) — istemci kurar (yazim/zarf.ts, notlar
+   sunucunun eskiden ürettikleriyle birebir). Sunucu hareketin yalnız yönlendirmesini bilir:
+   hangi hesap, hangi gün, hangi tür, hangi kaynak kayıt (geri alma bununla çalışır).
+   Zarf yoksa hareket yazılmaz — istemci tutarı 0 olan hareketi zaten göndermez. */
+type EntryMeta = { date: string; kind: "islem" | "portfoy" | "mevduat" | "duzeltme" | "acilis" | "virman"; source_table?: string; source_id?: number };
+async function applyEntry(t: TxClient, uid: number, accountId: number | null, enc: string | null, m: EntryMeta): Promise<void> {
+  if (accountId == null || !enc) return; // hesapsız kayıt deftere girmez
   await t.run(
-    "INSERT INTO account_entries (account_id,date,amount,kind,source_table,source_id,note,created_at,user_id) VALUES (?,?,?,?,?,?,?,?,?)",
-    accountId, m.date, amount, m.kind, m.source_table ?? null, m.source_id ?? null, m.note, nowLocal(), uid,
+    "INSERT INTO account_entries (account_id,date,kind,source_table,source_id,enc,created_at,user_id) VALUES (?,?,?,?,?,?,?,?)",
+    accountId, m.date, m.kind, m.source_table ?? null, m.source_id ?? null, enc, nowLocal(), uid,
   );
 }
+/** İstemcinin gönderdiği zarf: yoksa null, biçimi bozuksa false (uç 400 döner). */
+const zarfAl = (v: unknown): string | null | false => (v === undefined || v === null ? null : zarfGecerli(v) ? (v as string) : false);
 async function revertEntries(t: TxClient, uid: number, sourceTable: string, sourceId: number | string): Promise<void> {
   const rows = await t.all<{ id: number }>(
     "SELECT id FROM account_entries WHERE source_table=? AND source_id=? AND user_id=?",
@@ -451,14 +455,13 @@ const ACCOUNT_KINDS = ["banka", "nakit", "araci", "fon"];
 api.post("/accounts", async (c) => {
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
-  if (!b.name) return c.json({ error: "name zorunlu" }, 400);
+  const enc = zarfAl(b.enc), acilis = zarfAl(b.entry_enc);
+  if (!enc || acilis === false) return c.json({ error: "hesap zarfı gerekli (ad)" }, 400);
   const uid = c.get("user").id;
-  const balance = Number(b.balance ?? 0);
-  if (!Number.isFinite(balance)) return c.json({ error: "geçersiz bakiye" }, 400);
   const kind = ACCOUNT_KINDS.includes(b.kind) ? b.kind : "banka";
   const id = await db.tx(async (t) => {
-    const info = await t.run("INSERT INTO accounts (name,kind,user_id) VALUES (?,?,?) RETURNING id", b.name, kind, uid);
-    await applyEntry(t, uid, info.id ?? null, balance, { date: todayLocal(), kind: "acilis", note: "Açılış bakiyesi" });
+    const info = await t.run("INSERT INTO accounts (kind,enc,user_id) VALUES (?,?,?) RETURNING id", kind, enc, uid);
+    await applyEntry(t, uid, info.id ?? null, acilis, { date: todayLocal(), kind: "acilis" });
     return info.id;
   });
   return c.json({ id });
@@ -474,7 +477,10 @@ api.put("/accounts/:id", async (c) => {
   const found = await db.tx(async (t) => {
     const old = await t.get<{ id: number }>("SELECT id FROM accounts WHERE id=? AND user_id=?", id, uid);
     if (!old) return false;
-    if (b.name !== undefined) await t.run("UPDATE accounts SET name=? WHERE id=? AND user_id=?", b.name, id, uid);
+    if (b.enc !== undefined) {
+      if (!zarfGecerli(b.enc)) return false;
+      await t.run("UPDATE accounts SET enc=? WHERE id=? AND user_id=?", b.enc, id, uid); // ad zarfta
+    }
     if (b.kind !== undefined && ACCOUNT_KINDS.includes(b.kind)) await t.run("UPDATE accounts SET kind=? WHERE id=? AND user_id=?", b.kind, id, uid);
     return true;
   });
@@ -496,28 +502,22 @@ api.delete("/accounts/:id", async (c) => {
 api.post("/accounts/:id/reconcile", async (c) => {
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
-  const real = Number(b.balance);
-  if (!Number.isFinite(real)) return c.json({ error: "geçersiz bakiye" }, 400);
-  /* Fark İSTEMCİDEN gelir (yazim/tutar.ts: gerçek − defterden türeyen bakiye). Aşama 1a'daki
-     "defterden türet" yedeği asistan sunucuda koştuğu için vardı; döngü tarayıcıya taşınınca
-     silindi (aşama 5a). Eksikse sessizce 0 saymak mutabakatı "fark yok" diye kaydedip
-     kullanıcının düzeltmesini yok ederdi — bu yüzden reddedilir. */
-  const diff = istemciTutari(b.diff);
-  if (diff === null) return c.json({ error: "diff gerekli (istemci hesaplar)" }, 400);
+  /* Gerçek bakiye hesabın zarfında (`last_recon_balance`), fark düzeltme hareketinin zarfında —
+     ikisini de istemci kurar (gerçek − defterden türeyen bakiye). Sunucu yalnız günü damgalar.
+     Fark 0 ise hareket gelmez ve yazılmaz; damga yine atılır ("doğruladım, tutuyor"). */
+  const enc = zarfAl(b.enc), duzeltme = zarfAl(b.entry_enc);
+  if (!enc || duzeltme === false) return c.json({ error: "mutabakat zarfı gerekli" }, 400);
   const uid = c.get("user").id, id = Number(c.req.param("id"));
   const date = typeof b.date === "string" && b.date ? b.date : todayLocal();
   const res = await db.tx(async (t) => {
     const acc = await t.get<{ id: number }>("SELECT id FROM accounts WHERE id=? AND user_id=?", id, uid);
     if (!acc) return null;
-    await applyEntry(t, uid, id, diff, {
-      date, kind: "duzeltme",
-      note: b.note ? `Mutabakat: ${String(b.note).slice(0, 120)}` : "Mutabakat farkı",
-    });
-    await t.run("UPDATE accounts SET last_recon_date=?, last_recon_balance=? WHERE id=? AND user_id=?", date, real, id, uid);
-    return { diff };
+    await applyEntry(t, uid, id, duzeltme, { date, kind: "duzeltme" });
+    await t.run("UPDATE accounts SET last_recon_date=?, enc=? WHERE id=? AND user_id=?", date, enc, id, uid);
+    return true;
   });
   if (!res) return c.json({ error: "kayıt yok" }, 404);
-  return c.json({ ok: true, diff: res.diff });
+  return c.json({ ok: true });
 });
 
 /* ---- virman (Faz 16) ----
@@ -526,40 +526,34 @@ api.post("/accounts/:id/reconcile", async (c) => {
    yan etkili uçlarla aynı: revertEntries ile YAZILMIŞ bacaklar geri alınır, yenisi uygulanır —
    böylece hesaplar değişse bile geri alma doğru satırları hedefler.
    NOT: başkasına gönderilen para virman değildir (net varlıktan çıkar) — o `transactions`'ta gider. */
-async function validTransfer(c: any): Promise<{ err: string } | { date: string; from: number; to: number; amount: number; note: string | null }> {
+async function validTransfer(c: any): Promise<{ err: string } | { date: string; from: number; to: number; enc: string; cikis: string; giris: string }> {
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return { err: "geçersiz gövde" };
-  const from = Number(b.from_account_id), to = Number(b.to_account_id), amount = Number(b.amount);
+  const from = Number(b.from_account_id), to = Number(b.to_account_id);
   if (!b.date) return { err: "date zorunlu" };
   if (!Number.isInteger(from) || !Number.isInteger(to)) return { err: "hesaplar zorunlu" };
   if (from === to) return { err: "kaynak ve hedef hesap aynı olamaz" };
-  if (!Number.isFinite(amount) || amount <= 0) return { err: "tutar 0'dan büyük olmalı" };
-  return { date: String(b.date), from, to, amount, note: b.note ? String(b.note).slice(0, 200) : null };
+  /* Tutar ve not zarfta; "tutar > 0" denetimi istemcide (yazim/zarf.ts). Sunucu iki bacağın
+     İKİSİNİ de ister — yarım virman (tek bacak) bakiyeyi kaydırırdı. */
+  const enc = zarfAl(b.enc), cikis = zarfAl(b.entry_from_enc), giris = zarfAl(b.entry_to_enc);
+  if (!enc || !cikis || !giris) return { err: "virman zarfları gerekli (kayıt + iki bacak)" };
+  return { date: String(b.date), from, to, enc, cikis, giris };
 }
-/** İki hesabın da bu kullanıcıya ait olduğunu doğrular — aksi halde başkasının hesabına para yazılabilirdi */
+/** Virmanın iki hesabı da bu kullanıcının mı (başkasının hesabına bacak yazılmasın). */
 async function ownsAccounts(t: TxClient, uid: number, ids: number[]): Promise<boolean> {
   const rows = await t.all<{ id: number }>(
     `SELECT id FROM accounts WHERE user_id=? AND id IN (${ids.map(() => "?").join(",")})`, uid, ...ids,
   );
   return rows.length === ids.length;
 }
-/** Virmanın iki bacağını yazar (kaynak −, hedef +); ikisi de aynı transfer'e bağlı olduğundan
-    revertEntries tek çağrıda ikisini birden geri alır. */
+/* Virman: TEK kayıt, İKİ hareket (kaynak −, hedef +). Bacakların tutar ve notunu istemci kurar. */
 async function applyTransfer(
   t: TxClient, uid: number, id: number,
-  v: { date: string; from: number; to: number; amount: number; note: string | null },
-  fromName: string, toName: string,
+  v: { date: string; from: number; to: number; cikis: string; giris: string },
 ): Promise<void> {
   const meta = { date: v.date, kind: "virman" as const, source_table: "transfers", source_id: id };
-  await applyEntry(t, uid, v.from, -v.amount, { ...meta, note: v.note ?? `→ ${toName}` });
-  await applyEntry(t, uid, v.to, v.amount, { ...meta, note: v.note ?? `← ${fromName}` });
-}
-/** Bacak notlarında kullanılan hesap adları ("→ Nakit cüzdan") */
-async function accountNames(t: TxClient, uid: number, ids: number[]): Promise<Map<number, string>> {
-  const rows = await t.all<{ id: number; name: string }>(
-    `SELECT id, name FROM accounts WHERE user_id=? AND id IN (${ids.map(() => "?").join(",")})`, uid, ...ids,
-  );
-  return new Map(rows.map((r) => [r.id, r.name]));
+  await applyEntry(t, uid, v.from, v.cikis, meta);
+  await applyEntry(t, uid, v.to, v.giris, meta);
 }
 api.post("/transfers", async (c) => {
   const v = await validTransfer(c);
@@ -567,12 +561,11 @@ api.post("/transfers", async (c) => {
   const uid = c.get("user").id;
   const res = await db.tx(async (t) => {
     if (!(await ownsAccounts(t, uid, [v.from, v.to]))) return null;
-    const names = await accountNames(t, uid, [v.from, v.to]);
     const info = await t.run(
-      "INSERT INTO transfers (date,from_account_id,to_account_id,amount,note,user_id) VALUES (?,?,?,?,?,?) RETURNING id",
-      v.date, v.from, v.to, v.amount, v.note, uid,
+      "INSERT INTO transfers (date,from_account_id,to_account_id,enc,user_id) VALUES (?,?,?,?,?) RETURNING id",
+      v.date, v.from, v.to, v.enc, uid,
     );
-    await applyTransfer(t, uid, info.id!, v, names.get(v.from) ?? "", names.get(v.to) ?? "");
+    await applyTransfer(t, uid, info.id!, v);
     return info.id;
   });
   if (res == null) return c.json({ error: "hesap bulunamadı" }, 400);
@@ -586,12 +579,11 @@ api.put("/transfers/:id", async (c) => {
     const row = await t.get<{ id: number }>("SELECT id FROM transfers WHERE id=? AND user_id=?", id, uid);
     if (!row || !(await ownsAccounts(t, uid, [v.from, v.to]))) return false;
     await revertEntries(t, uid, "transfers", id); // eski iki bacak birden geri alınır
-    const names = await accountNames(t, uid, [v.from, v.to]);
     await t.run(
-      "UPDATE transfers SET date=?, from_account_id=?, to_account_id=?, amount=?, note=? WHERE id=? AND user_id=?",
-      v.date, v.from, v.to, v.amount, v.note, id, uid,
+      "UPDATE transfers SET date=?, from_account_id=?, to_account_id=?, enc=? WHERE id=? AND user_id=?",
+      v.date, v.from, v.to, v.enc, id, uid,
     );
-    await applyTransfer(t, uid, id, v, names.get(v.from) ?? "", names.get(v.to) ?? "");
+    await applyTransfer(t, uid, id, v);
     return true;
   });
   if (!ok) return c.json({ error: "kayıt yok veya hesap bulunamadı" }, 404);
@@ -610,22 +602,24 @@ api.delete("/transfers/:id", async (c) => {
    Kimlik (recurring) ile tutar (recurring_amounts zaman çizelgesi) ayrı tablolarda yaşadığından
    jenerik crud yetmez: POST iki tabloya atomik yazar (gövde eski şekliyle amount taşır — form
    değişmedi), PUT yalnız kimlik kolonlarını günceller, tutar değişikliği /recurring/:id/amount'tan. */
-const REC_ID_COLS = ["kind", "name", "day", "from_month", "to_month", "account_id", "card_id", "category_id", "auto"] as const;
+/* E2EE aşama 5c: ad zarfta (`enc`); tür, gün, yaşam penceresi ve hedefler düz — takvim onlara bakıyor. */
+const REC_ID_COLS = ["kind", "enc", "day", "from_month", "to_month", "account_id", "card_id", "category_id", "auto"] as const;
 api.post("/recurring", async (c) => {
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
-  for (const n of ["kind", "name", "day"]) if (b[n] === undefined || b[n] === "") return c.json({ error: `${n} zorunlu` }, 400);
-  if (!(Number(b.amount) > 0)) return c.json({ error: "amount zorunlu" }, 400);
+  for (const n of ["kind", "day"]) if (b[n] === undefined || b[n] === "") return c.json({ error: `${n} zorunlu` }, 400);
+  // ad kalemin zarfında, ilk tutar zaman çizelgesinin zarfında ("tutar > 0" istemcide denetlenir)
+  if (!zarfGecerli(b.enc) || !zarfGecerli(b.amount_enc)) return c.json({ error: "kalem ve tutar zarfları gerekli" }, 400);
   const uid = c.get("user").id;
   const id = await db.tx(async (t) => {
     const info = await t.run(
       `INSERT INTO recurring (${REC_ID_COLS.join(",")},user_id) VALUES (${REC_ID_COLS.map(() => "?").join(",")},?) RETURNING id`,
-      b.kind, b.name, b.day, b.from_month ?? null, b.to_month ?? null,
+      b.kind, b.enc, b.day, b.from_month ?? null, b.to_month ?? null,
       b.account_id ?? null, b.card_id ?? null, b.category_id ?? null, b.auto ?? false, uid,
     );
     await t.run(
-      "INSERT INTO recurring_amounts (recurring_id, from_month, amount, user_id) VALUES (?,?,?,?)",
-      info.id, REC_AMOUNT_BEGIN, Number(b.amount), uid,
+      "INSERT INTO recurring_amounts (recurring_id, from_month, enc, user_id) VALUES (?,?,?,?)",
+      info.id, REC_AMOUNT_BEGIN, b.amount_enc, uid,
     );
     return info.id;
   });
@@ -636,6 +630,7 @@ api.put("/recurring/:id", async (c) => {
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
   const names = REC_ID_COLS.filter((n) => b[n] !== undefined); // amount bilinçli listede yok → sessizce yok sayılır
   if (!names.length) return c.json({ error: "boş" }, 400);
+  if (b.enc !== undefined && !zarfGecerli(b.enc)) return c.json({ error: "geçersiz zarf" }, 400);
   await db.run(
     `UPDATE recurring SET ${names.map((n) => `${n}=?`).join(",")} WHERE id=? AND user_id=?`,
     ...names.map((n) => b[n]), c.req.param("id"), c.get("user").id,
@@ -652,16 +647,15 @@ api.post("/recurring/:id/amount", async (c) => {
   const uid = c.get("user").id;
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
-  const amount = Number(b.amount);
-  if (!(amount > 0)) return c.json({ error: "amount > 0 olmalı" }, 400);
+  if (!zarfGecerli(b.enc)) return c.json({ error: "tutar zarfı gerekli" }, 400); // "> 0" istemcide
   const fromMonth = b.from_month ? String(b.from_month) : REC_AMOUNT_BEGIN;
   if (fromMonth !== REC_AMOUNT_BEGIN && !YM_RE.test(fromMonth)) return c.json({ error: "from_month 'YYYY-MM' olmalı" }, 400);
   const r = await db.get("SELECT id FROM recurring WHERE id=? AND user_id=?", c.req.param("id"), uid);
   if (!r) return c.json({ error: "kalem yok" }, 404);
   await db.run(
-    `INSERT INTO recurring_amounts (recurring_id, from_month, amount, user_id) VALUES (?,?,?,?)
-     ON CONFLICT (recurring_id, from_month) DO UPDATE SET amount = excluded.amount`,
-    r.id, fromMonth, amount, uid,
+    `INSERT INTO recurring_amounts (recurring_id, from_month, enc, user_id) VALUES (?,?,?,?)
+     ON CONFLICT (recurring_id, from_month) DO UPDATE SET enc = excluded.enc`,
+    r.id, fromMonth, b.enc, uid,
   );
   return c.json({ ok: true });
 });
@@ -706,12 +700,11 @@ function occurrenceDate(ym: string, day: number): string {
 /** Tek tx içinde, idempotent. Yeni işaretlendiyse true; zaten gerçekleşmişse false döner. */
 async function realizeOccurrence(
   t: TxClient, uid: number, r: RecurringRow, ym: string,
-  opts?: { account_id?: number | null; category_id?: number | null; amount?: number },
+  opts: { account_id?: number | null; category_id?: number | null; kayit_enc: string; entry_enc: string | null },
 ): Promise<boolean> {
-  /* Tutar İSTEMCİDEN, işaretiyle gelir (yazim/tutar.ts). İŞARETLEMEDEN ÖNCE kontrol: tutarı
-     olmayan kalem "gerçekleşti ama kayıt yok" durumuna düşmesin. */
-  if (opts?.amount === undefined) return false;
-  const tutar = opts.amount;
+  /* Kaydın kendisini (ad + o ayın işaretli tutarı) İSTEMCİ kurar (yazim/zarf.ts): sunucu eskiden
+     adı kalemden, tutarı zaman çizelgesinden okuyordu — ikisi de artık zarfta. Dal ayrımı
+     (kart mı hesap mı) iki tarafta aynı kuraldır; sunucu yalnız hangi tabloya yazacağını seçer. */
   const mark = await t.run(
     "INSERT INTO recurring_realized (recurring_id, ym, created_at, user_id) VALUES (?,?,?,?) ON CONFLICT (recurring_id, ym) DO NOTHING",
     r.id, ym, nowLocal(), uid,
@@ -723,19 +716,18 @@ async function realizeOccurrence(
        kategorisi tanımlı bir düzenli gider karta düştüğünde kategorisi SESSİZCE kayboluyordu
        (hesaba düşen aynı kalem kategoriyi koruyordu); aynı kalemin iki hedefi farklı davranıyordu. */
     const info = await t.run(
-      "INSERT INTO card_txs (card_id,date,name,amount,installments,category_id,user_id) VALUES (?,?,?,?,?,?,?) RETURNING id",
-      r.card_id, date, r.name, tutar, 1, opts?.category_id ?? r.category_id ?? null, uid,
+      "INSERT INTO card_txs (card_id,date,enc,category_id,user_id) VALUES (?,?,?,?,?) RETURNING id",
+      r.card_id, date, opts.kayit_enc, opts.category_id ?? r.category_id ?? null, uid,
     );
     await t.run("UPDATE recurring_realized SET card_tx_id=? WHERE recurring_id=? AND ym=?", info.id, r.id, ym);
   } else {
-    const signed = tutar; // işaretli (gider eksi, gelir artı) — istemci dal ayrımını biliyor
-    const accountId = opts?.account_id ?? r.account_id ?? null;
-    const categoryId = opts?.category_id ?? r.category_id ?? null;
+    const accountId = opts.account_id ?? r.account_id ?? null;
+    const categoryId = opts.category_id ?? r.category_id ?? null;
     const info = await t.run(
-      "INSERT INTO transactions (date,name,amount,category_id,account_id,user_id) VALUES (?,?,?,?,?,?) RETURNING id",
-      date, r.name, signed, categoryId, accountId, uid,
+      "INSERT INTO transactions (date,enc,category_id,account_id,user_id) VALUES (?,?,?,?,?) RETURNING id",
+      date, opts.kayit_enc, categoryId, accountId, uid,
     );
-    await applyEntry(t, uid, accountId, signed, { date, kind: "islem", note: r.name, source_table: "transactions", source_id: info.id });
+    await applyEntry(t, uid, accountId, opts.entry_enc, { date, kind: "islem", source_table: "transactions", source_id: info.id });
     await t.run("UPDATE recurring_realized SET tx_id=? WHERE recurring_id=? AND ym=?", info.id, r.id, ym);
   }
   return true;
@@ -751,10 +743,11 @@ api.post("/recurring/:id/realize", async (c) => {
   if (!recActiveInYm(r, ym)) return c.json({ error: "kalem o ay aktif değil" }, 400);
   const acc = (b as any).account_id != null && (b as any).account_id !== "" ? Number((b as any).account_id) : undefined;
   const cat = (b as any).category_id != null && (b as any).category_id !== "" ? Number((b as any).category_id) : undefined;
-  const amount = istemciTutari((b as any).amount);
-  if (amount === null) return c.json({ error: "tutar gerekli (o ay için tanımlı tutar yoksa gerçekleştirilemez)" }, 400);
-  const created = await db.tx((t) => realizeOccurrence(t, uid, r, ym, { account_id: acc, category_id: cat, amount }));
-  if (created) console.log(`[audit] Düzenli işlem/ödeme gerçekleşti: ${r.name} (ay: ${ym}, id:${uid})`);
+  const kayit = zarfAl((b as any).kayit_enc), hareketZarfi = zarfAl((b as any).entry_enc);
+  if (!kayit || hareketZarfi === false) return c.json({ error: "tutar gerekli (o ay için tanımlı tutar yoksa gerçekleştirilemez)" }, 400);
+  const created = await db.tx((t) => realizeOccurrence(t, uid, r, ym, { account_id: acc, category_id: cat, kayit_enc: kayit, entry_enc: hareketZarfi }));
+  // denetim logu ad/tutar BASMAZ (zarfta; basılsaydı log sızıntı olurdu)
+  if (created) console.log(`[audit] Düzenli kalem gerçekleşti: #${r.id} (ay: ${ym}, id:${uid})`);
   return c.json({ ok: true, already: !created });
 });
 
@@ -788,46 +781,38 @@ crud("oneoffs", "oneoffs", [{ name: "date", required: true }, { name: "enc", req
    Faz 21'in "iki kopya ayrışır" dersinin son uygulaması. */
 
 const TRADE_SIDES: readonly string[] = ["ALIŞ", "SATIŞ", "TEMETTÜ", "BEDELSİZ"];
-/** Türe özgü kurallar: BEDELSİZ bedelsizdir (fiyat 0 olmalı — aksi hâli sessizce ücretsiz hisse
-    yaratıp maliyeti bozardı); diğerlerinde adet ve fiyat pozitif olmalı. */
-function validateSide(side: string, qty: number, price: number): string | null {
-  if (!Number.isFinite(qty) || qty <= 0) return "adet 0'dan büyük olmalı";
-  if (!Number.isFinite(price) || price < 0) return "geçersiz fiyat";
-  if (side === "BEDELSİZ") return price === 0 ? null : "bedelsizde birim fiyat 0 olmalı";
-  return price > 0 ? null : "birim fiyat 0'dan büyük olmalı";
-}
+/* `validateSide` (adet > 0, bedelsizde fiyat 0) istemciye taşındı: yazim/zarf.ts — adet ve fiyat
+   artık zarfta, sunucu onları göremez (E2EE aşama 5c). Kural silinmedi, yer değiştirdi. */
 
 api.post("/trades", async (c) => {
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
-  for (const f of ["date", "asset_type", "symbol", "side", "qty", "price"])
+  /* Adet, fiyat ve komisyon ZARFTA (E2EE aşama 5c); tür kuralları (adet > 0, bedelsizde fiyat 0)
+     istemcinin boru hattında denetlenir (yazim/zarf.ts) — sunucu artık o sayıları göremez.
+     Sembol, tür ve para birimi düz: fiyat cron'u ve hesap etkisi kuralı onlara bakıyor. */
+  for (const f of ["date", "asset_type", "symbol", "side"])
     if (b[f] === undefined || b[f] === "") return c.json({ error: `${f} zorunlu` }, 400);
+  const enc = zarfAl(b.enc), hareketZarfi = zarfAl(b.entry_enc);
+  if (!enc || hareketZarfi === false) return c.json({ error: "işlem zarfı gerekli (adet/fiyat)" }, 400);
   const uid = c.get("user").id;
   const currency = b.currency ?? "TRY";
-  const qty = Number(b.qty), price = Number(b.price), fee = Number(b.fee ?? 0);
   if (!TRADE_SIDES.includes(b.side)) return c.json({ error: "geçersiz işlem türü" }, 400);
-  const sideErr = validateSide(b.side, qty, price);
-  if (sideErr) return c.json({ error: sideErr }, 400);
   const accountId = b.account_id != null && b.account_id !== "" ? Number(b.account_id) : null;
   const portfolioId = b.portfolio_id != null && b.portfolio_id !== "" ? Number(b.portfolio_id) : null; // null = "Gruplanmamış"
   const affects = currency === "TRY" && accountId != null; // bakiye etkisi yalnız TRY işlemde
-  const girisTutari = istemciTutari(b.entry_amount);
-  if (affects && girisTutari === null) return c.json({ error: "entry_amount gerekli (hesaba bağlı TRY işlem)" }, 400);
+  if (affects && !hareketZarfi) return c.json({ error: "hesap hareketi gerekli (hesaba bağlı TRY işlem)" }, 400);
   if (portfolioId != null && !(await db.get("SELECT id FROM portfolios WHERE id=? AND user_id=?", portfolioId, uid))) {
     return c.json({ error: "geçersiz portföy" }, 400);
   }
   const id = await db.tx(async (t) => {
     const info = await t.run(
-      "INSERT INTO trades (date,asset_type,symbol,side,qty,price,fee,currency,account_id,portfolio_id,user_id) VALUES (?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
-      b.date, b.asset_type, b.symbol, b.side, qty, price, fee, currency, accountId, portfolioId, uid,
+      "INSERT INTO trades (date,asset_type,symbol,side,currency,account_id,portfolio_id,enc,user_id) VALUES (?,?,?,?,?,?,?,?,?) RETURNING id",
+      b.date, b.asset_type, b.symbol, b.side, currency, accountId, portfolioId, enc, uid,
     );
-    if (affects) {
-      await applyEntry(t, uid, accountId, girisTutari ?? 0,
-        { date: b.date, kind: "portfoy", note: `${b.symbol} ${b.side}`, source_table: "trades", source_id: info.id });
-    }
+    if (affects) await applyEntry(t, uid, accountId, hareketZarfi, { date: b.date, kind: "portfoy", source_table: "trades", source_id: info.id });
     return info.id;
   });
-  console.log(`[audit] Borsa işlemi eklendi: ${b.symbol} ${b.side} (adet: ${qty}, fiyat: ${price}, id:${uid})`);
+  console.log(`[audit] Borsa işlemi eklendi: ${b.symbol} ${b.side} (id:${uid})`); // adet/fiyat zarfta — loga basılmaz
   return c.json({ id });
 });
 
@@ -852,41 +837,33 @@ api.put("/trades/:id/portfolio", async (c) => {
 api.put("/trades/:id", async (c) => {
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
-  for (const f of ["date", "asset_type", "symbol", "side", "qty", "price"])
+  for (const f of ["date", "asset_type", "symbol", "side"])
     if (b[f] === undefined || b[f] === "") return c.json({ error: `${f} zorunlu` }, 400);
+  const enc = zarfAl(b.enc), hareketZarfi = zarfAl(b.entry_enc);
+  if (!enc || hareketZarfi === false) return c.json({ error: "işlem zarfı gerekli (adet/fiyat)" }, 400);
   const uid = c.get("user").id;
   const id = c.req.param("id");
   const currency = b.currency ?? "TRY";
-  const qty = Number(b.qty), price = Number(b.price), fee = Number(b.fee ?? 0);
-  if (![qty, price, fee].every(Number.isFinite)) return c.json({ error: "geçersiz sayı" }, 400);
   if (!TRADE_SIDES.includes(b.side)) return c.json({ error: "geçersiz işlem türü" }, 400);
-  const sideErr = validateSide(b.side, qty, price);
-  if (sideErr) return c.json({ error: sideErr }, 400);
   const accountId = b.account_id != null && b.account_id !== "" ? Number(b.account_id) : null;
   const portfolioId = b.portfolio_id != null && b.portfolio_id !== "" ? Number(b.portfolio_id) : null;
   if (portfolioId != null && !(await db.get("SELECT id FROM portfolios WHERE id=? AND user_id=?", portfolioId, uid))) {
     return c.json({ error: "geçersiz portföy" }, 400);
   }
-  const girisTutari = istemciTutari(b.entry_amount);
-  if (currency === "TRY" && accountId != null && girisTutari === null) return c.json({ error: "entry_amount gerekli (hesaba bağlı TRY işlem)" }, 400);
+  if (currency === "TRY" && accountId != null && !hareketZarfi) return c.json({ error: "hesap hareketi gerekli (hesaba bağlı TRY işlem)" }, 400);
   const found = await db.tx(async (t) => {
-    const old = await t.get<{ side: string; qty: number; price: number; fee: number; currency: string; account_id: number | null }>(
-      "SELECT side, qty, price, fee, currency, account_id FROM trades WHERE id=? AND user_id=?", id, uid,
-    );
+    const old = await t.get<{ id: number }>("SELECT id FROM trades WHERE id=? AND user_id=?", id, uid);
     if (!old) return false;
     await revertEntries(t, uid, "trades", id);
     await t.run(
-      "UPDATE trades SET date=?, asset_type=?, symbol=?, side=?, qty=?, price=?, fee=?, currency=?, account_id=?, portfolio_id=? WHERE id=? AND user_id=?",
-      b.date, b.asset_type, b.symbol, b.side, qty, price, fee, currency, accountId, portfolioId, id, uid,
+      "UPDATE trades SET date=?, asset_type=?, symbol=?, side=?, currency=?, account_id=?, portfolio_id=?, enc=? WHERE id=? AND user_id=?",
+      b.date, b.asset_type, b.symbol, b.side, currency, accountId, portfolioId, enc, id, uid,
     );
-    if (currency === "TRY") {
-      await applyEntry(t, uid, accountId, girisTutari ?? 0,
-        { date: b.date, kind: "portfoy", note: `${b.symbol} ${b.side}`, source_table: "trades", source_id: Number(id) });
-    }
+    if (currency === "TRY") await applyEntry(t, uid, accountId, hareketZarfi, { date: b.date, kind: "portfoy", source_table: "trades", source_id: Number(id) });
     return true;
   });
   if (!found) return c.json({ error: "kayıt yok" }, 404);
-  console.log(`[audit] Borsa işlemi düzenlendi: ${b.symbol} ${b.side} (adet: ${qty}, fiyat: ${price}, id:${uid})`);
+  console.log(`[audit] Borsa işlemi düzenlendi: ${b.symbol} ${b.side} (id:${uid})`);
   return c.json({ ok: true });
 });
 api.delete("/trades/:id", async (c) => {
@@ -903,27 +880,22 @@ api.delete("/trades/:id", async (c) => {
 api.post("/deposits", async (c) => {
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
-  for (const f of ["name", "principal", "rate", "open_date", "term_days"])
-    if (b[f] === undefined || b[f] === "") return c.json({ error: `${f} zorunlu` }, 400);
+  if (!b.open_date) return c.json({ error: "open_date zorunlu" }, 400);
   const uid = c.get("user").id;
-  const principal = Number(b.principal), rate = Number(b.rate), termDays = Math.trunc(Number(b.term_days));
-  const withholding = Number(b.withholding ?? 0);
-  if (!(principal > 0) || !(termDays >= 1) || rate < 0 || withholding < 0 || withholding > 100)
-    return c.json({ error: "geçersiz değer" }, 400);
+  /* Ad, anapara, faiz, vade günü ve stopaj ZARFTA; değer kuralları istemcide (yazim/zarf.ts). */
+  const enc = zarfAl(b.enc), hareketZarfi = zarfAl(b.entry_enc);
+  if (!enc || hareketZarfi === false) return c.json({ error: "mevduat zarfı gerekli" }, 400);
   const accountId = b.account_id != null && b.account_id !== "" ? Number(b.account_id) : null;
-  const girisTutari = istemciTutari(b.entry_amount);
-  if (accountId != null && girisTutari === null) return c.json({ error: "entry_amount gerekli (hesaba bağlı mevduat)" }, 400);
-  const portfolioId = b.portfolio_id != null && b.portfolio_id !== "" ? Number(b.portfolio_id) : null; // null = "Gruplanmamış"
+  if (accountId != null && !hareketZarfi) return c.json({ error: "hesap hareketi gerekli (hesaba bağlı mevduat)" }, 400);
   const id = await db.tx(async (t) => {
     const info = await t.run(
-      "INSERT INTO deposits (name,principal,rate,open_date,term_days,withholding,account_id,user_id) VALUES (?,?,?,?,?,?,?,?) RETURNING id",
-      b.name, principal, rate, b.open_date, termDays, withholding, accountId, uid,
+      "INSERT INTO deposits (open_date,account_id,enc,user_id) VALUES (?,?,?,?) RETURNING id",
+      b.open_date, accountId, enc, uid,
     );
-    await applyEntry(t, uid, accountId, girisTutari ?? 0,
-      { date: b.open_date, kind: "mevduat", note: `${b.name} (vadeli açılış)`, source_table: "deposits", source_id: info.id });
+    await applyEntry(t, uid, accountId, hareketZarfi, { date: b.open_date, kind: "mevduat", source_table: "deposits", source_id: info.id });
     return info.id;
   });
-  console.log(`[audit] Vadeli hesap (mevduat) açıldı: ${b.name} (anapara: ${principal}, id:${uid})`);
+  console.log(`[audit] Vadeli hesap (mevduat) açıldı (id:${uid})`); // ad/anapara zarfta — loga basılmaz
   return c.json({ id });
 });
 
@@ -934,30 +906,26 @@ api.post("/deposits", async (c) => {
 api.put("/deposits/:id", async (c) => {
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
-  for (const f of ["name", "principal", "rate", "open_date", "term_days"])
-    if (b[f] === undefined || b[f] === "") return c.json({ error: `${f} zorunlu` }, 400);
+  if (!b.open_date) return c.json({ error: "open_date zorunlu" }, 400);
   const uid = c.get("user").id, id = Number(c.req.param("id"));
-  const principal = Number(b.principal), rate = Number(b.rate), termDays = Math.trunc(Number(b.term_days));
-  const withholding = Number(b.withholding ?? 0);
-  if (!(principal > 0) || !(termDays >= 1) || rate < 0 || withholding < 0 || withholding > 100)
-    return c.json({ error: "geçersiz değer" }, 400);
+  /* Ad, anapara, faiz, vade günü ve stopaj ZARFTA; değer kuralları istemcide (yazim/zarf.ts). */
+  const enc = zarfAl(b.enc), hareketZarfi = zarfAl(b.entry_enc);
+  if (!enc || hareketZarfi === false) return c.json({ error: "mevduat zarfı gerekli" }, 400);
   const accountId = b.account_id != null && b.account_id !== "" ? Number(b.account_id) : null;
-  const girisTutari = istemciTutari(b.entry_amount);
-  if (accountId != null && girisTutari === null) return c.json({ error: "entry_amount gerekli (hesaba bağlı mevduat)" }, 400);
+  if (accountId != null && !hareketZarfi) return c.json({ error: "hesap hareketi gerekli (hesaba bağlı mevduat)" }, 400);
   const found = await db.tx(async (t) => {
     const old = await t.get<{ id: number }>("SELECT id FROM deposits WHERE id=? AND user_id=?", id, uid);
     if (!old) return false;
     await revertEntries(t, uid, "deposits", id);
     await t.run(
-      "UPDATE deposits SET name=?, principal=?, rate=?, open_date=?, term_days=?, withholding=?, account_id=? WHERE id=? AND user_id=?",
-      b.name, principal, rate, b.open_date, termDays, withholding, accountId, id, uid,
+      "UPDATE deposits SET open_date=?, account_id=?, enc=? WHERE id=? AND user_id=?",
+      b.open_date, accountId, enc, id, uid,
     );
-    await applyEntry(t, uid, accountId, girisTutari ?? 0,
-      { date: b.open_date, kind: "mevduat", note: `${b.name} (vadeli açılış)`, source_table: "deposits", source_id: id });
+    await applyEntry(t, uid, accountId, hareketZarfi, { date: b.open_date, kind: "mevduat", source_table: "deposits", source_id: id });
     return true;
   });
   if (!found) return c.json({ error: "kayıt yok" }, 404);
-  console.log(`[audit] Vadeli hesap düzenlendi: ${b.name} (anapara: ${principal}, id:${uid})`);
+  console.log(`[audit] Vadeli hesap düzenlendi (id:${uid})`);
   return c.json({ ok: true });
 });
 
@@ -970,14 +938,15 @@ api.delete("/deposits/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+/* Kart adı ve limiti ZARFTA; kesim/son ödeme günleri düz — ekstre takvimi onlara bakıyor. */
 crud("cards", "cards", [
-  { name: "name", required: true }, { name: "limit_amount" },
-  { name: "statement_day", required: true }, { name: "due_day", required: true },
-  { name: "pay_account_id" }, // otomatik ödeme talimatı hesabı (ops.)
+  { name: "enc", required: true }, { name: "statement_day", required: true }, { name: "due_day", required: true },
+  { name: "pay_account_id" },
 ]);
+/* Harcamanın adı, tutarı ve taksit sayısı ZARFTA. Kategori (FK) düz: toplu kategorilemede yalnız
+   o değişir ve zarfa dokunmadan yazılabilir. */
 crud("cardtxs", "card_txs", [
-  { name: "card_id", required: true }, { name: "date", required: true },
-  { name: "name", required: true }, { name: "amount", required: true }, { name: "installments" },
+  { name: "card_id", required: true }, { name: "date", required: true }, { name: "enc", required: true },
   { name: "category_id" }, // Faz 39 (ops.) — kategorisiz kart harcaması hâlâ geçerli bir kayıt
 ]);
 
@@ -992,9 +961,10 @@ const DUE_RE = /^\d{4}-\d{2}-\d{2}$/;
 /** Tek tx içinde idempotent ekstre ödemesi (elle "Ödedim" + otomatik talimat ortak yazıcısı).
     Yeni ödendiyse true; (card, due) zaten işaretliyse false döner. */
 async function payStatementTx(
-  t: TxClient, uid: number, card: { id: number; name: string }, dueK: string, amount: number,
+  t: TxClient, uid: number, card: { id: number }, dueK: string, kayitEnc: string, hareketEnc: string | null,
   accountId: number | null, categoryId: number | null, date?: string,
 ): Promise<boolean> {
+  /* "X ekstresi" adlı gider kaydını ve hareketini İSTEMCİ kurar (kart adı ve tutar zarfta). */
   /* Kayıt tarihi: elle ödemede BUGÜN (kullanıcı şimdi ödedi), ödeme talimatında VADE GÜNÜ.
      Ayrım E2EE aşama 2'de gerekti: otomatik ödeme artık uygulama açılışında yazılıyor, yani
      günler sonra da yazılabilir — todayLocal() kullansaydı talimatla ödenen bir ekstre
@@ -1007,11 +977,10 @@ async function payStatementTx(
   );
   if (!mark.changes) return false;
   const info = await t.run(
-    "INSERT INTO transactions (date,name,amount,category_id,account_id,user_id) VALUES (?,?,?,?,?,?) RETURNING id",
-    tarih, `${card.name} ekstresi`, -amount, categoryId, accountId, uid,
+    "INSERT INTO transactions (date,enc,category_id,account_id,user_id) VALUES (?,?,?,?,?) RETURNING id",
+    tarih, kayitEnc, categoryId, accountId, uid,
   );
-  await applyEntry(t, uid, accountId, -amount,
-    { date: tarih, kind: "islem", note: `${card.name} ekstresi`, source_table: "transactions", source_id: info.id });
+  await applyEntry(t, uid, accountId, hareketEnc, { date: tarih, kind: "islem", source_table: "transactions", source_id: info.id });
   await t.run("UPDATE statement_payments SET tx_id=? WHERE card_id=? AND due=?", info.id, card.id, dueK);
   return true;
 }
@@ -1021,20 +990,19 @@ api.post("/cards/:id/pay-statement", async (c) => {
   const b = await c.req.json().catch(() => ({}));
   const due = String((b as any).due ?? "");
   if (!DUE_RE.test(due)) return c.json({ error: "due 'YYYY-MM-DD' olmalı" }, 400);
-  const card = await db.get<Card>("SELECT * FROM cards WHERE id=? AND user_id=?", c.req.param("id"), uid);
+  const card = await db.get<{ id: number }>("SELECT id FROM cards WHERE id=? AND user_id=?", c.req.param("id"), uid);
   if (!card) return c.json({ error: "kart yok" }, 404);
-  /* Ekstre tutarı İSTEMCİDEN gelir (yazim/tutar.ts, `statementAmount`); sunucu hesaplamaz.
-     Faz 8.2 bunu bilerek sunucuya almıştı ("istemciden gelen tutara güvenilmez") — o gerekçe
-     sıfır bilgi modelinde düşüyor, çünkü istemci kullanıcının kendisi. */
-  const amount = istemciTutari((b as any).amount);
-  if (amount === null) return c.json({ error: "amount gerekli (istemci hesaplar)" }, 400);
-  if (!(amount > 0)) return c.json({ error: "bu tarihte ekstre yok" }, 400);
+  /* Ekstre tutarı (statementAmount) ve "X ekstresi" kaydı İSTEMCİDE kurulur (yazim/tutar.ts +
+     zarf.ts); "bu tarihte ekstre yok" denetimi de orada. Faz 8.2 tutarı bilerek sunucuya almıştı
+     ("istemciden gelen tutara güvenilmez") — o gerekçe sıfır bilgi modelinde düşüyor. */
+  const kayit = zarfAl((b as any).kayit_enc), hareketZarfi = zarfAl((b as any).entry_enc);
+  if (!kayit || hareketZarfi === false) return c.json({ error: "ekstre kaydı zarfı gerekli" }, 400);
   const accountId = (b as any).account_id != null && (b as any).account_id !== "" ? Number((b as any).account_id) : null;
   const categoryId = (b as any).category_id != null && (b as any).category_id !== "" ? Number((b as any).category_id) : null;
   const tarih = typeof (b as any).date === "string" && DUE_RE.test((b as any).date) ? (b as any).date : undefined;
-  const created = await db.tx((t) => payStatementTx(t, uid, card, due, amount, accountId, categoryId, tarih));
-  if (created) console.log(`[audit] Kredi kartı ekstresi ödendi: ${card.name} (vade: ${due}, tutar: ${amount}, id:${uid})`);
-  return c.json({ ok: true, already: !created, amount });
+  const created = await db.tx((t) => payStatementTx(t, uid, card, due, kayit, hareketZarfi, accountId, categoryId, tarih));
+  if (created) console.log(`[audit] Kredi kartı ekstresi ödendi: kart #${card.id} (vade: ${due}, id:${uid})`);
+  return c.json({ ok: true, already: !created });
 });
 
 api.delete("/cards/:id/pay-statement/:due", async (c) => {
@@ -1069,20 +1037,20 @@ crud("categories", "categories", [{ name: "enc", required: true }, { name: "kind
 api.post("/transactions", async (c) => {
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
-  for (const f of ["date", "name", "amount"]) if (b[f] === undefined || b[f] === "") {
-    return c.json({ error: `${f} zorunlu` }, 400);
-  }
+  if (!b.date) return c.json({ error: "date zorunlu" }, 400);
+  /* Ad ve tutar ZARFTA; hesaba bağlıysa hareketi (not = işlemin adı) istemci kurar. */
+  const enc = zarfAl(b.enc), hareketZarfi = zarfAl(b.entry_enc);
+  if (!enc || hareketZarfi === false) return c.json({ error: "işlem zarfı gerekli (ad + tutar)" }, 400);
   const uid = c.get("user").id;
   const id = await db.tx(async (t) => {
     const info = await t.run(
-      "INSERT INTO transactions (date,name,amount,category_id,account_id,user_id) VALUES (?,?,?,?,?,?) RETURNING id",
-      b.date, b.name, b.amount, b.category_id ?? null, b.account_id ?? null, uid,
+      "INSERT INTO transactions (date,enc,category_id,account_id,user_id) VALUES (?,?,?,?,?) RETURNING id",
+      b.date, enc, b.category_id ?? null, b.account_id ?? null, uid,
     );
-    await applyEntry(t, uid, b.account_id ?? null, Number(b.amount),
-      { date: b.date, kind: "islem", note: b.name, source_table: "transactions", source_id: info.id });
+    await applyEntry(t, uid, b.account_id ?? null, hareketZarfi, { date: b.date, kind: "islem", source_table: "transactions", source_id: info.id });
     return info.id;
   });
-  console.log(`[audit] İşlem/Transfer eklendi: ${b.name} (tutar: ${b.amount}, id:${uid})`);
+  console.log(`[audit] İşlem eklendi (id:${uid})`); // ad/tutar zarfta — eskiden loga açık basılıyordu
   return c.json({ id });
 });
 /* Toplu içe aktarma (ekstre yapıştırma): tek istekte N gerçekleşen kayıt, tek transaction içinde.
@@ -1098,8 +1066,8 @@ api.post("/transactions/bulk", async (c) => {
   const uid = c.get("user").id;
   for (const r of rows) {
     if (!r || typeof r !== "object") return c.json({ error: "geçersiz satır" }, 400);
-    if (!r.date || !r.name || typeof r.amount !== "number" || !Number.isFinite(r.amount)) {
-      return c.json({ error: "her satırda tarih, ad ve sayısal tutar zorunlu" }, 400);
+    if (!r.date || !zarfGecerli(r.enc) || zarfAl(r.entry_enc) === false) {
+      return c.json({ error: "her satırda tarih ve işlem zarfı zorunlu" }, 400);
     }
   }
   const own = async (table: string, ids: number[]) => {
@@ -1116,11 +1084,10 @@ api.post("/transactions/bulk", async (c) => {
   await db.tx(async (t) => {
     for (const r of rows) {
       const info = await t.run(
-        "INSERT INTO transactions (date,name,amount,category_id,account_id,user_id) VALUES (?,?,?,?,?,?) RETURNING id",
-        r.date, r.name, r.amount, r.category_id ?? null, r.account_id ?? null, uid,
+        "INSERT INTO transactions (date,enc,category_id,account_id,user_id) VALUES (?,?,?,?,?) RETURNING id",
+        r.date, r.enc, r.category_id ?? null, r.account_id ?? null, uid,
       );
-      await applyEntry(t, uid, r.account_id ?? null, r.amount,
-        { date: r.date, kind: "islem", note: r.name, source_table: "transactions", source_id: info.id });
+      await applyEntry(t, uid, r.account_id ?? null, zarfAl(r.entry_enc) || null, { date: r.date, kind: "islem", source_table: "transactions", source_id: info.id });
     }
   });
   console.log(`[audit] Toplu içe aktarma: ${rows.length} kayıt (id:${uid})`);
@@ -1133,31 +1100,26 @@ api.post("/transactions/bulk", async (c) => {
 api.put("/transactions/:id", async (c) => {
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
-  for (const f of ["date", "name", "amount"]) if (b[f] === undefined || b[f] === "") {
-    return c.json({ error: `${f} zorunlu` }, 400);
-  }
-  const amount = Number(b.amount);
-  if (!Number.isFinite(amount)) return c.json({ error: "geçersiz tutar" }, 400);
+  if (!b.date) return c.json({ error: "date zorunlu" }, 400);
+  const enc = zarfAl(b.enc), hareketZarfi = zarfAl(b.entry_enc);
+  if (!enc || hareketZarfi === false) return c.json({ error: "işlem zarfı gerekli (ad + tutar)" }, 400);
   const uid = c.get("user").id;
   const id = c.req.param("id");
   const accountId = b.account_id != null && b.account_id !== "" ? Number(b.account_id) : null;
   const categoryId = b.category_id != null && b.category_id !== "" ? Number(b.category_id) : null;
   const found = await db.tx(async (t) => {
-    const old = await t.get<{ amount: number; account_id: number | null }>(
-      "SELECT amount, account_id FROM transactions WHERE id=? AND user_id=?", id, uid,
-    );
+    const old = await t.get<{ id: number }>("SELECT id FROM transactions WHERE id=? AND user_id=?", id, uid);
     if (!old) return false;
     await revertEntries(t, uid, "transactions", id);
     await t.run(
-      "UPDATE transactions SET date=?, name=?, amount=?, category_id=?, account_id=? WHERE id=? AND user_id=?",
-      b.date, b.name, amount, categoryId, accountId, id, uid,
+      "UPDATE transactions SET date=?, enc=?, category_id=?, account_id=? WHERE id=? AND user_id=?",
+      b.date, enc, categoryId, accountId, id, uid,
     );
-    await applyEntry(t, uid, accountId, amount,
-      { date: b.date, kind: "islem", note: b.name, source_table: "transactions", source_id: Number(id) });
+    await applyEntry(t, uid, accountId, hareketZarfi, { date: b.date, kind: "islem", source_table: "transactions", source_id: Number(id) });
     return true;
   });
   if (!found) return c.json({ error: "kayıt yok" }, 404);
-  console.log(`[audit] İşlem düzenlendi: ${b.name} (tutar: ${amount}, id:${uid})`);
+  console.log(`[audit] İşlem düzenlendi (id:${uid})`);
   return c.json({ ok: true });
 });
 api.delete("/transactions/:id", async (c) => {
@@ -1235,7 +1197,7 @@ api.get("/export", async (c) => {
     await Promise.all([
       db.all("SELECT * FROM accounts WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM recurring WHERE user_id=? ORDER BY id", uid),
-      db.all("SELECT recurring_id, from_month, amount FROM recurring_amounts WHERE user_id=? ORDER BY recurring_id, from_month", uid),
+      db.all("SELECT recurring_id, from_month, enc FROM recurring_amounts WHERE user_id=? ORDER BY recurring_id, from_month", uid),
       db.all("SELECT * FROM loans WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM oneoffs WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM trades WHERE user_id=? ORDER BY id", uid),

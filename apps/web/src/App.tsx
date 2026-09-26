@@ -116,7 +116,14 @@ export default function App() {
             account_id: k.account_id, category_id: k.category_id, amount: k.amount,
           }).catch((e) => console.warn("[oto] düzenli kalem gerçekleştirilemedi:", e));
         }
-        for (const e of ekstreler) {
+        /* Karta düşen düzenli kalem az önce yazıldıysa ekstre tutarı BÜYÜMÜŞTÜR: listeyi
+           taze veriden yeniden kur. Açılıştaki anlık görüntüyle ödemek ekstreyi eksik öder ve
+           ödeme işareti düştüğü için eksik bir daha kapanmaz (ölçüldü: 300+75 kartta 300
+           ödendi). Eski sunucu cron'u iki adımı ayrı sorgularla yaptığından bu sorun yoktu. */
+        const guncelEkstreler = kalemler.length
+          ? bekleyenEkstreler(await api.all(), bugun).filter((e) => !otoDenenen.current.has(`s:${e.card_id}:${e.due}`))
+          : ekstreler;
+        for (const e of guncelEkstreler) {
           otoDenenen.current.add(`s:${e.card_id}:${e.due}`);
           await api.payStatement(e.card_id, e.due, { account_id: e.account_id, amount: e.amount, date: e.due })
             .catch((err) => console.warn("[oto] ekstre ödenemedi:", err));
