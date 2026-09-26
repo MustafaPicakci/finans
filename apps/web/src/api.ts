@@ -1,6 +1,7 @@
 import type { AllData } from "@finans/engine";
 import type { UserContext, ChatMessage, ChatResult } from "@finans/asistan";
 import { yaz, veriAyarla } from "./yazim";
+import { veriAc } from "./yazim/zarf";
 
 export type { Account, Recurring, RecurringAmount, Loan, OneOff, AssetType, Currency, Trade, Portfolio, Card, CardTx, Price, AllData } from "@finans/engine";
 
@@ -40,7 +41,9 @@ async function yazJ<T = any>(method: string, path: string, body?: unknown): Prom
 }
 
 export const api = {
-  all: () => fetch("/api/all").then((r) => j<AllData>(r)).then((d) => { veriAyarla(d); return d; }),
+  /* Zarflar BURADA açılır — uygulamanın geri kalanı düz alanları görür. `sonVeri` de AÇIK
+     hâli tutar: türetilen tutarlar ve kısmi güncellemede zarfın yeniden kurulması onu okur. */
+  all: () => fetch("/api/all").then((r) => j<AllData>(r)).then((d) => { const a = veriAc(d); veriAyarla(a); return a; }),
   post: (route: string, body: unknown) => yazJ("POST", `/${route}`, body),
   put: (route: string, body: unknown) => yazJ("PUT", `/${route}`, body),
   del: (route: string, id: number) => fetch(`/api/${route}/${id}`, { method: "DELETE" }).then(j),
@@ -126,7 +129,15 @@ export const api = {
   resendVerify: (email: string) =>
     fetch("/api/auth/resend-verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) }).then(j),
   /* ---- KVKK (Faz 5.4) ---- */
-  exportData: () => fetch("/api/export").then((r) => { if (!r.ok) throw new ApiError(r.status, "İndirilemedi"); return r.blob(); }),
+  /* Dışa aktarma zarfları İSTEMCİDE açar: sunucu zarfların içini okuyamaz (aşama 6'da şifreli),
+     yani ham yanıtı indirmek kullanıcıya işe yaramaz bir yedek verirdi. Tablo anahtarları
+     `/api/all` ile aynı olduğundan aynı `veriAc` kullanılır. */
+  exportData: async () => {
+    const r = await fetch("/api/export");
+    if (!r.ok) throw new ApiError(r.status, "İndirilemedi");
+    const acik = veriAc(await r.json());
+    return new Blob([JSON.stringify(acik, null, 2)], { type: "application/json" });
+  },
   /** Kanıt hesap türüne göre `e2ee.parolaKaniti` ile üretilir (v2: auth_token, legacy: password). */
   deleteAccount: (kanit: { password?: string; auth_token?: string }) =>
     fetch("/api/account/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(kanit) }).then(j),

@@ -1,5 +1,6 @@
 import "dotenv/config";
 import pg from "pg";
+import { ZARF, ZARF_DUZ } from "@finans/crypto/map";
 
 /* Faz 5.0: SQLite (node:sqlite) → PostgreSQL geçişi. Veri modeli/davranış birebir korunur;
    yalnız taban değişir. Bağlantı DATABASE_URL env değişkeninden (bkz. .env.example). */
@@ -480,8 +481,12 @@ ALTER TABLE ai_actions ADD COLUMN IF NOT EXISTS conversation_id integer REFERENC
 
 -- kategori adı artık KULLANICI BAŞINA benzersiz (eski global UNIQUE düşürülür)
 ALTER TABLE categories DROP CONSTRAINT IF EXISTS categories_name_key;
+-- E2EE aşama 5: kategori adı zarfa taşınınca name kolonu YOK — kısıt da onunla düştü ve bu
+-- blok onu her açılışta yeniden eklemeye çalışıp sunucuyu ÇÖKERTİRDİ. Yalnız kolon varken
+-- (göç öncesi) eklenir. Ad benzersizliği artık istemcide denetleniyor.
 DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'categories_user_name_key') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'categories_user_name_key')
+     AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'categories' AND column_name = 'name') THEN
     ALTER TABLE categories ADD CONSTRAINT categories_user_name_key UNIQUE (user_id, name);
   END IF;
 END $$;
@@ -606,6 +611,57 @@ INSERT INTO settings (key, value) VALUES ('account_entries_backfilled', '${today
       await pool.query("ALTER TABLE accounts DROP COLUMN IF EXISTS balance");
       console.log("[db] accounts.balance düşürüldü (defter temizdi) — bakiye artık yalnız account_entries'ten türetiliyor.");
     }
+  }
+
+  await zarfGoc();
+}
+
+/* ————— Hassas kolonları zarfa taşı (E2EE aşama 5) —————
+   Tablo ve kolon listesi ELLE yazılmıyor, alan haritasından (`@finans/crypto/map`) türüyor:
+   elle yazılmış bir göç, istemcinin zarfı açarken baktığı listeyle ayrışabilirdi.
+
+   Veri bu noktada DÜZ METİN olduğu için göçü sunucu yapabiliyor: kolonlar bir `p1:` zarfına
+   (düz JSON) toplanıp düşürülüyor. Aşama 6'da `p1` → `v1` (şifreli) dönüşümünü sunucu
+   YAPAMAZ — anahtar yok; o dönüşüm kullanıcı giriş yaptığında tarayıcıda olur.
+
+   Kendini koşullar ve yeniden çalıştırılabilir: taşınacak kolon kalmamışsa hiçbir şey yapmaz.
+   Haritaya SONRADAN eklenen bir alan için mevcut `p1` zarfına BİRLEŞTİRİR (jsonb ||) — ama
+   birleştirme YIKICI DEĞİLDİR: kolondaki NULL, zarftaki değerin üzerine yazılmaz. Sebep: bir
+   `ADD COLUMN IF NOT EXISTS` satırı zarfa taşınmış bir kolonu her açılışta BOŞ olarak geri
+   eklerse, düz birleştirme gerçek değeri sessizce NULL'la ezerdi (her yeniden başlatmada).
+   Bunu derleme kapısı da ayrıca yakalar (scripts/check-zarf-sema.ts). Ayrıca
+   şifreli (`v1`) zarfa sunucu alan ekleyemez — öyle bir satırda o kolon doluysa kolonu
+   DÜŞÜRMEZ ve loglar (veri kaybından iyidir; o durumda göç istemcide yapılmalı).
+   Her tablo kendi işleminde: yarıda kalırsa o tablo hiç değişmemiş olur. */
+async function zarfGoc(): Promise<void> {
+  for (const [tablo, alanlar] of Object.entries(ZARF) as [string, readonly string[]][]) {
+    const kalan: string[] = [];
+    for (const a of alanlar) if (await kolonVarMi(tablo, a)) kalan.push(a);
+    if (!kalan.length) continue;
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(`ALTER TABLE ${tablo} ADD COLUMN IF NOT EXISTS enc text`);
+      const obj = `jsonb_build_object(${kalan.map((a) => `'${a}', ${a}`).join(", ")})`;
+      const r = await client.query(
+        `UPDATE ${tablo}
+            SET enc = $1 || (CASE WHEN enc IS NULL THEN ${obj}
+                                  ELSE substr(enc, 4)::jsonb || jsonb_strip_nulls(${obj}) END)::text
+          WHERE enc IS NULL OR enc LIKE 'p1:%'`, [ZARF_DUZ]);
+      const sifreliDolu = await client.query(
+        `SELECT count(*)::int AS n FROM ${tablo} WHERE enc NOT LIKE 'p1:%' AND (${kalan.map((a) => `${a} IS NOT NULL`).join(" OR ")})`);
+      if (sifreliDolu.rows[0].n > 0) {
+        await client.query("COMMIT");
+        console.error(`[db] ${tablo}: ${sifreliDolu.rows[0].n} şifreli satırda ${kalan.join(",")} dolu — sunucu şifreli zarfa ekleyemez, kolonlar DÜŞÜRÜLMEDİ (istemci göçü gerekli).`);
+        continue;
+      }
+      await client.query(`ALTER TABLE ${tablo} ${kalan.map((a) => `DROP COLUMN ${a}`).join(", ")}`);
+      await client.query("COMMIT");
+      console.log(`[db] ${tablo}: ${kalan.join(",")} zarfa taşındı (${r.rowCount} satır, p1).`);
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw e; // yarım göçle açılmaktansa açılmamak — veri bütünlüğü sunucunun ayakta olmasından önemli
+    } finally { client.release(); }
   }
 }
 

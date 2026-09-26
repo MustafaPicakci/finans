@@ -20,6 +20,9 @@ importers:
       '@finans/asistan':
         specifier: workspace:*
         version: link:../../packages/asistan
+      '@finans/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
       '@finans/engine':
         specifier: workspace:*
         version: link:../../packages/engine

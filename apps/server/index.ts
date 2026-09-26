@@ -352,6 +352,10 @@ api.use("*", async (c, next) => {
 api.get("/all", async (c) => c.json(await loadAllData(c.get("user").id, { gecmis: true })));
 
 /* ---- generic CRUD ---- */
+/** Zarfın BİÇİMİ doğrulanır, içeriği değil (sunucu aşama 6'da içeriği okuyamaz): düz metin
+    zarf `p1:`+JSON, şifreli zarf `v1:iv:ct`. Çöp yazılıp satır okunamaz hâle gelmesin. */
+const zarfGecerli = (v: unknown): boolean =>
+  typeof v === "string" && v.length <= 20_000 && (/^p1:\{.*\}$/s.test(v) || /^v1:[A-Za-z0-9_-]{16}:[A-Za-z0-9_-]+$/.test(v));
 type Col = { name: string; required?: boolean; default?: unknown };
 function crud(route: string, table: string, cols: Col[]) {
   api.post(`/${route}`, async (c) => {
@@ -360,6 +364,7 @@ function crud(route: string, table: string, cols: Col[]) {
     for (const col of cols) if (col.required && (b[col.name] === undefined || b[col.name] === "")) {
       return c.json({ error: `${col.name} zorunlu` }, 400);
     }
+    if (b.enc !== undefined && !zarfGecerli(b.enc)) return c.json({ error: "geçersiz zarf" }, 400);
     const uid = c.get("user").id;
     /* Gövdede HİÇ GEÇMEYEN (undefined) ve kod tarafında varsayılanı olmayan kolon INSERT'e
        yazılmaz — böylece tablonun kendi DEFAULT'u devreye girer. Eskiden açıkça NULL
@@ -381,6 +386,7 @@ function crud(route: string, table: string, cols: Col[]) {
     if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
     const names = cols.map((x) => x.name).filter((n) => b[n] !== undefined);
     if (!names.length) return c.json({ error: "boş" }, 400);
+    if (b.enc !== undefined && !zarfGecerli(b.enc)) return c.json({ error: "geçersiz zarf" }, 400);
     /* Faz 18 — etkilenen satır sayısı kontrol edilir. `WHERE ... AND user_id=?` başkasının (ya da
        silinmiş bir) kaydını zaten değiştirmiyordu, ama uç yine de {ok:true} dönüyordu: arayüz
        "kaydedildi" der, hiçbir şey değişmezdi. Tanım kayıtları Faz 18'de düzenlenebilir olduğundan
@@ -769,13 +775,9 @@ api.delete("/recurring/:id/realize/:ym", async (c) => {
   });
   return c.json({ ok: true });
 });
-crud("loans", "loans", [
-  { name: "name", required: true }, { name: "amount", required: true },
-  { name: "first_date", required: true }, { name: "total", required: true },
-]);
-crud("oneoffs", "oneoffs", [
-  { name: "date", required: true }, { name: "name", required: true }, { name: "amount", required: true },
-]);
+/* E2EE aşama 5: ad, tutar ve taksit sayısı ZARFTA (`enc`); sunucu yalnız tarihi görür. */
+crud("loans", "loans", [{ name: "enc", required: true }, { name: "first_date", required: true }]);
+crud("oneoffs", "oneoffs", [{ name: "date", required: true }, { name: "enc", required: true }]); // ad + tutar zarfta
 /* trades: jenerik crud yerine elle — transactions gibi opsiyonel yan etkisi var.
    account_id verilmişse SATIŞ/TEMETTÜ hesabın bakiyesini artırır, ALIŞ azaltır, BEDELSİZ hiç
    dokunmaz; DELETE geri alır. İkisi de atomik (tx).
@@ -1053,11 +1055,12 @@ api.delete("/cards/:id/pay-statement/:due", async (c) => {
 });
 /* Faz 11 — portföy grupları (tanım tablosu; jenerik crud yeterli, yan etkisi yok).
    Silinince trades.portfolio_id ON DELETE SET NULL ile "Gruplanmamış"a düşer, işlem kaybolmaz. */
-crud("portfolios", "portfolios", [{ name: "name", required: true }, { name: "note" }]);
+crud("portfolios", "portfolios", [{ name: "enc", required: true }]); // ad + not zarfta
 
-crud("categories", "categories", [
-  { name: "name", required: true }, { name: "kind", required: true }, { name: "color" },
-]);
+/* Kategori ADI zarfta. Sonuç: aynı adlı iki kategoriyi sunucu artık AYIRT EDEMEZ (eski
+   UNIQUE (user_id, name) kısıtı adla birlikte düştü) — denetim istemcide (Tanımlar,
+   KategoriAlani). Tür ve renk düz: filtre ve seçici onlara bakıyor, kişisel bir şey söylemiyor. */
+crud("categories", "categories", [{ name: "enc", required: true }, { name: "kind", required: true }, { name: "color" }]);
 
 /* ---- gerçekleşen işlemler (transactions): hesaba bağlıysa bakiyeyi de oynatır ----
    Jenerik crud() yerine özel rotalar: amount işaretlidir (gider −, gelir +);

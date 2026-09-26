@@ -7,10 +7,12 @@
    zarflanacak — kapıyı atlayan her yol şifrelemeyi de atlardı ve bu SESSİZ olurdu
    (düz metin veritabanına yazılır, kimse fark etmez).
 
-   Boru hattı: türetilen tutarları tamamla (tutar.ts) → [aşama 5b+: zarfla] → gönder. */
+   Boru hattı: türetilen tutarları tamamla (tutar.ts) → hassas alanları zarfla (zarf.ts) → gönder.
+   Sıra önemli: tutar zarflamadan ÖNCE hesaplanır (zarfın içine girecek değer odur). */
 
 import type { AllData } from "@finans/engine";
 import { tutarTamamla } from "./tutar";
+import { zarfla } from "./zarf";
 
 /** Son `/api/all` yanıtı — türetilen tutarlar bu veriden hesaplanır. `api.all()` günceller. */
 let sonVeri: AllData | null = null;
@@ -21,7 +23,7 @@ export type Yanit = { status: number; data: any };
 /** `path`: `/api` öneksiz ("/trades", "/cards/5/pay-statement"). */
 export async function yaz(method: string, path: string, body?: unknown): Promise<Yanit> {
   const govde = body !== undefined && body !== null && typeof body === "object" && !Array.isArray(body)
-    ? tutarTamamla(method, path, body as Record<string, unknown>, sonVeri)
+    ? zarfla(method, path, tutarTamamla(method, path, body as Record<string, unknown>, sonVeri), sonVeri)
     : body;
   const r = await fetch(`/api${path}`, {
     method,

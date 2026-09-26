@@ -32,7 +32,12 @@ export function Tanimlar({ data, reload }: { data: AllData; reload: () => void }
 export function Kategoriler({ data, reload }: { data: AllData; reload: () => void }) {
   const [cat, setCat] = useState({ name: "", kind: "expense" as Category["kind"] });
   const nameRef = useRef<HTMLInputElement>(null);
-  const ok = cat.name.trim().length > 0;
+  /* Aynı adlı kategori İSTEMCİDE engellenir. Eskiden veritabanının UNIQUE (user_id, name)
+     kısıtı reddediyordu — ama bu form hatayı hiç göstermiyordu, istek sessizce patlıyordu.
+     Aşama 5'ten beri ad zarfta: sunucu adları karşılaştıramaz, kural yalnız burada
+     uygulanabilir. Karşılaştırma KategoriAlani ile aynı (Türkçe duyarlı küçültme). */
+  const ayniAd = data.categories.some((c) => c.name.toLocaleLowerCase("tr") === cat.name.trim().toLocaleLowerCase("tr"));
+  const ok = cat.name.trim().length > 0 && !ayniAd;
   const ekle = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!ok) return;
@@ -81,6 +86,7 @@ export function Kategoriler({ data, reload }: { data: AllData; reload: () => voi
         <div style={{ display: "flex", alignItems: "flex-end" }}>
           <button style={{ ...css.btn, opacity: ok ? 1 : 0.5 }} disabled={!ok}>Kategori Ekle</button>
         </div>
+        {ayniAd && <div style={{ flex: "1 1 100%", fontSize: 12, color: T.mut3 }}>Bu adda bir kategori zaten var.</div>}
       </form>
     </div>
   );
