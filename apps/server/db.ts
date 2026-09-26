@@ -77,6 +77,14 @@ export type TxClient = {
    sunucu yerel saatini JS'te üretip parametre olarak geçiriyoruz (lehçe bağımsız + TZ net).
    Biçim SQLite ile birebir: 'YYYY-MM-DD HH:MM:SS' ve 'YYYY-MM-DD'. */
 const pad = (n: number) => String(n).padStart(2, "0");
+/** Zarfın BİÇİMİ doğrulanır, içeriği değil (sunucu aşama 6'da içeriği okuyamaz): düz metin
+    zarf `p1:`+JSON, şifreli zarf `v1:iv:ct`. Çöp yazılıp satır okunamaz hâle gelmesin.
+    `tavan` karakter sınırıdır: kayıt satırları için 20k bol; asistan mesajı/planı daha uzun
+    olabilir (8.000 karakterlik bir yanıt + şifrelemenin base64 büyümesi). Sunucu içeriği
+    okuyamadığından eskiden içerik üzerinde yaptığı uzunluk kırpması artık istemcide. */
+export const zarfGecerli = (v: unknown, tavan = 20_000): boolean =>
+  typeof v === "string" && v.length <= tavan && (/^p1:\{.*\}$/s.test(v) || /^v1:[A-Za-z0-9_-]{16}:[A-Za-z0-9_-]+$/.test(v));
+
 export function nowLocal(): string {
   const d = new Date();
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
@@ -526,7 +534,12 @@ CREATE INDEX IF NOT EXISTS account_entries_source ON account_entries (source_tab
      kaydıdır, sohbetle birlikte silinmez), ölçüt o olsaydı kullanıcının sildiği sohbet
      bir sonraki açılışta arşiv olarak geri gelirdi. */
   const archived = await pool.query("SELECT 1 FROM settings WHERE key='ai_actions_archived'");
-  if (!archived.rowCount) {
+  /* E2EE aşama 5d: bu SQL düz `summary`/`title`/`content` kolonlarına yazar, yani yalnız
+     zarf göçünden ÖNCE koşabilir (initDb'de zarfGoc'tan önce durması bu yüzden). Bayrak
+     her kurulumun ilk açılışında atıldığından normalde hiç sorun olmaz; bayrak bir şekilde
+     kaybolmuş ve kolonlar düşmüşse arşivleme ATLANIR (bağsız satırlar o durumda silinmiş
+     sohbetlerindir — arşivlemek silinen sohbeti geri getirirdi) ve bayrak yeniden atılır. */
+  if (!archived.rowCount && await kolonVarMi("ai_actions", "summary")) {
     const orphans = await pool.query<{ user_id: number }>(
       "SELECT DISTINCT user_id FROM ai_actions WHERE conversation_id IS NULL",
     );
@@ -545,8 +558,9 @@ CREATE INDEX IF NOT EXISTS account_entries_source ON account_entries (source_tab
         [cid, user_id],
       );
     }
-    await pool.query("INSERT INTO settings (key, value) VALUES ('ai_actions_archived', $1) ON CONFLICT (key) DO NOTHING", [nowLocal()]);
   }
+  if (!archived.rowCount)
+    await pool.query("INSERT INTO settings (key, value) VALUES ('ai_actions_archived', $1) ON CONFLICT (key) DO NOTHING", [nowLocal()]);
 
   /* Faz 15 — hareket defterini mevcut veriden bir kez doldur. Defterin kuralı balance = Σ entries
      olduğundan, geçmişten üretilebilen hareketler (hesaba bağlı işlemler, TRY portföy işlemleri,

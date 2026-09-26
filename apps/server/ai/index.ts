@@ -18,8 +18,13 @@
 
 import { randomUUID } from "node:crypto";
 import { getProvider } from "./provider.js";
-import { systemPrompt, toolDefs, konusmaBasligi, type PendingAction, type UserContext, type ChatMessage } from "@finans/asistan";
-import { db, nowLocal } from "../db.js";
+import { systemPrompt, toolDefs, type UserContext, type ChatMessage } from "@finans/asistan";
+import { db, nowLocal, zarfGecerli } from "../db.js";
+
+/* E2EE aşama 5d: sohbet başlığı, mesaj içeriği, plan ve işlem özeti ZARFTA. Sunucu bu
+   metinleri artık görmüyor; mesaj ve plan satırları daha uzun olabildiği için tavan büyük. */
+const AI_ZARF_TAVAN = 64_000;
+const aiZarf = (v: unknown): v is string => zarfGecerli(v, AI_ZARF_TAVAN);
 
 /* ————— Plan deposu (Faz 34) —————
    Plan artık `ai_plans` tablosunda yaşar. İki şeyi birden düzeltir:
@@ -51,18 +56,18 @@ export function planGecerli(createdAt: string, ttlSaat = PLAN_TTL_SAAT): boolean
 }
 
 type TakenPlan =
-  | { ok: true; conversationId: number | null; actions: PendingAction[] }
+  | { ok: true; conversationId: number | null; enc: string }
   | { ok: false; error: string };
 
 /** Planı ATOMİK olarak tüketir: ya işlemleri döner ya da niye dönemediğini söyler. */
 async function takePlan(uid: number, planId: string): Promise<TakenPlan> {
-  const row = await db.get<{ conversation_id: number | null; actions: string }>(
+  const row = await db.get<{ conversation_id: number | null; enc: string }>(
     `UPDATE ai_plans SET consumed_at=?
       WHERE plan_id=? AND user_id=? AND consumed_at IS NULL AND created_at >= ?
-     RETURNING conversation_id, actions`,
+     RETURNING conversation_id, enc`,
     nowLocal(), planId, uid, oncesi(PLAN_TTL_SAAT),
   );
-  if (row) return { ok: true, conversationId: row.conversation_id, actions: JSON.parse(row.actions) as PendingAction[] };
+  if (row) return { ok: true, conversationId: row.conversation_id, enc: row.enc };
   /* Alamadıysak sebebini söyle — "zaten uygulandı" ile "süresi doldu" kullanıcı için
      çok farklı iki durum (biri "bir şey yapma", diğeri "tekrar sor"). */
   const p = await db.get<{ consumed_at: string | null }>(
@@ -78,12 +83,12 @@ const KONUSMA_SAYFA = 30;   // konuşma listesi sayfa boyutu (liste sınırsız 
 const MESAJ_TAVAN = 200;    // bir konuşmadan gönderilen son mesaj sayısı
 
 /** Mesajı yazar ve konuşmayı "en üste" taşır (updated_at) — ikisi tek işlemde. */
-async function mesajYaz(uid: number, convId: number, role: "user" | "assistant", content: string, planId: string | null = null): Promise<void> {
+async function mesajYaz(uid: number, convId: number, role: "user" | "assistant", enc: string, planId: string | null = null): Promise<void> {
   const at = nowLocal();
   await db.tx(async (t) => {
     await t.run(
-      "INSERT INTO ai_messages (user_id, conversation_id, role, content, created_at, plan_id) VALUES (?,?,?,?,?,?)",
-      uid, convId, role, content, at, planId,
+      "INSERT INTO ai_messages (user_id, conversation_id, role, enc, created_at, plan_id) VALUES (?,?,?,?,?,?)",
+      uid, convId, role, enc, at, planId,
     );
     await t.run("UPDATE ai_conversations SET updated_at=? WHERE id=? AND user_id=?", at, convId, uid);
   });
@@ -133,8 +138,8 @@ export function mountAi(api: any, deps: { rateLimited: RateLimiter }): void {
     const rawId = Number(c.req.query("beforeId"));
     const beforeId = Number.isFinite(rawId) && rawId > 0 ? Math.floor(rawId) : 0;
     const imlec = beforeAt && beforeId ? 1 : 0; // 0 = baştan
-    const rows = await db.all<{ id: number; title: string; updated_at: string; messages: number; undoable: number }>(
-      `SELECT c.id, c.title, c.updated_at,
+    const rows = await db.all<{ id: number; enc: string; updated_at: string; messages: number; undoable: number }>(
+      `SELECT c.id, c.enc, c.updated_at,
               (SELECT COUNT(*) FROM ai_messages m WHERE m.conversation_id = c.id)::int AS messages,
               (SELECT COUNT(*) FROM ai_actions a WHERE a.conversation_id = c.id AND a.undone_at IS NULL)::int AS undoable
          FROM ai_conversations c
@@ -145,7 +150,7 @@ export function mountAi(api: any, deps: { rateLimited: RateLimiter }): void {
     const more = rows.length > KONUSMA_SAYFA;
     return c.json({
       conversations: rows.slice(0, KONUSMA_SAYFA).map((r) => ({
-        id: r.id, title: r.title, at: r.updated_at, messages: r.messages, undoable: r.undoable,
+        id: r.id, enc: r.enc, at: r.updated_at, messages: r.messages, undoable: r.undoable,
       })),
       more,
     });
@@ -159,13 +164,13 @@ export function mountAi(api: any, deps: { rateLimited: RateLimiter }): void {
     const uid = c.get("user").id;
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id)) return c.json({ error: "geçersiz konuşma" }, 400);
-    const conv = await db.get<{ id: number; title: string }>(
-      "SELECT id, title FROM ai_conversations WHERE id=? AND user_id=?", id, uid,
+    const conv = await db.get<{ id: number; enc: string }>(
+      "SELECT id, enc FROM ai_conversations WHERE id=? AND user_id=?", id, uid,
     );
     if (!conv) return c.json({ error: "konuşma bulunamadı" }, 404);
     const [rows, toplam, plans, pend] = await Promise.all([
-      db.all<{ id: number; role: "user" | "assistant"; content: string; created_at: string; plan_id: string | null }>(
-        "SELECT id, role, content, created_at, plan_id FROM ai_messages WHERE user_id=? AND conversation_id=? ORDER BY id DESC LIMIT ?",
+      db.all<{ id: number; role: "user" | "assistant"; enc: string; created_at: string; plan_id: string | null }>(
+        "SELECT id, role, enc, created_at, plan_id FROM ai_messages WHERE user_id=? AND conversation_id=? ORDER BY id DESC LIMIT ?",
         uid, id, MESAJ_TAVAN,
       ),
       db.get<{ n: number }>("SELECT COUNT(*)::int AS n FROM ai_messages WHERE conversation_id=?", id),
@@ -173,26 +178,28 @@ export function mountAi(api: any, deps: { rateLimited: RateLimiter }): void {
          bunu yazar. Mesaj metnini kullanmak yetmezdi — o metin başarısız satırları ve
          geri alma dökümlerini de içerir, oysa liste yalnız HÂLÂ GERİ ALINABİLİR olanı
          göstermeli. `undoable`/`total` ayrımı da buradan: kısmen geri alınmış plan var. */
-      db.all<{ plan_id: string; at: string; total: number; undoable: number; summary: string }>(
+      db.all<{ plan_id: string; at: string; total: number; undoable: number; enc: string }>(
         `SELECT plan_id, MIN(created_at) AS at, COUNT(*)::int AS total,
                 COUNT(*) FILTER (WHERE undone_at IS NULL)::int AS undoable,
-                (array_agg(summary ORDER BY id))[1] AS summary
+                (array_agg(enc ORDER BY id))[1] AS enc
            FROM ai_actions WHERE user_id=? AND conversation_id=?
           GROUP BY plan_id ORDER BY MIN(id) DESC`,
         uid, id,
       ),
-      db.get<{ plan_id: string; actions: string; created_at: string }>(
-        "SELECT plan_id, actions, created_at FROM ai_plans WHERE user_id=? AND conversation_id=? AND consumed_at IS NULL ORDER BY created_at DESC LIMIT 1",
+      db.get<{ plan_id: string; enc: string; created_at: string }>(
+        "SELECT plan_id, enc, created_at FROM ai_plans WHERE user_id=? AND conversation_id=? AND consumed_at IS NULL ORDER BY created_at DESC LIMIT 1",
         uid, id,
       ),
     ]);
-    const messages = rows.reverse().map((m) => ({ id: m.id, role: m.role, content: m.content, at: m.created_at, planId: m.plan_id }));
+    /* Zarflar olduğu gibi gider, istemci açar (api.ts `aiSohbet`). Plan satırının zarfı
+       planın İLK işleminin özetidir — liste o planı ilk satırıyla anar. */
+    const messages = rows.reverse().map((m) => ({ id: m.id, role: m.role, enc: m.enc, at: m.created_at, planId: m.plan_id }));
     return c.json({
-      id: conv.id, title: conv.title, messages,
+      id: conv.id, enc: conv.enc, messages,
       truncated: (toplam?.n ?? 0) > messages.length,
-      plans: plans.map((p) => ({ planId: p.plan_id, at: p.at, total: p.total, undoable: p.undoable, summary: p.summary })),
+      plans: plans.map((p) => ({ planId: p.plan_id, at: p.at, total: p.total, undoable: p.undoable, enc: p.enc })),
       pending: pend && planGecerli(pend.created_at)
-        ? { planId: pend.plan_id, actions: JSON.parse(pend.actions) as PendingAction[], at: pend.created_at }
+        ? { planId: pend.plan_id, enc: pend.enc, at: pend.created_at }
         : null,
     });
   });
@@ -210,11 +217,11 @@ export function mountAi(api: any, deps: { rateLimited: RateLimiter }): void {
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id)) return c.json({ error: "geçersiz konuşma" }, 400);
     const b = await c.req.json().catch(() => null);
-    const title = b && typeof b.title === "string" ? b.title.replace(/\s+/g, " ").trim().slice(0, 120) : "";
-    if (!title) return c.json({ error: "başlık boş olamaz" }, 400);
-    const r = await db.run("UPDATE ai_conversations SET title=? WHERE id=? AND user_id=?", title, id, uid);
+    // boşluk/uzunluk kuralı istemcide (sunucu başlığı göremez)
+    if (!aiZarf(b?.enc)) return c.json({ error: "başlık zarfı gerekli" }, 400);
+    const r = await db.run("UPDATE ai_conversations SET enc=? WHERE id=? AND user_id=?", b.enc, id, uid);
     if (!r.changes) return c.json({ error: "konuşma bulunamadı" }, 404);
-    return c.json({ ok: true, title });
+    return c.json({ ok: true });
   });
 
   api.delete("/ai/conversations/:id", async (c: any) => {
@@ -271,36 +278,37 @@ export function mountAi(api: any, deps: { rateLimited: RateLimiter }): void {
   });
 
   /** Konuşmanın sahipliğini doğrular; `id` yoksa yenisini açar. */
-  async function konusmaAl(uid: number, id: unknown, baslik: string): Promise<number | null> {
+  async function konusmaAl(uid: number, id: unknown, baslikEnc: string): Promise<number | null> {
     if (id != null) {
       const n = Number(id);
       const own = Number.isInteger(n) ? await db.get<{ id: number }>("SELECT id FROM ai_conversations WHERE id=? AND user_id=?", n, uid) : undefined;
       return own ? own.id : null;
     }
     const now = nowLocal();
-    const r = await db.run("INSERT INTO ai_conversations (user_id, title, created_at, updated_at) VALUES (?,?,?,?) RETURNING id", uid, baslik, now, now);
+    const r = await db.run("INSERT INTO ai_conversations (user_id, enc, created_at, updated_at) VALUES (?,?,?,?) RETURNING id", uid, baslikEnc, now, now);
     return r.id!;
   }
 
   /* DEPO: mesaj ekle. Kullanıcı mesajı model çağrısından ÖNCE buraya yazılır (Faz 34:
-     sağlayıcı patlarsa yazdığı cümle kaybolmasın) — istemci bu sırayı korur. Başlık
-     aşama 6'da istemcide türeyip şifreli gelecek; şimdilik verilmezse içerikten türer. */
+     sağlayıcı patlarsa yazdığı cümle kaybolmasın) — istemci bu sırayı korur. İçerik ve
+     başlık zarfta gelir: başlık ilk cümleden İSTEMCİDE türer (sunucu cümleyi göremez), yeni
+     konuşma açılacaksa `title_enc` zorunludur. Uzunluk kırpması da istemcide. */
   api.post("/ai/messages", async (c: any) => {
     const uid = c.get("user").id;
     const b = await c.req.json().catch(() => null);
     const role = b?.role;
     if (role !== "user" && role !== "assistant") return c.json({ error: "geçersiz rol" }, 400);
-    const content = typeof b.content === "string" ? b.content.trim().slice(0, role === "user" ? 4000 : 8000) : "";
-    if (!content) return c.json({ error: "mesaj yok" }, 400);
+    if (!aiZarf(b.enc)) return c.json({ error: "mesaj zarfı gerekli" }, 400);
+    if (b.conversationId == null && !aiZarf(b.title_enc)) return c.json({ error: "yeni sohbet için başlık zarfı gerekli" }, 400);
     if (role === "user" && deps.rateLimited(`ai:${uid}`, 30, 5 * 60_000)) return c.json({ error: "Çok fazla istek, biraz sonra tekrar dene" }, 429);
     let planId: string | null = null;
     if (b.planId != null) {
       planId = String(b.planId);
       if (!(await db.get("SELECT 1 FROM ai_plans WHERE plan_id=? AND user_id=?", planId, uid))) return c.json({ error: "plan bulunamadı" }, 404);
     }
-    const convId = await konusmaAl(uid, b.conversationId, typeof b.title === "string" && b.title.trim() ? b.title.trim().slice(0, 120) : konusmaBasligi(content));
+    const convId = await konusmaAl(uid, b.conversationId, b.title_enc);
     if (!convId) return c.json({ error: "konuşma bulunamadı" }, 404);
-    await mesajYaz(uid, convId, role, content, planId);
+    await mesajYaz(uid, convId, role, b.enc, planId);
     return c.json({ conversationId: convId });
   });
 
@@ -312,15 +320,17 @@ export function mountAi(api: any, deps: { rateLimited: RateLimiter }): void {
   api.post("/ai/plans", async (c: any) => {
     const uid = c.get("user").id;
     const b = await c.req.json().catch(() => null);
-    const actions = b?.actions;
-    if (!Array.isArray(actions) || !actions.length || actions.length > 12) return c.json({ error: "geçersiz plan" }, 400);
-    if (!actions.every((a: any) => typeof a?.tool === "string" && a.args && typeof a.args === "object" && typeof a.summary === "string"))
-      return c.json({ error: "geçersiz plan satırı" }, 400);
-    const convId = await konusmaAl(uid, b.conversationId, "Yeni sohbet");
-    if (!convId || b.conversationId == null) return c.json({ error: "konuşma bulunamadı" }, 404);
+    // plan satırlarının biçimi (1–12 işlem, tool/args/summary) istemcide doğrulanır — sunucu planı göremez
+    if (!aiZarf(b?.enc)) return c.json({ error: "plan zarfı gerekli" }, 400);
+    /* Plan yalnız VAR OLAN bir konuşmaya yazılır. Eskiden kimlik yoksa konusmaAl önce yeni
+       bir konuşma AÇIYOR, sonra 404 dönüyordu — her hatalı istek arkasında boş bir sohbet
+       bırakırdı. Kontrol artık açmadan önce. */
+    if (b.conversationId == null) return c.json({ error: "konuşma bulunamadı" }, 404);
+    const convId = await konusmaAl(uid, b.conversationId, "");
+    if (!convId) return c.json({ error: "konuşma bulunamadı" }, 404);
     const planId = randomUUID();
-    await db.run("INSERT INTO ai_plans (plan_id, user_id, conversation_id, actions, created_at) VALUES (?,?,?,?,?)",
-      planId, uid, convId, JSON.stringify(actions), nowLocal());
+    await db.run("INSERT INTO ai_plans (plan_id, user_id, conversation_id, enc, created_at) VALUES (?,?,?,?,?)",
+      planId, uid, convId, b.enc, nowLocal());
     return c.json({ planId });
   });
 
@@ -333,7 +343,7 @@ export function mountAi(api: any, deps: { rateLimited: RateLimiter }): void {
     if (deps.rateLimited(`aiexec:${uid}`, 30, 5 * 60_000)) return c.json({ error: "Çok fazla istek, biraz sonra tekrar dene" }, 429);
     const plan = await takePlan(uid, String(c.req.param("id")));
     if (!plan.ok) return c.json({ error: plan.error }, 409);
-    return c.json({ conversationId: plan.conversationId, actions: plan.actions });
+    return c.json({ conversationId: plan.conversationId, enc: plan.enc });
   });
 
   /* DEPO: uygulama günlüğü ("Geri al" bunu okur). Yalnız TÜKETİLMİŞ bir planın günlüğü
@@ -344,7 +354,7 @@ export function mountAi(api: any, deps: { rateLimited: RateLimiter }): void {
     const b = await c.req.json().catch(() => null);
     const items = b?.items;
     if (!Array.isArray(items) || !items.length || items.length > 12) return c.json({ error: "geçersiz günlük" }, 400);
-    if (!items.every((x: any) => typeof x?.tool === "string" && typeof x.summary === "string" && x.undo_method === "DELETE" && /^\/[A-Za-z0-9/_:.-]+$/.test(String(x.undo_path))))
+    if (!items.every((x: any) => typeof x?.tool === "string" && /^[a-z_]{1,40}$/.test(x.tool) && aiZarf(x.enc) && x.undo_method === "DELETE" && /^\/[A-Za-z0-9/_:.-]+$/.test(String(x.undo_path))))
       return c.json({ error: "geçersiz günlük satırı" }, 400);
     const plan = await db.get<{ conversation_id: number | null }>(
       "SELECT conversation_id FROM ai_plans WHERE plan_id=? AND user_id=? AND consumed_at IS NOT NULL", planId, uid);
@@ -352,8 +362,8 @@ export function mountAi(api: any, deps: { rateLimited: RateLimiter }): void {
     await db.tx(async (t) => {
       for (const x of items) {
         await t.run(
-          "INSERT INTO ai_actions (user_id, plan_id, conversation_id, created_at, tool, summary, undo_method, undo_path) VALUES (?,?,?,?,?,?,?,?)",
-          uid, planId, plan.conversation_id, nowLocal(), x.tool, x.summary, x.undo_method, x.undo_path);
+          "INSERT INTO ai_actions (user_id, plan_id, conversation_id, created_at, tool, enc, undo_method, undo_path) VALUES (?,?,?,?,?,?,?,?)",
+          uid, planId, plan.conversation_id, nowLocal(), x.tool, x.enc, x.undo_method, x.undo_path);
       }
     });
     return c.json({ ok: true });
@@ -362,8 +372,8 @@ export function mountAi(api: any, deps: { rateLimited: RateLimiter }): void {
   /* Geri alınabilir satırlar — TERS SIRADA (önce işlem, sonra onu tutan hesap). */
   api.get("/ai/plans/:id/actions", async (c: any) => {
     const uid = c.get("user").id;
-    const rows = await db.all<{ id: number; summary: string; undo_method: string; undo_path: string; conversation_id: number | null }>(
-      "SELECT id, summary, undo_method, undo_path, conversation_id FROM ai_actions WHERE user_id=? AND plan_id=? AND undone_at IS NULL ORDER BY id DESC",
+    const rows = await db.all<{ id: number; enc: string; undo_method: string; undo_path: string; conversation_id: number | null }>(
+      "SELECT id, enc, undo_method, undo_path, conversation_id FROM ai_actions WHERE user_id=? AND plan_id=? AND undone_at IS NULL ORDER BY id DESC",
       uid, String(c.req.param("id")));
     return c.json({ actions: rows });
   });

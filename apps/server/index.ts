@@ -6,7 +6,7 @@ import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { logger } from "hono/logger";
 import cron from "node-cron";
 import { REC_AMOUNT_BEGIN } from "@finans/engine";
-import { db, initDb, nowLocal, todayLocal, TENANT_TABLES, GLOBAL_SETTING_KEYS, type TxClient } from "./db.js";
+import { db, initDb, nowLocal, todayLocal, zarfGecerli, TENANT_TABLES, GLOBAL_SETTING_KEYS, type TxClient } from "./db.js";
 import { loadAllData } from "./data.js";
 import { refreshAll, backfillPriceHistory, refreshCorporateActions, refreshCompanyEvents } from "./prices.js";
 import { refreshBenchmarks, autoBackfill } from "./benchmarks.js";
@@ -352,10 +352,6 @@ api.use("*", async (c, next) => {
 api.get("/all", async (c) => c.json(await loadAllData(c.get("user").id, { gecmis: true })));
 
 /* ---- generic CRUD ---- */
-/** Zarfın BİÇİMİ doğrulanır, içeriği değil (sunucu aşama 6'da içeriği okuyamaz): düz metin
-    zarf `p1:`+JSON, şifreli zarf `v1:iv:ct`. Çöp yazılıp satır okunamaz hâle gelmesin. */
-const zarfGecerli = (v: unknown): boolean =>
-  typeof v === "string" && v.length <= 20_000 && (/^p1:\{.*\}$/s.test(v) || /^v1:[A-Za-z0-9_-]{16}:[A-Za-z0-9_-]+$/.test(v));
 type Col = { name: string; required?: boolean; default?: unknown };
 function crud(route: string, table: string, cols: Col[]) {
   api.post(`/${route}`, async (c) => {

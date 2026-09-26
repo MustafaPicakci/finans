@@ -1,7 +1,7 @@
 import type { AllData } from "@finans/engine";
 import type { UserContext, ChatMessage, ChatResult } from "@finans/asistan";
 import { yaz, veriAyarla } from "./yazim";
-import { veriAc } from "./yazim/zarf";
+import { veriAc, zarfAc, planIslemleri, baslikTemizle } from "./yazim/zarf";
 
 export type { Account, Recurring, RecurringAmount, Loan, OneOff, AssetType, Currency, Trade, Portfolio, Card, CardTx, Price, AllData } from "@finans/engine";
 
@@ -81,10 +81,23 @@ export const api = {
   /** Son harekete göre sıralı; sayfalama keyset (son satırın `at` + `id`'si imleçtir) */
   aiKonusmalar: (imlec?: { at: string; id: number }) =>
     fetch(`/api/ai/conversations${imlec ? `?beforeAt=${encodeURIComponent(imlec.at)}&beforeId=${imlec.id}` : ""}`)
-      .then((r) => j<{ conversations: AiKonusma[]; more: boolean }>(r)),
-  aiSohbet: (id: number) => fetch(`/api/ai/conversations/${id}`).then((r) => j<AiSohbet>(r)),
+      .then((r) => j<{ conversations: AiKonusma[]; more: boolean }>(r))
+      .then((d) => ({ ...d, conversations: d.conversations.map((k) => zarfAc(k) as AiKonusma) })),
+  /* Zarflar burada açılır (aşama 5d): başlık, mesajlar, plan özetleri, bekleyen plan. */
+  aiSohbet: (id: number) => fetch(`/api/ai/conversations/${id}`).then((r) => j<any>(r)).then((d): AiSohbet => {
+    const bekleyen = d.pending ? zarfAc(d.pending) : null;
+    return {
+      ...(zarfAc(d) as any),
+      messages: d.messages.map(zarfAc),
+      plans: d.plans.map(zarfAc),
+      pending: bekleyen ? { ...(bekleyen as any), actions: planIslemleri(bekleyen.actions) } : null,
+    };
+  }),
   /** Başlığı yeniden adlandırır; sıralamayı (son konuşma zamanı) BİLEREK değiştirmez */
-  aiSohbetAdlandir: (id: number, title: string) => yazJ<{ ok: true; title: string }>("PUT", `/ai/conversations/${id}`, { title }),
+  aiSohbetAdlandir: async (id: number, title: string) => {
+    await yazJ("PUT", `/ai/conversations/${id}`, { title });
+    return { ok: true as const, title: baslikTemizle(title) }; // sunucu başlığı göremez, yankılayamaz
+  },
   aiSohbetSil: (id: number) => fetch(`/api/ai/conversations/${id}`, { method: "DELETE" }).then(j),
   /* ---- E2EE aşama 4: sunucu = röle + depo. Döngüyü `features/asistan/istemci.ts` koşturur;
      bu uçları DOĞRUDAN çağırma, oradan geç. ---- */
@@ -97,11 +110,13 @@ export const api = {
   aiPlanKaydet: (conversationId: number, actions: AiAction[]) => yazJ<{ planId: string }>("POST", "/ai/plans", { conversationId, actions }),
   aiPlanTuket: (planId: string) =>
     fetch(`/api/ai/plans/${encodeURIComponent(planId)}/consume`, { method: "POST" })
-      .then((r) => j<{ conversationId: number | null; actions: AiAction[] }>(r)),
+      .then((r) => j<{ conversationId: number | null; enc: string }>(r))
+      .then((d) => ({ conversationId: d.conversationId, actions: planIslemleri(zarfAc(d).actions) as AiAction[] })),
   aiGunlukYaz: (planId: string, items: { tool: string; summary: string; undo_method: string; undo_path: string }[]) => yazJ("POST", `/ai/plans/${encodeURIComponent(planId)}/actions`, { items }),
   aiGunlukOku: (planId: string) =>
     fetch(`/api/ai/plans/${encodeURIComponent(planId)}/actions`)
-      .then((r) => j<{ actions: { id: number; summary: string; undo_method: string; undo_path: string; conversation_id: number | null }[] }>(r)),
+      .then((r) => j<{ actions: any[] }>(r))
+      .then((d) => ({ actions: d.actions.map(zarfAc) as { id: number; summary: string; undo_method: string; undo_path: string; conversation_id: number | null }[] })),
   aiGeriAlindi: (planId: string, ids: number[]) => yazJ("POST", `/ai/plans/${encodeURIComponent(planId)}/undone`, { ids }),
   /* ---- auth (Faz 5.1) ---- */
   me: () => fetch("/api/auth/me").then((r) => j<{ user: SessionUser | null }>(r)),

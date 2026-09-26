@@ -27,6 +27,13 @@ export const ZARF = {
   deposits: ["name", "principal", "rate", "term_days", "withholding"],
   recurring: ["name"],
   recurring_amounts: ["amount"],
+  /* ——— asistan deposu (aşama 5d): kullanıcının yazdığı cümleler ve planların argümanları.
+     "Migros'a 450 harcadım" defterde zarflıyken sohbet geçmişinde düz dursaydı şifreleme
+     bir süs olurdu — asistan kullanan herkesin harcamaları buradan okunurdu. ——— */
+  ai_conversations: ["title"],
+  ai_messages: ["content"],
+  ai_plans: ["actions"],
+  ai_actions: ["summary"],
 } as const satisfies Record<string, readonly string[]>;
 
 export type ZarfliTablo = keyof typeof ZARF;
@@ -72,6 +79,23 @@ export const DUZ: Record<ZarfliTablo, Record<string, string>> = {
     account_id: "FK", card_id: "FK", category_id: "FK", auto: "otomatik gerçekleştirme bayrağı",
   },
   recurring_amounts: { recurring_id: "FK + birincil anahtar", from_month: "BİRİNCİL ANAHTAR — şifreli olsa ON CONFLICT hiç tetiklenmezdi" },
+  ai_conversations: {
+    created_at: "açılış damgası", updated_at: "SIRALAMA + keyset sayfalama anahtarı — şifreli olsa liste sayfalanamazdı",
+  },
+  ai_messages: {
+    conversation_id: "FK", role: "kullanıcı/asistan — mesaj başına hız sınırı buna bakar; içerik değil",
+    created_at: "damga", plan_id: "sonuç mesajını plana bağlar ('geri al' düğmesi)",
+  },
+  ai_plans: {
+    plan_id: "BİRİNCİL ANAHTAR — tek kullanımlık kilit bununla WHERE yapar", conversation_id: "FK",
+    created_at: "24 saatlik geçerlilik sunucuda ölçülür", consumed_at: "TEK KULLANIMLIK KİLİT — atomik UPDATE ... WHERE consumed_at IS NULL",
+  },
+  ai_actions: {
+    plan_id: "plana bağ", conversation_id: "FK", created_at: "damga",
+    tool: "araç adı (gider_ekle, virman…) — hareket TÜRÜ, account_entries.kind gibi; tutar/ad değil",
+    undo_method: "geri alma isteği (hep DELETE)", undo_path: "geri alınacak kaydın yolu — yalnız tür + id (/transactions/42)",
+    undone_at: "geri alındı işareti — 'geri alınabilir' sayacı buna bakar",
+  },
 };
 
 /** Zarf biçimleri. `p1` = DÜZ METİN zarf (aşama 5: tesisat şifrelemeden önce çalışsın,

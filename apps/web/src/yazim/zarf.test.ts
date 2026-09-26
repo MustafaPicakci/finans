@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { zarfla, zarfAc, veriAc } from "./zarf";
+import { zarfla, zarfAc, veriAc, planIslemleri } from "./zarf";
 import { ZARF } from "@finans/crypto/map";
 import type { AllData } from "@finans/engine";
 
@@ -53,6 +53,12 @@ const ROTALAR: { ad: string; tablolar: string[]; method: string; path: string; b
   { ad: "portföy grubu", tablolar: ["portfolios"], method: "POST", path: "/portfolios", body: { name: G("grup"), note: G("not") } },
   { ad: "plan kalemi", tablolar: ["oneoffs"], method: "POST", path: "/oneoffs", body: { date: "2026-01-01", name: G("vergi"), amount: -987654.42 } },
   { ad: "kredi", tablolar: ["loans"], method: "POST", path: "/loans", body: { name: G("kredi"), amount: 987654.43, total: 987654, first_date: "2026-01-01" } },
+  /* asistan deposu (aşama 5d) */
+  { ad: "asistan: yeni sohbetin ilk mesajı", tablolar: ["ai_messages", "ai_conversations"], method: "POST", path: "/ai/messages", body: { conversationId: null, role: "user", content: `${G("migros")} 987654 TL`, title: G("baslik") } },
+  { ad: "asistan: yanıt", tablolar: ["ai_messages"], method: "POST", path: "/ai/messages", body: { conversationId: 5, role: "assistant", content: G("yanit"), planId: "p-1" } },
+  { ad: "asistan: sohbet adı", tablolar: ["ai_conversations"], method: "PUT", path: "/ai/conversations/5", body: { title: G("ad") } },
+  { ad: "asistan: plan", tablolar: ["ai_plans"], method: "POST", path: "/ai/plans", body: { conversationId: 5, actions: [{ tool: "gider_ekle", args: { name: G("migros"), amount: 987654.44 }, summary: G("ozet") }] } },
+  { ad: "asistan: uygulama günlüğü", tablolar: ["ai_actions"], method: "POST", path: "/ai/plans/p-1/actions", body: { items: [{ tool: "gider_ekle", summary: `${G("migros")} 987654,45 ₺`, undo_method: "DELETE", undo_path: "/transactions/8" }] } },
 ];
 const zarfsiz = (o: unknown): unknown =>
   Array.isArray(o) ? o.map(zarfsiz)
@@ -179,4 +185,28 @@ describe("sunucudan taşınan değer kuralları (adet/fiyat/anapara artık zarft
     expect(() => zarfla("POST", "/deposits", m, veri)).not.toThrow();
   });
   it("virman: tutar 0 reddedilir", () => expect(() => zarfla("POST", "/transfers", { from_account_id: 1, to_account_id: 2, amount: 0 }, veri)).toThrow(/0'dan büyük/));
+});
+
+describe("asistan deposu (aşama 5d)", () => {
+  it("başlık yalnız YENİ sohbette gider; verilmezse 'Yeni sohbet'", () => {
+    expect(zarfla("POST", "/ai/messages", { conversationId: 5, role: "user", content: "a", title: "x" }, bos()).title_enc).toBeUndefined();
+    expect(zarfIci(zarfla("POST", "/ai/messages", { conversationId: null, role: "user", content: "a" }, bos()).title_enc)).toEqual({ title: "Yeni sohbet" });
+  });
+  it("sunucunun eski kırpması istemcide: kullanıcı 4.000, asistan 8.000, başlık 120", () => {
+    const uzun = "x".repeat(9000);
+    expect((zarfIci(zarfla("POST", "/ai/messages", { conversationId: 1, role: "user", content: uzun }, bos()).enc).content as string).length).toBe(4000);
+    expect((zarfIci(zarfla("POST", "/ai/messages", { conversationId: 1, role: "assistant", content: uzun }, bos()).enc).content as string).length).toBe(8000);
+    expect((zarfIci(zarfla("PUT", "/ai/conversations/1", { title: "  a   b " + uzun }, bos()).enc).title as string).length).toBe(120);
+  });
+  it("boş mesaj, boş başlık ve biçimsiz plan reddedilir", () => {
+    expect(() => zarfla("POST", "/ai/messages", { conversationId: 1, role: "user", content: "   " }, bos())).toThrow(/mesaj yok/);
+    expect(() => zarfla("PUT", "/ai/conversations/1", { title: " " }, bos())).toThrow(/boş olamaz/);
+    expect(() => zarfla("POST", "/ai/plans", { conversationId: 1, actions: [] }, bos())).toThrow(/geçersiz plan/);
+    expect(() => zarfla("POST", "/ai/plans", { conversationId: 1, actions: [{ tool: "x" }] }, bos())).toThrow(/plan satırı/);
+  });
+  it("plan gidiş-dönüş; göçle gelen eski satırda actions METİNDİR, aynı listeye açılır", () => {
+    const actions = [{ tool: "gider_ekle", args: { amount: 450 }, summary: "Migros 450" }];
+    expect(planIslemleri(zarfIci(zarfla("POST", "/ai/plans", { conversationId: 1, actions }, bos()).enc).actions)).toEqual(actions);
+    expect(planIslemleri(zarfIci(`p1:${JSON.stringify({ actions: JSON.stringify(actions) })}`).actions)).toEqual(actions);
+  });
 });

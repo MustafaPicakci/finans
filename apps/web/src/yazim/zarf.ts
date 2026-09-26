@@ -196,9 +196,51 @@ const OZEL: Isleyici[] = [
 
 /** Gövdenin hassas alanlarını zarfa taşır. `data`: kısmi güncellemede eksik alanların ve
     kayıttan türetilen adların (kalem adı, kart adı, hesap adı) kaynağı. */
+/* ————— Asistan deposu (aşama 5d) —————
+   Sunucu bu metinleri artık GÖRMÜYOR, yani eskiden orada yapılan kırpma ve biçim
+   doğrulaması buraya taşındı (sınırlar birebir aynı: kullanıcı mesajı 4.000, asistan
+   8.000, başlık 120 karakter, plan 1–12 satır). */
+export const baslikTemizle = (t: unknown): string => String(t ?? "").replace(/\s+/g, " ").trim().slice(0, 120);
+
+const AI: Isleyici[] = [
+  { method: "PUT", yol: /^\/ai\/conversations\/(\d+)$/, fn: (_, b) => {
+    const title = baslikTemizle(b.title);
+    if (!title) throw new ZarfHatasi("başlık boş olamaz");
+    return { enc: zarfKur("ai_conversations", { title }) };
+  } },
+  { method: "POST", yol: /^\/ai\/messages$/, fn: (_, b) => {
+    const { content, title, ...kalan } = b;
+    const metin = typeof content === "string" ? content.trim().slice(0, b.role === "user" ? 4000 : 8000) : "";
+    if (!metin) throw new ZarfHatasi("mesaj yok");
+    /* Başlık yalnız YENİ konuşmada gider; verilmemişse "Yeni sohbet" (sunucu eskiden
+       içerikten türetiyordu — artık içeriği göremiyor, türetme çağıranın işi). */
+    const baslik = kalan.conversationId == null ? baslikTemizle(title) || "Yeni sohbet" : null;
+    return {
+      ...kalan, enc: zarfKur("ai_messages", { content: metin }),
+      ...(baslik ? { title_enc: zarfKur("ai_conversations", { title: baslik }) } : {}),
+    };
+  } },
+  { method: "POST", yol: /^\/ai\/plans$/, fn: (_, b) => {
+    const { actions, ...kalan } = b;
+    if (!Array.isArray(actions) || !actions.length || actions.length > 12) throw new ZarfHatasi("geçersiz plan");
+    if (!actions.every((a: any) => typeof a?.tool === "string" && a.args && typeof a.args === "object" && typeof a.summary === "string"))
+      throw new ZarfHatasi("geçersiz plan satırı");
+    return { ...kalan, enc: zarfKur("ai_plans", { actions }) };
+  } },
+  /* Günlük satırı: araç adı ve geri alma yolu (tür + id) düz, özet ("Migros 450 TL") zarfta. */
+  { method: "POST", yol: /^\/ai\/plans\/[^/]+\/actions$/, fn: (_, b) => {
+    const items = Array.isArray(b.items) ? b.items : [];
+    return { items: items.map(({ summary, ...x }: Satir) => ({ ...x, enc: zarfKur("ai_actions", { summary: String(summary ?? "") }) })) };
+  } },
+];
+
+/** Planın işlemleri. Göçle zarfa taşınan eski satırlarda `actions` bir JSON METNİDİR (kolon
+    text'ti), yeni yazılanlarda dizi — ikisi de aynı listeye açılır. */
+export const planIslemleri = (v: unknown): any[] => (typeof v === "string" ? JSON.parse(v) : Array.isArray(v) ? v : []);
+
 export function zarfla(method: string, path: string, body: Satir, data: AllData | null): Satir {
   if (method !== "POST" && method !== "PUT") return body;
-  for (const o of OZEL) {
+  for (const o of [...OZEL, ...AI]) {
     if (o.method !== "*" && o.method !== method) continue;
     const m = path.match(o.yol);
     if (m) return o.fn(m, body, data);

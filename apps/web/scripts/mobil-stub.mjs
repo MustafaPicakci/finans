@@ -261,6 +261,9 @@ createServer(async (req, res) => {
      sekmesi mobil denetimde kırık görünürdü. Röle kullanıcı mesajına bir YAZMA aracıyla,
      araç sonucuna düz metinle cevap verir: onay kartı böylece gerçekten istemcideki döngünün
      planından doğar (stub'ın elle kurduğu bir karttan değil). */
+  /* E2EE aşama 5d: asistan gövdeleri zarflı gelir (başlık, içerik, plan, özet). Stub içeride
+     düz tutar — okuma tarafında istemci zarfsız satırı olduğu gibi geçirir. */
+  const zarfIci = (enc) => (typeof enc === "string" && enc.startsWith("p1:") ? JSON.parse(enc.slice(3)) : {});
   const govdeOku = async () => { let g = ""; for await (const x of req) g += x; try { return JSON.parse(g || "{}"); } catch { return {}; } };
   if (url.pathname === "/api/ai/relay") {
     const b = await govdeOku();
@@ -274,15 +277,15 @@ createServer(async (req, res) => {
   if (url.pathname === "/api/ai/messages") {
     const b = await govdeOku();
     let k = aiKonusmalar.find((x) => x.id === Number(b.conversationId));
-    if (!k) { k = { id: 100 + aiKonusmalar.length, title: b.title ?? "Yeni sohbet", at: aiSimdi(), undoable: 0, messages: [], plans: [], pending: null }; aiKonusmalar.unshift(k); }
-    k.messages.push({ id: ++aiMesajNo, role: b.role, content: b.content, at: aiSimdi(), planId: b.planId ?? null });
+    if (!k) { k = { id: 100 + aiKonusmalar.length, title: zarfIci(b.title_enc).title ?? "Yeni sohbet", at: aiSimdi(), undoable: 0, messages: [], plans: [], pending: null }; aiKonusmalar.unshift(k); }
+    k.messages.push({ id: ++aiMesajNo, role: b.role, content: zarfIci(b.enc).content, at: aiSimdi(), planId: b.planId ?? null });
     return json({ conversationId: k.id });
   }
   if (url.pathname === "/api/ai/plans" && req.method === "POST") {
     const b = await govdeOku();
     const k = aiKonusmalar.find((x) => x.id === Number(b.conversationId));
     if (!k) return json({ error: "konuşma bulunamadı" }, 404);
-    k.pending = { planId: `stub-${aiMesajNo}`, at: aiSimdi(), actions: b.actions };
+    k.pending = { planId: `stub-${aiMesajNo}`, at: aiSimdi(), actions: zarfIci(b.enc).actions };
     return json({ planId: k.pending.planId });
   }
   const aiPlan = url.pathname.match(/^\/api\/ai\/plans\/([^/]+)\/(consume|actions|undone)$/);
@@ -296,7 +299,7 @@ createServer(async (req, res) => {
     }
     if (is === "actions" && req.method === "POST") {
       const b = await govdeOku();
-      if (k) { k.plans = [{ planId, at: aiSimdi(), total: b.items.length, undoable: b.items.length, summary: b.items[0].summary }, ...k.plans]; k.undoable = b.items.length; }
+      if (k) { k.plans = [{ planId, at: aiSimdi(), total: b.items.length, undoable: b.items.length, summary: zarfIci(b.items[0].enc).summary }, ...k.plans]; k.undoable = b.items.length; }
       return json({ ok: true });
     }
     if (is === "actions") return json({ actions: [] }); // stub'da geri alınacak gerçek kayıt yok
