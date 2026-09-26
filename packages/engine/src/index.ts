@@ -10,6 +10,7 @@ export * from "./returns.js";
 export * from "./projection.js";
 export * from "./funds.js";
 export * from "./accounts.js";
+export * from "./otomatik.js";
 export * from "./statement.js";
 export * from "./setup.js";
 export * from "./kayitlar.js";

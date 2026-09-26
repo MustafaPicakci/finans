@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { project, positions, cardInfos, stmtKey, loanRemaining, portfolioValueTry, depositValueOn, totalCash, convert, type Currency } from "@finans/engine";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { project, positions, cardInfos, stmtKey, loanRemaining, portfolioValueTry, depositValueOn, totalCash, convert,
+  bekleyenDuzenli, bekleyenEkstreler, todayStr, type Currency } from "@finans/engine";
 import { api, ApiError, type SessionUser } from "./api";
 import { T, css, fmtMoney, fiyatYasi, FIYAT_YASI_IPUCU, themeCSS, THEME_KEY, CCY_KEY, type ThemeMode } from "./theme";
 import { Center } from "./ui";
@@ -86,6 +87,61 @@ export default function App() {
     return () => { window.removeEventListener("click", close); window.removeEventListener("keydown", esc); };
   }, [menuOpen]);
   useEffect(() => { setMenuOpen(false); }, [tab]); // sekme değişince açık menü asılı kalmasın
+
+  /* ————— OTOMATİK GERÇEKLEŞTİRME (E2EE aşama 2) —————
+     15 dakikalık sunucu cron'u buraya taşındı: tutarı okumak zorundaydı ve şifreli dünyada
+     yapamayacağı tek şey buydu. Karar engine'de (`otomatik.ts`), burası yalnız sürücü.
+
+     Döngü riski yok: denenen her occurrence anahtarıyla işaretlenir, yani başarısız bir
+     yazma bu oturumda tekrar denenmez (sonraki açılışta denenir). Başarılı olanlar zaten
+     `recurring_realized` / `statement_payments` işaretiyle listeden düşer.
+
+     Ekstre ödemesine VADE GÜNÜ tarihi gönderilir: talimat o gün işler, uygulamayı açtığın
+     gün değil. Düzenli kalemde buna gerek yok — kaydın tarihi zaten occurrence tarihinden
+     geliyor, yani geç yazılan kayıt zamanında yazılanla birebir aynı. */
+  const otoDenenen = useRef<Set<string>>(new Set());
+  const otoCalisiyor = useRef(false);
+  useEffect(() => {
+    if (!data || otoCalisiyor.current) return;
+    const bugun = todayStr();
+    const kalemler = bekleyenDuzenli(data, bugun).filter((k) => !otoDenenen.current.has(`r:${k.recurring_id}:${k.ym}`));
+    const ekstreler = bekleyenEkstreler(data, bugun).filter((e) => !otoDenenen.current.has(`s:${e.card_id}:${e.due}`));
+    if (!kalemler.length && !ekstreler.length) return;
+    otoCalisiyor.current = true;
+    (async () => {
+      try {
+        for (const k of kalemler) {
+          otoDenenen.current.add(`r:${k.recurring_id}:${k.ym}`); // hata olsa da bu oturumda tekrarlanmasın
+          await api.realizeRecurring(k.recurring_id, k.ym, {
+            account_id: k.account_id, category_id: k.category_id, amount: k.amount,
+          }).catch((e) => console.warn("[oto] düzenli kalem gerçekleştirilemedi:", e));
+        }
+        for (const e of ekstreler) {
+          otoDenenen.current.add(`s:${e.card_id}:${e.due}`);
+          await api.payStatement(e.card_id, e.due, { account_id: e.account_id, amount: e.amount, date: e.due })
+            .catch((err) => console.warn("[oto] ekstre ödenemedi:", err));
+        }
+        await reload();
+      } finally { otoCalisiyor.current = false; }
+    })();
+  }, [data, reload]);
+
+  /* Uygulama açık unutulup GÜN DEĞİŞİRSE veriyi tazele (PWA'da olağan): yukarıdaki efekt
+     `data`'ya bağlı, yani kendiliğinden yeniden koşmaz ve o günün kalemleri yazılmazdı.
+     Koşul gün değişimi — her sekme dönüşünde tazelemek `/api/all`'ı boşuna çağırırdı
+     (o uç kullanıcının tüm verisini çeker, ucuz değil). */
+  const sonGun = useRef(todayStr());
+  useEffect(() => {
+    const kontrol = () => {
+      if (document.visibilityState !== "visible") return;
+      const bugun = todayStr();
+      if (bugun === sonGun.current) return;
+      sonGun.current = bugun;
+      reload();
+    };
+    document.addEventListener("visibilitychange", kontrol);
+    return () => document.removeEventListener("visibilitychange", kontrol);
+  }, [reload]);
 
   const rates = useMemo(() => ({ usdTry: Number(data?.settings.fx_usd_try || 0) }), [data]);
   const days = useMemo(() => (data ? project(data, Number(data.settings.horizon || 6), rates) : []), [data, rates]);

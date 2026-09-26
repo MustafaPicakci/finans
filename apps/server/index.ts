@@ -936,8 +936,14 @@ const DUE_RE = /^\d{4}-\d{2}-\d{2}$/;
     Yeni ödendiyse true; (card, due) zaten işaretliyse false döner. */
 async function payStatementTx(
   t: TxClient, uid: number, card: { id: number; name: string }, dueK: string, amount: number,
-  accountId: number | null, categoryId: number | null,
+  accountId: number | null, categoryId: number | null, date?: string,
 ): Promise<boolean> {
+  /* Kayıt tarihi: elle ödemede BUGÜN (kullanıcı şimdi ödedi), ödeme talimatında VADE GÜNÜ.
+     Ayrım E2EE aşama 2'de gerekti: otomatik ödeme artık uygulama açılışında yazılıyor, yani
+     günler sonra da yazılabilir — todayLocal() kullansaydı talimatla ödenen bir ekstre
+     bankanın çektiği günde değil, uygulamayı açtığın günde görünürdü. Vade günü zaten
+     doğrusu: talimat o gün işler. */
+  const tarih = date ?? todayLocal();
   const mark = await t.run(
     "INSERT INTO statement_payments (card_id, due, created_at, user_id) VALUES (?,?,?,?) ON CONFLICT (card_id, due) DO NOTHING",
     card.id, dueK, nowLocal(), uid,
@@ -945,10 +951,10 @@ async function payStatementTx(
   if (!mark.changes) return false;
   const info = await t.run(
     "INSERT INTO transactions (date,name,amount,category_id,account_id,user_id) VALUES (?,?,?,?,?,?) RETURNING id",
-    todayLocal(), `${card.name} ekstresi`, -amount, categoryId, accountId, uid,
+    tarih, `${card.name} ekstresi`, -amount, categoryId, accountId, uid,
   );
   await applyEntry(t, uid, accountId, -amount,
-    { date: todayLocal(), kind: "islem", note: `${card.name} ekstresi`, source_table: "transactions", source_id: info.id });
+    { date: tarih, kind: "islem", note: `${card.name} ekstresi`, source_table: "transactions", source_id: info.id });
   await t.run("UPDATE statement_payments SET tx_id=? WHERE card_id=? AND due=?", info.id, card.id, dueK);
   return true;
 }
@@ -969,7 +975,8 @@ api.post("/cards/:id/pay-statement", async (c) => {
   if (!(amount > 0)) return c.json({ error: "bu tarihte ekstre yok" }, 400);
   const accountId = (b as any).account_id != null && (b as any).account_id !== "" ? Number((b as any).account_id) : null;
   const categoryId = (b as any).category_id != null && (b as any).category_id !== "" ? Number((b as any).category_id) : null;
-  const created = await db.tx((t) => payStatementTx(t, uid, card, due, amount, accountId, categoryId));
+  const tarih = typeof (b as any).date === "string" && DUE_RE.test((b as any).date) ? (b as any).date : undefined;
+  const created = await db.tx((t) => payStatementTx(t, uid, card, due, amount, accountId, categoryId, tarih));
   if (created) console.log(`[audit] Kredi kartı ekstresi ödendi: ${card.name} (vade: ${due}, tutar: ${amount}, id:${uid})`);
   return c.json({ ok: true, already: !created, amount });
 });
@@ -1285,63 +1292,22 @@ app.get("/app", serveApp);
 app.use("/*", serveStatic({ root: "../web/dist" }));
 app.get("*", serveApp);
 
-/* ---- otonom gerçekleştirme: auto=true + hedefli düzenli kalemleri günü gelince gerçek kayda çevir ----
-   Yalnız cari + (kaçmışsa) önceki ay, occurrence günü geçmiş ve son ~45 gün içindekiler
-   (yeni açılan auto kaleme derin geçmiş doldurtma yok). recurring_realized PK'si ile idempotent. */
-async function materializeDueRecurring(): Promise<void> {
-  const today = todayLocal();
-  const [ty, tm] = today.split("-").map(Number);
-  const ymCur = `${ty}-${String(tm).padStart(2, "0")}`;
-  const pd = new Date(ty, tm - 2, 1); // önceki ay
-  const ymPrev = `${pd.getFullYear()}-${String(pd.getMonth() + 1).padStart(2, "0")}`;
-  const dateMs = (s: string) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d).getTime(); };
-  const rows = await db.all<RecurringRow & { user_id: number }>(
-    "SELECT * FROM recurring WHERE auto = true AND (account_id IS NOT NULL OR card_id IS NOT NULL)",
-  );
-  for (const r of rows) {
-    for (const ym of [ymPrev, ymCur]) {
-      if (!recActiveInYm(r, ym)) continue;
-      const date = occurrenceDate(ym, r.day);
-      if (date > today) continue; // günü gelmemiş
-      if (dateMs(today) - dateMs(date) > 45 * 86_400_000) continue; // pencere
-      await db.tx((t) => realizeOccurrence(t, r.user_id, r, ym)).catch((e) => console.error("[recurring] auto gerçekleştirme hatası:", e));
-    }
-  }
-}
+/* Otomatik gerçekleştirme (auto düzenli kalemler + ekstre ödeme talimatı) BURADAN KALKTI
+   (E2EE aşama 2). İkisi de tutarı OKUMAK zorundaydı (`recurring_amounts.amount`,
+   `card_txs.amount`) ve şifreli dünyada yapamayacakları tek şey bu.
 
-/* ---- otomatik ekstre ödeme talimatı: pay_account_id tanımlı kartların vadesi gelen ekstrelerini öde ----
-   Banka talimatı gibi: son ödeme günü geldiğinde (son ~10 gün penceresi — sunucu kapalıysa kaçanı telafi
-   eder, derin geçmişi doldurmaz) ödenmemiş ekstre kartın hesabından ödenir. statement_payments PK'si ile
-   idempotent; hesap kullanıcıda yoksa (silinmiş vb.) atlanır. */
-async function materializeDueStatements(): Promise<void> {
-  const today = todayLocal();
-  const dateMs = (s: string) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d).getTime(); };
-  const cards = await db.all<Card & { user_id: number; pay_account_id: number }>(
-    "SELECT * FROM cards WHERE pay_account_id IS NOT NULL",
-  );
-  for (const card of cards) {
-    const account = await db.get("SELECT id FROM accounts WHERE id=? AND user_id=?", card.pay_account_id, card.user_id);
-    if (!account) continue; // talimat hesabı yok/başkasının — otomatik ödeme yapma
-    const txs = await db.all<CardTx>("SELECT * FROM card_txs WHERE card_id=? AND user_id=?", card.id, card.user_id);
-    /* vadesi bugüne dek gelmiş (pencere içi) ekstre vadeleri ve tutarları */
-    const dues = new Map<string, number>();
-    for (const t of txs) for (const sh of txShares(t, card)) {
-      const k = keyOf(sh.due);
-      if (k <= today && dateMs(today) - dateMs(k) <= 10 * 86_400_000) dues.set(k, (dues.get(k) || 0) + sh.amount);
-    }
-    for (const [dueK, amount] of dues) {
-      if (!(amount > 0)) continue;
-      await db.tx((t) => payStatementTx(t, card.user_id, card, dueK, amount, card.pay_account_id, null))
-        .catch((e) => console.error("[kart] otomatik ekstre ödeme hatası:", e));
-    }
-  }
-}
+   Sunucuda tutmanın tek yolu, tutarın önceden şifrelenmiş İKİNCİ bir kopyasını kalem
+   tanımının yanında taşımaktı; o kopya beş şekilde bayatlar (tutar/hedef/gün değişir,
+   kalem silinir, bitiş ayı konur) ve bayatladığında cron sessizce YANLIŞ bir finansal
+   kayıt yazardı. Geç yazmak yanlış yazmaktan iyidir — üstelik gecikme görünür.
 
-/* saat başı + her 15 dk fiyat tazele (piyasa dışı saatlerde de zararsız) + otonom kalemleri/ekstreleri işle */
+   Karar artık engine'de (`otomatik.ts`: `bekleyenDuzenli` / `bekleyenEkstreler`, 22 testli),
+   sürücüsü uygulama açılışında. Defter yalnız istemci üzerinden okunduğu için ekranda
+   eksik rakam oluşmuyor; telafi pencereleri (45 gün / 10 gün) olduğu gibi devralındı. */
+
+/* her 15 dk fiyat tazele (piyasa dışı saatlerde de zararsız) + tüketilmiş e-posta token'larını buda */
 const runScheduledJobs = () => {
   refreshAll().catch(() => {});
-  materializeDueRecurring().catch(() => {});
-  materializeDueStatements().catch(() => {});
   purgeStaleEmailTokens().catch(() => {}); // tüketilmiş/süresi geçmiş aktivasyon-sıfırlama token'ları
 };
 
