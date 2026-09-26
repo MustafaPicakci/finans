@@ -5,7 +5,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { logger } from "hono/logger";
 import cron from "node-cron";
-import { txShares, keyOf, cashDelta, statementAmount, REC_AMOUNT_BEGIN, type Card, type CardTx, type TradeSide } from "@finans/engine";
+import { REC_AMOUNT_BEGIN, type Card } from "@finans/engine";
 import { db, initDb, nowLocal, todayLocal, TENANT_TABLES, GLOBAL_SETTING_KEYS, type TxClient } from "./db.js";
 import { loadAllData } from "./data.js";
 import { refreshAll, backfillPriceHistory, refreshCorporateActions, refreshCompanyEvents } from "./prices.js";
@@ -409,21 +409,17 @@ function crud(route: string, table: string, cols: Col[]) {
    `applyEntry` hareketi yazar; `revertEntries` kaynağın YAZILMIŞ hareketlerini
    okuyup tersini uygular ve satırları siler — eski tutarı yeniden hesaplamaz, bu yüzden kaynak kaydı
    düzenlenmiş/silinmiş olsa da geri alma her zaman tutar. Düzenleme = revert + apply. */
-/* ————— TUTARI SUNUCU HESAPLAMAZ (E2EE aşama 1b) —————
-   Sunucu tutarı İKİNCİ kez hesaplamayı bırakıyor. İki sebep:
-   (1) şifreli qty/price/amount ile yapamayacak (sıfır bilgi modelinde bunlar opak);
-   (2) zaten gerekmiyordu — her yazma tarayıcıdan doğuyor ve aynı engine fonksiyonunu
-       (`cashDelta`, `statementAmount`, `recAmountOn`) orada çağırıyor, yani sunucudaki
-       hesap bir KOPYAYDI. Faz 8.2'nin gerekçesi ("istemciden gelen tutara güvenilmez")
-       burada düşer: istemci kullanıcının kendisidir ve yanlış tutar yalnız kendi
-       defterini bozar — başkasının verisine dokunamaz (tenant scope).
-
-   `sunucuHesabi` YEDEK yoldur ve ÖMÜRLÜDÜR: asistan araçları bu uçlara aşama 4'e kadar
-   SUNUCUDAN iç istek atıyor (`app.request`) ve çözülmüş veriye sahip değil; cron da öyle.
-   Asistan istemciye taşınıp cron etkinleştiriciye dönünce (aşama 2/4) bu yedekler ve
-   onları besleyen hesaplar silinecek. */
-const entryAmount = (istemci: unknown, sunucuHesabi: () => number): number =>
-  Number.isFinite(Number(istemci)) && istemci !== null && istemci !== "" ? Number(istemci) : sunucuHesabi();
+/* ————— TUTARI SUNUCU HESAPLAMAZ (E2EE aşama 1b → 5a) —————
+   Türetilen tutarlar (portföy etkisi, mevduat açılışı, ekstre tutarı, düzenli kalemin o ayki
+   tutarı, mutabakat farkı) İSTEMCİDEN gelir: `apps/web/src/yazim/tutar.ts` bunların tek
+   kopyasıdır ve formlar, asistan, otomatik gerçekleştirme — her yazma oradan geçer.
+   Aşama 1b'de sunucuda YEDEK hesaplar vardı (asistan tutar göndermiyordu); asistanın döngüsü
+   tarayıcıya taşınıp aynı boru hattına bağlanınca (aşama 4–5a) yedekler SİLİNDİ. Şifreli
+   dünyada zaten yapamayacaklardı: qty, price, card_txs.amount sunucuya opak olacak.
+   Eksik tutar artık TAHMİN EDİLMEZ, reddedilir — sessizce yanlış hesaplanmış bir tutar,
+   açıkça reddedilmiş bir istekten kötüdür. */
+const istemciTutari = (v: unknown): number | null =>
+  v !== undefined && v !== null && v !== "" && Number.isFinite(Number(v)) ? Number(v) : null;
 
 type EntryMeta = { date: string; kind: "islem" | "portfoy" | "mevduat" | "duzeltme" | "acilis" | "virman"; note: string; source_table?: string; source_id?: number };
 async function applyEntry(t: TxClient, uid: number, accountId: number | null, amount: number, m: EntryMeta): Promise<void> {
@@ -496,25 +492,17 @@ api.post("/accounts/:id/reconcile", async (c) => {
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
   const real = Number(b.balance);
   if (!Number.isFinite(real)) return c.json({ error: "geçersiz bakiye" }, 400);
-  /* Fark tercihen İSTEMCİDEN gelir (E2EE aşama 1a): sunucu eskiden kayıtlı bakiyeyi
-     KOLONDAN okuyup `real - acc.balance` yapıyordu; kolon kalktı ve şifreli tutarla
-     zaten yapılamaz. İstemci aynı matematiği engine'den çalıştırır (`reconcileDiff`).
-
-     Yedek yol DEFTERDEN türetir — kolondan değil, yani her iki yol da doğru. Var olma
-     sebebi asistan: `hesap_mutabakat` aracı bu uca iç istek atıyor ve aşama 4'e kadar
-     SUNUCUDA koşuyor, yani `diff` hesaplayacak çözülmüş veriye sahip değil. Modele
-     çıkarma yaptırmak seçenek değildi (tutarı model değil sunucu hesaplar kuralı).
-     Asistan istemciye taşınınca (aşama 4) bu dal silinecek — o gün toplam zaten
-     şifreli tutarlar üzerinde çalışmayacak. */
+  /* Fark İSTEMCİDEN gelir (yazim/tutar.ts: gerçek − defterden türeyen bakiye). Aşama 1a'daki
+     "defterden türet" yedeği asistan sunucuda koştuğu için vardı; döngü tarayıcıya taşınınca
+     silindi (aşama 5a). Eksikse sessizce 0 saymak mutabakatı "fark yok" diye kaydedip
+     kullanıcının düzeltmesini yok ederdi — bu yüzden reddedilir. */
+  const diff = istemciTutari(b.diff);
+  if (diff === null) return c.json({ error: "diff gerekli (istemci hesaplar)" }, 400);
   const uid = c.get("user").id, id = Number(c.req.param("id"));
   const date = typeof b.date === "string" && b.date ? b.date : todayLocal();
   const res = await db.tx(async (t) => {
-    const acc = await t.get<{ bakiye: number }>(
-      `SELECT COALESCE(SUM(e.amount), 0) AS bakiye
-         FROM accounts a LEFT JOIN account_entries e ON e.account_id = a.id AND e.user_id = a.user_id
-        WHERE a.id = ? AND a.user_id = ? GROUP BY a.id`, id, uid);
+    const acc = await t.get<{ id: number }>("SELECT id FROM accounts WHERE id=? AND user_id=?", id, uid);
     if (!acc) return null;
-    const diff = Number.isFinite(Number(b.diff)) ? Number(b.diff) : real - Number(acc.bakiye);
     await applyEntry(t, uid, id, diff, {
       date, kind: "duzeltme",
       note: b.note ? `Mutabakat: ${String(b.note).slice(0, 120)}` : "Mutabakat farkı",
@@ -714,13 +702,10 @@ async function realizeOccurrence(
   t: TxClient, uid: number, r: RecurringRow, ym: string,
   opts?: { account_id?: number | null; category_id?: number | null; amount?: number },
 ): Promise<boolean> {
-  /* tutar hedef ayın zaman çizelgesinden çözülür — İŞARETLEMEDEN ÖNCE: tutarı olmayan kalem
-     "gerçekleşti ama kayıt yok" durumuna düşmesin */
-  const amt = await t.get<{ amount: number }>(
-    "SELECT amount FROM recurring_amounts WHERE recurring_id=? AND from_month<=? ORDER BY from_month DESC LIMIT 1",
-    r.id, ym,
-  );
-  if (!amt) return false;
+  /* Tutar İSTEMCİDEN, işaretiyle gelir (yazim/tutar.ts). İŞARETLEMEDEN ÖNCE kontrol: tutarı
+     olmayan kalem "gerçekleşti ama kayıt yok" durumuna düşmesin. */
+  if (opts?.amount === undefined) return false;
+  const tutar = opts.amount;
   const mark = await t.run(
     "INSERT INTO recurring_realized (recurring_id, ym, created_at, user_id) VALUES (?,?,?,?) ON CONFLICT (recurring_id, ym) DO NOTHING",
     r.id, ym, nowLocal(), uid,
@@ -733,13 +718,11 @@ async function realizeOccurrence(
        (hesaba düşen aynı kalem kategoriyi koruyordu); aynı kalemin iki hedefi farklı davranıyordu. */
     const info = await t.run(
       "INSERT INTO card_txs (card_id,date,name,amount,installments,category_id,user_id) VALUES (?,?,?,?,?,?,?) RETURNING id",
-      r.card_id, date, r.name, entryAmount(opts?.amount, () => amt.amount), 1, opts?.category_id ?? r.category_id ?? null, uid,
+      r.card_id, date, r.name, tutar, 1, opts?.category_id ?? r.category_id ?? null, uid,
     );
     await t.run("UPDATE recurring_realized SET card_tx_id=? WHERE recurring_id=? AND ym=?", info.id, r.id, ym);
   } else {
-    /* İŞARETLİ tutar. İstemci hangi dala düşüleceğini (kart mı hesap mı) zaten biliyor —
-       `r.card_id` onda da var — yani doğru işaretli değeri gönderebiliyor; tek alan yeterli. */
-    const signed = entryAmount(opts?.amount, () => (r.kind === "income" ? 1 : -1) * amt.amount);
+    const signed = tutar; // işaretli (gider eksi, gelir artı) — istemci dal ayrımını biliyor
     const accountId = opts?.account_id ?? r.account_id ?? null;
     const categoryId = opts?.category_id ?? r.category_id ?? null;
     const info = await t.run(
@@ -762,11 +745,9 @@ api.post("/recurring/:id/realize", async (c) => {
   if (!recActiveInYm(r, ym)) return c.json({ error: "kalem o ay aktif değil" }, 400);
   const acc = (b as any).account_id != null && (b as any).account_id !== "" ? Number((b as any).account_id) : undefined;
   const cat = (b as any).category_id != null && (b as any).category_id !== "" ? Number((b as any).category_id) : undefined;
-  const amount = (b as any).amount;
-  const created = await db.tx((t) => realizeOccurrence(t, uid, r, ym, {
-    account_id: acc, category_id: cat,
-    amount: Number.isFinite(Number(amount)) && amount !== null && amount !== "" ? Number(amount) : undefined,
-  }));
+  const amount = istemciTutari((b as any).amount);
+  if (amount === null) return c.json({ error: "tutar gerekli (o ay için tanımlı tutar yoksa gerçekleştirilemez)" }, 400);
+  const created = await db.tx((t) => realizeOccurrence(t, uid, r, ym, { account_id: acc, category_id: cat, amount }));
   if (created) console.log(`[audit] Düzenli işlem/ödeme gerçekleşti: ${r.name} (ay: ${ym}, id:${uid})`);
   return c.json({ ok: true, already: !created });
 });
@@ -800,12 +781,9 @@ crud("oneoffs", "oneoffs", [
    dokunmaz; DELETE geri alır. İkisi de atomik (tx).
    Bakiye etkisi YALNIZ TRY işlemde: hesaplar TRY, USD çevrimi güncel FX'e bağlı olurdu ve
    DELETE'te FX değişirse geri-alım tutmaz (kayma) → USD portföy akışı bilinçli olarak elle kalır.
-   qty/price/fee/side'dan deterministik türetildiği için ekle/geri-al her zaman eşitlenir.
-   Faz 21: işaret mantığı engine'deki `cashDelta`'dan gelir — sunucuda ikinci bir kopya tutmak,
-   yeni bir olay türü eklendiğinde ikisinin ayrışması demekti (eski hâli "SATIŞ değilse alış"
-   varsaydığından TEMETTÜ'de parayı hesaptan DÜŞERDİ). */
-const tradeBalanceDelta = (side: TradeSide, qty: number, price: number, fee: number) =>
-  cashDelta({ side, qty, price, fee });
+   Hesap etkisinin tutarı (`entry_amount`) İSTEMCİDEN gelir — engine'in `cashDelta`'sı ile
+   yazim/tutar.ts'te hesaplanır (E2EE aşama 5a). Sunucudaki `tradeBalanceDelta` kopyası silindi;
+   Faz 21'in "iki kopya ayrışır" dersinin son uygulaması. */
 
 const TRADE_SIDES: readonly string[] = ["ALIŞ", "SATIŞ", "TEMETTÜ", "BEDELSİZ"];
 /** Türe özgü kurallar: BEDELSİZ bedelsizdir (fiyat 0 olmalı — aksi hâli sessizce ücretsiz hisse
@@ -831,6 +809,8 @@ api.post("/trades", async (c) => {
   const accountId = b.account_id != null && b.account_id !== "" ? Number(b.account_id) : null;
   const portfolioId = b.portfolio_id != null && b.portfolio_id !== "" ? Number(b.portfolio_id) : null; // null = "Gruplanmamış"
   const affects = currency === "TRY" && accountId != null; // bakiye etkisi yalnız TRY işlemde
+  const girisTutari = istemciTutari(b.entry_amount);
+  if (affects && girisTutari === null) return c.json({ error: "entry_amount gerekli (hesaba bağlı TRY işlem)" }, 400);
   if (portfolioId != null && !(await db.get("SELECT id FROM portfolios WHERE id=? AND user_id=?", portfolioId, uid))) {
     return c.json({ error: "geçersiz portföy" }, 400);
   }
@@ -840,7 +820,7 @@ api.post("/trades", async (c) => {
       b.date, b.asset_type, b.symbol, b.side, qty, price, fee, currency, accountId, portfolioId, uid,
     );
     if (affects) {
-      await applyEntry(t, uid, accountId, entryAmount(b.entry_amount, () => tradeBalanceDelta(b.side, qty, price, fee)),
+      await applyEntry(t, uid, accountId, girisTutari ?? 0,
         { date: b.date, kind: "portfoy", note: `${b.symbol} ${b.side}`, source_table: "trades", source_id: info.id });
     }
     return info.id;
@@ -885,6 +865,8 @@ api.put("/trades/:id", async (c) => {
   if (portfolioId != null && !(await db.get("SELECT id FROM portfolios WHERE id=? AND user_id=?", portfolioId, uid))) {
     return c.json({ error: "geçersiz portföy" }, 400);
   }
+  const girisTutari = istemciTutari(b.entry_amount);
+  if (currency === "TRY" && accountId != null && girisTutari === null) return c.json({ error: "entry_amount gerekli (hesaba bağlı TRY işlem)" }, 400);
   const found = await db.tx(async (t) => {
     const old = await t.get<{ side: string; qty: number; price: number; fee: number; currency: string; account_id: number | null }>(
       "SELECT side, qty, price, fee, currency, account_id FROM trades WHERE id=? AND user_id=?", id, uid,
@@ -896,7 +878,7 @@ api.put("/trades/:id", async (c) => {
       b.date, b.asset_type, b.symbol, b.side, qty, price, fee, currency, accountId, portfolioId, id, uid,
     );
     if (currency === "TRY") {
-      await applyEntry(t, uid, accountId, entryAmount(b.entry_amount, () => tradeBalanceDelta(b.side, qty, price, fee)),
+      await applyEntry(t, uid, accountId, girisTutari ?? 0,
         { date: b.date, kind: "portfoy", note: `${b.symbol} ${b.side}`, source_table: "trades", source_id: Number(id) });
     }
     return true;
@@ -927,13 +909,15 @@ api.post("/deposits", async (c) => {
   if (!(principal > 0) || !(termDays >= 1) || rate < 0 || withholding < 0 || withholding > 100)
     return c.json({ error: "geçersiz değer" }, 400);
   const accountId = b.account_id != null && b.account_id !== "" ? Number(b.account_id) : null;
+  const girisTutari = istemciTutari(b.entry_amount);
+  if (accountId != null && girisTutari === null) return c.json({ error: "entry_amount gerekli (hesaba bağlı mevduat)" }, 400);
   const portfolioId = b.portfolio_id != null && b.portfolio_id !== "" ? Number(b.portfolio_id) : null; // null = "Gruplanmamış"
   const id = await db.tx(async (t) => {
     const info = await t.run(
       "INSERT INTO deposits (name,principal,rate,open_date,term_days,withholding,account_id,user_id) VALUES (?,?,?,?,?,?,?,?) RETURNING id",
       b.name, principal, rate, b.open_date, termDays, withholding, accountId, uid,
     );
-    await applyEntry(t, uid, accountId, entryAmount(b.entry_amount, () => -principal),
+    await applyEntry(t, uid, accountId, girisTutari ?? 0,
       { date: b.open_date, kind: "mevduat", note: `${b.name} (vadeli açılış)`, source_table: "deposits", source_id: info.id });
     return info.id;
   });
@@ -956,6 +940,8 @@ api.put("/deposits/:id", async (c) => {
   if (!(principal > 0) || !(termDays >= 1) || rate < 0 || withholding < 0 || withholding > 100)
     return c.json({ error: "geçersiz değer" }, 400);
   const accountId = b.account_id != null && b.account_id !== "" ? Number(b.account_id) : null;
+  const girisTutari = istemciTutari(b.entry_amount);
+  if (accountId != null && girisTutari === null) return c.json({ error: "entry_amount gerekli (hesaba bağlı mevduat)" }, 400);
   const found = await db.tx(async (t) => {
     const old = await t.get<{ id: number }>("SELECT id FROM deposits WHERE id=? AND user_id=?", id, uid);
     if (!old) return false;
@@ -964,7 +950,7 @@ api.put("/deposits/:id", async (c) => {
       "UPDATE deposits SET name=?, principal=?, rate=?, open_date=?, term_days=?, withholding=?, account_id=? WHERE id=? AND user_id=?",
       b.name, principal, rate, b.open_date, termDays, withholding, accountId, id, uid,
     );
-    await applyEntry(t, uid, accountId, entryAmount(b.entry_amount, () => -principal),
+    await applyEntry(t, uid, accountId, girisTutari ?? 0,
       { date: b.open_date, kind: "mevduat", note: `${b.name} (vadeli açılış)`, source_table: "deposits", source_id: id });
     return true;
   });
@@ -1035,12 +1021,11 @@ api.post("/cards/:id/pay-statement", async (c) => {
   if (!DUE_RE.test(due)) return c.json({ error: "due 'YYYY-MM-DD' olmalı" }, 400);
   const card = await db.get<Card>("SELECT * FROM cards WHERE id=? AND user_id=?", c.req.param("id"), uid);
   if (!card) return c.json({ error: "kart yok" }, 404);
-  const txs = await db.all<CardTx>("SELECT * FROM card_txs WHERE card_id=? AND user_id=?", card.id, uid);
-  /* Ekstre tutarı istemciden gelir; sunucu yalnız YEDEK olarak hesaplar (bkz. entryAmount).
+  /* Ekstre tutarı İSTEMCİDEN gelir (yazim/tutar.ts, `statementAmount`); sunucu hesaplamaz.
      Faz 8.2 bunu bilerek sunucuya almıştı ("istemciden gelen tutara güvenilmez") — o gerekçe
-     sıfır bilgi modelinde düşüyor, çünkü istemci kullanıcının kendisi. Önizleme (enrich.ts)
-     hâlâ aynı engine fonksiyonunu çağırıyor, yani onay kartındaki rakam değişmedi. */
-  const amount = entryAmount((b as any).amount, () => statementAmount(card, txs, due));
+     sıfır bilgi modelinde düşüyor, çünkü istemci kullanıcının kendisi. */
+  const amount = istemciTutari((b as any).amount);
+  if (amount === null) return c.json({ error: "amount gerekli (istemci hesaplar)" }, 400);
   if (!(amount > 0)) return c.json({ error: "bu tarihte ekstre yok" }, 400);
   const accountId = (b as any).account_id != null && (b as any).account_id !== "" ? Number((b as any).account_id) : null;
   const categoryId = (b as any).category_id != null && (b as any).category_id !== "" ? Number((b as any).category_id) : null;

@@ -1,5 +1,6 @@
 import type { AllData } from "@finans/engine";
 import type { UserContext, ChatMessage, ChatResult } from "@finans/asistan";
+import { yaz, veriAyarla } from "./yazim";
 
 export type { Account, Recurring, RecurringAmount, Loan, OneOff, AssetType, Currency, Trade, Portfolio, Card, CardTx, Price, AllData } from "@finans/engine";
 
@@ -30,40 +31,41 @@ export type AiSohbet = {
   plans: AiPlanDurum[];
   pending: { planId: string; actions: AiAction[]; at: string } | null;
 };
+/** Yazma uçları `yaz()` boru hattından geçer (bkz. yazim/index.ts) — `fetch`'i doğrudan
+    çağıran yazma metodu EKLEME, şifrelemeyi atlar. Hata sözleşmesi `j()` ile aynı. */
+async function yazJ<T = any>(method: string, path: string, body?: unknown): Promise<T> {
+  const r = await yaz(method, path, body);
+  if (r.status >= 400) throw new ApiError(r.status, r.data?.error || `hata (${r.status})`);
+  return r.data as T;
+}
+
 export const api = {
-  all: () => fetch("/api/all").then((r) => j<AllData>(r)),
-  post: (route: string, body: unknown) =>
-    fetch(`/api/${route}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(j),
-  put: (route: string, body: unknown) =>
-    fetch(`/api/${route}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(j),
+  all: () => fetch("/api/all").then((r) => j<AllData>(r)).then((d) => { veriAyarla(d); return d; }),
+  post: (route: string, body: unknown) => yazJ("POST", `/${route}`, body),
+  put: (route: string, body: unknown) => yazJ("PUT", `/${route}`, body),
   del: (route: string, id: number) => fetch(`/api/${route}/${id}`, { method: "DELETE" }).then(j),
   delPrice: (asset_type: string, symbol: string) =>
     fetch(`/api/prices/${asset_type}/${encodeURIComponent(symbol)}`, { method: "DELETE" }).then(j),
   refreshPrices: () => fetch("/api/prices/refresh", { method: "POST" }).then(j),
   /* ---- portföy grupları (Faz 11): işlemi gruba taşı (tutar/bakiye etkisi yok) ---- */
-  setTradePortfolio: (tradeId: number, portfolio_id: number | null) =>
-    fetch(`/api/trades/${tradeId}/portfolio`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ portfolio_id }) }).then(j),
+  setTradePortfolio: (tradeId: number, portfolio_id: number | null) => yazJ("PUT", `/trades/${tradeId}/portfolio`, { portfolio_id }),
   /* ---- toplu içe aktarma (ekstre yapıştırma) ---- */
-  bulkTransactions: (rows: { date: string; name: string; amount: number; category_id: number | null; account_id: number | null }[]) =>
-    fetch("/api/transactions/bulk", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rows }) }).then((r) => j<{ inserted: number }>(r)),
+  bulkTransactions: (rows: { date: string; name: string; amount: number; category_id: number | null; account_id: number | null }[]) => yazJ<{ inserted: number }>("POST", "/transactions/bulk", { rows }),
   /* ---- düzenli kalem tutar zaman çizelgesi (Faz 9) ---- */
-  setRecurringAmount: (id: number, body: { amount: number; from_month: string | null }) =>
-    fetch(`/api/recurring/${id}/amount`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(j),
+  setRecurringAmount: (id: number, body: { amount: number; from_month: string | null }) => yazJ("POST", `/recurring/${id}/amount`, body),
   delRecurringAmount: (id: number, from_month: string) =>
     fetch(`/api/recurring/${id}/amount/${from_month}`, { method: "DELETE" }).then(j),
   /* ---- düzenli kalem gerçekleştirme (Faz 8) ---- */
   /* `amount` (E2EE aşama 1b): deftere/karta yazılacak tutar, İŞARETİYLE — sunucu artık
      tutar türetmiyor. Gönderilmezse sunucu yedek yoldan hesaplar (cron ve asistan için). */
-  realizeRecurring: (id: number, ym: string, body: { account_id?: number | null; category_id?: number | null; amount?: number } = {}) =>
-    fetch(`/api/recurring/${id}/realize`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ym, ...body }) }).then(j),
+  realizeRecurring: (id: number, ym: string, body: { account_id?: number | null; category_id?: number | null; amount?: number } = {}) => yazJ("POST", `/recurring/${id}/realize`, { ym, ...body }),
   unrealizeRecurring: (id: number, ym: string) =>
     fetch(`/api/recurring/${id}/realize/${ym}`, { method: "DELETE" }).then(j),
   /* ---- kart ekstresi ödeme (Faz 8.2) ---- */
   /* `date` (E2EE aşama 2): ödeme talimatıyla yazılan ekstrede VADE GÜNÜ gönderilir —
      otomatik ödeme artık uygulama açılışında yazıldığı için günler sonra da yazılabilir ve
      "bugün" demek ödemeyi bankanın çektiği günden koparırdı. Elle ödemede gönderilmez. */
-  payStatement: (cardId: number, due: string, body: { account_id?: number | null; category_id?: number | null; amount?: number; date?: string } = {}) =>
-    fetch(`/api/cards/${cardId}/pay-statement`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ due, ...body }) }).then(j),
+  payStatement: (cardId: number, due: string, body: { account_id?: number | null; category_id?: number | null; amount?: number; date?: string } = {}) => yazJ("POST", `/cards/${cardId}/pay-statement`, { due, ...body }),
   unpayStatement: (cardId: number, due: string) =>
     fetch(`/api/cards/${cardId}/pay-statement/${due}`, { method: "DELETE" }).then(j),
   /* ---- AI asistan (Faz 22; sohbet Faz 34'te sunucuya taşındı; döngü E2EE aşama 4'te tarayıcıya) ----
@@ -79,29 +81,25 @@ export const api = {
       .then((r) => j<{ conversations: AiKonusma[]; more: boolean }>(r)),
   aiSohbet: (id: number) => fetch(`/api/ai/conversations/${id}`).then((r) => j<AiSohbet>(r)),
   /** Başlığı yeniden adlandırır; sıralamayı (son konuşma zamanı) BİLEREK değiştirmez */
-  aiSohbetAdlandir: (id: number, title: string) =>
-    fetch(`/api/ai/conversations/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title }) })
-      .then((r) => j<{ ok: true; title: string }>(r)),
+  aiSohbetAdlandir: (id: number, title: string) => yazJ<{ ok: true; title: string }>("PUT", `/ai/conversations/${id}`, { title }),
   aiSohbetSil: (id: number) => fetch(`/api/ai/conversations/${id}`, { method: "DELETE" }).then(j),
   /* ---- E2EE aşama 4: sunucu = röle + depo. Döngüyü `features/asistan/istemci.ts` koşturur;
      bu uçları DOĞRUDAN çağırma, oradan geç. ---- */
+  /* Röle BİLEREK boru hattının DIŞINDA: bağlam sağlayıcıya düz metin gider ve gitmeli — model
+     şifreli veriyle çalışamaz. Bu arayüzde yazılı ("yanıtı üretmesi için sağlayıcıya gönderilir"). */
   aiRelay: (context: UserContext, messages: ChatMessage[]) =>
     fetch("/api/ai/relay", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ context, messages }) })
       .then((r) => j<{ text: string; toolCalls: ChatResult["toolCalls"]; model: string }>(r)),
-  aiMesaj: (m: { conversationId?: number | null; role: "user" | "assistant"; content: string; title?: string; planId?: string | null }) =>
-    fetch("/api/ai/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(m) }).then((r) => j<{ conversationId: number }>(r)),
-  aiPlanKaydet: (conversationId: number, actions: AiAction[]) =>
-    fetch("/api/ai/plans", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ conversationId, actions }) }).then((r) => j<{ planId: string }>(r)),
+  aiMesaj: (m: { conversationId?: number | null; role: "user" | "assistant"; content: string; title?: string; planId?: string | null }) => yazJ<{ conversationId: number }>("POST", "/ai/messages", m),
+  aiPlanKaydet: (conversationId: number, actions: AiAction[]) => yazJ<{ planId: string }>("POST", "/ai/plans", { conversationId, actions }),
   aiPlanTuket: (planId: string) =>
     fetch(`/api/ai/plans/${encodeURIComponent(planId)}/consume`, { method: "POST" })
       .then((r) => j<{ conversationId: number | null; actions: AiAction[] }>(r)),
-  aiGunlukYaz: (planId: string, items: { tool: string; summary: string; undo_method: string; undo_path: string }[]) =>
-    fetch(`/api/ai/plans/${encodeURIComponent(planId)}/actions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items }) }).then(j),
+  aiGunlukYaz: (planId: string, items: { tool: string; summary: string; undo_method: string; undo_path: string }[]) => yazJ("POST", `/ai/plans/${encodeURIComponent(planId)}/actions`, { items }),
   aiGunlukOku: (planId: string) =>
     fetch(`/api/ai/plans/${encodeURIComponent(planId)}/actions`)
       .then((r) => j<{ actions: { id: number; summary: string; undo_method: string; undo_path: string; conversation_id: number | null }[] }>(r)),
-  aiGeriAlindi: (planId: string, ids: number[]) =>
-    fetch(`/api/ai/plans/${encodeURIComponent(planId)}/undone`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) }).then(j),
+  aiGeriAlindi: (planId: string, ids: number[]) => yazJ("POST", `/ai/plans/${encodeURIComponent(planId)}/undone`, { ids }),
   /* ---- auth (Faz 5.1) ---- */
   me: () => fetch("/api/auth/me").then((r) => j<{ user: SessionUser | null }>(r)),
   /* ---- sıfır bilgi girişi (E2EE aşama 3b) ----

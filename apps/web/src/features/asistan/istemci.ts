@@ -21,17 +21,12 @@ import {
 } from "@finans/asistan";
 import { todayStr, type AllData } from "@finans/engine";
 import { api, ApiError } from "../../api";
+import { yaz } from "../../yazim";
 
 /** Asistanın yazma araçları normal API uçlarına bu yoldan gider — kullanıcının KENDİ
-    oturumuyla. Sunucu tarafındaki ayrıcalıklı iç istek yolu (`app.request`) kalktı. */
-const istek: Istek = async (method, path, body) => {
-  const r = await fetch(`/api${path}`, {
-    method,
-    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  return { status: r.status, data: await r.json().catch(() => ({})) };
-};
+    oturumuyla ve formlarla AYNI boru hattından (`yaz`): türetilen tutarlar orada tamamlanır,
+    aşama 6'da hassas alanlar orada şifrelenir. Çıplak `fetch` kullanmak ikisini de atlardı. */
+const istek: Istek = (method, path, body) => yaz(method, path, body);
 
 /** Model çağrısını sunucudaki röleye yollayan sağlayıcı. Yalnız mesajları ve BAĞLAMI
     (kullanıcının kendi verisi) gönderir; sistem promptunu ve araç listesini sunucu kurar. */
