@@ -138,7 +138,6 @@ const all = {
   account_entries: [
     { id: 1, account_id: 1, date: d(-1), amount: -1247.9, kind: "islem", source_table: "transactions", source_id: 1, note: "Migros market alışverişi", created_at: `${d(-1)} 19:00:00` },
     { id: 2, account_id: 1, date: d(-8), amount: -1890.25, kind: "islem", source_table: "transactions", source_id: 4, note: "Elektrik faturası", created_at: `${d(-8)} 12:00:00` },
-    { id: 3, account_id: 1, date: d(-200), amount: 60000, kind: "acilis", source_table: null, source_id: null, note: "Açılış bakiyesi", created_at: `${d(-200)} 09:00:00` },
   ],
   transfers: [{ id: 1, date: d(-6), from_account_id: 1, to_account_id: 3, amount: 2000, note: "ATM çekimi" }],
   settings: { fx_usd_try: "41.85", horizon: "6", cash_funds: "", drip_symbols: "BIST:ASELS" },
@@ -164,6 +163,30 @@ const all = {
     { symbol: "EREGL", asset_type: "BIST", kind: "bilanco", date: d(6), tahmini: false },
   ],
 };
+
+/* ————— AÇILIŞ BAKİYELERİ TÜRETİLİR (E2EE aşama 1a) —————
+   `accounts.balance` kolonu kalktı; bakiye `account_entries`'ten geliyor. Fikstürde bakiye
+   hâlâ okunur biçimde yazılı ("Garanti Vadesiz 48.250,75") ama artık bir AÇILIŞ HAREKETİNE
+   çevriliyor — tıpkı gerçek `POST /accounts`'un yaptığı gibi.
+
+   Açılış tutarı `balance − (o hesabın diğer hareketleri)`: stub'ın defteri bilerek eksik
+   (yalnız birkaç örnek satır var, virman bacakları yok), yani sabit bir açılış yazmak
+   ekranda fikstürdekinden farklı bakiyeler gösterirdi ve mobil denetim yanlış rakamlara
+   bakardı. Fark kadar açılış yazmak ikisini tanım gereği eşitler. */
+{
+  const digerleri = new Map();
+  for (const e of all.account_entries) digerleri.set(e.account_id, (digerleri.get(e.account_id) ?? 0) + e.amount);
+  let sonrakiId = Math.max(0, ...all.account_entries.map((e) => e.id)) + 1;
+  const acilislar = accounts.map((a) => ({
+    id: sonrakiId++, account_id: a.id, date: d(-200),
+    amount: Math.round((a.balance - (digerleri.get(a.id) ?? 0)) * 100) / 100,
+    kind: "acilis", source_table: null, source_id: null,
+    note: "Açılış bakiyesi", created_at: `${d(-200)} 09:00:00`,
+  }));
+  all.account_entries = [...acilislar, ...all.account_entries];
+  // `balance` artık AllData'da yok: tipten düştü, okunursa bayat rakam gösterirdi.
+  all.accounts = accounts.map(({ balance, ...rest }) => rest);
+}
 
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".svg": "image/svg+xml", ".webmanifest": "application/manifest+json", ".ico": "image/x-icon" };
 

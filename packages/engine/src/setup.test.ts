@@ -2,8 +2,10 @@ import { describe, it, expect } from "vitest";
 import { setupGaps } from "./setup.js";
 import type { AllData, Account, Trade } from "./types.js";
 
+/* `balance` alanı kalktı (E2EE aşama 1a); setupGaps zaten yalnız `kind` ve
+   `last_recon_date` okuyor, yani bakiye bu testler için hiç anlamlı değildi. */
 const acc = (id: number, over: Partial<Account> = {}): Account =>
-  ({ id, name: `H${id}`, balance: 1000, kind: "banka", ...over });
+  ({ id, name: `H${id}`, kind: "banka", ...over });
 const trade = (over: Partial<Trade> = {}): Trade =>
   ({ id: 1, date: "2026-06-01", asset_type: "FON", symbol: "TP2", side: "ALIŞ", qty: 100, price: 2, fee: 0, currency: "TRY", ...over });
 

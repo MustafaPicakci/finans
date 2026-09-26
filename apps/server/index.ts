@@ -331,29 +331,30 @@ function crud(route: string, table: string, cols: Col[]) {
 }
 
 /* ---- hesap hareket defteri (Faz 15) ----
-   Bakiyeyi değiştirmenin TEK yolu bu iki yardımcıdır; hiçbir uç doğrudan `UPDATE accounts SET balance`
-   yazmaz. Değişmez kural: **balance = Σ account_entries.amount** (açılış bakiyesi de bir satırdır).
-   `applyEntry` bakiyeyi oynatır + hareketi yazar; `revertEntries` kaynağın YAZILMIŞ hareketlerini
+   Defteri değiştirmenin TEK yolu bu iki yardımcıdır. Değişmez kural DEĞİŞMEDİ — **bakiye =
+   Σ account_entries.amount** (açılış bakiyesi de bir satırdır) — ama artık bir kolonla
+   eşitlenmiyor, TÜRETİLİYOR (E2EE aşama 1a): sunucu şifreli tutarları toplayamayacağı için
+   `UPDATE accounts SET balance = balance + ?` şifreli dünyada çalışmaz. Bakiye istemcide
+   `accountBalance`/`totalCash` ile defterden çıkar. Yan kazanç: "defter ile bakiye ayrıştı"
+   diye bir hata sınıfı artık yok, çünkü ikinci bir gerçek yok.
+   `applyEntry` hareketi yazar; `revertEntries` kaynağın YAZILMIŞ hareketlerini
    okuyup tersini uygular ve satırları siler — eski tutarı yeniden hesaplamaz, bu yüzden kaynak kaydı
    düzenlenmiş/silinmiş olsa da geri alma her zaman tutar. Düzenleme = revert + apply. */
 type EntryMeta = { date: string; kind: "islem" | "portfoy" | "mevduat" | "duzeltme" | "acilis" | "virman"; note: string; source_table?: string; source_id?: number };
 async function applyEntry(t: TxClient, uid: number, accountId: number | null, amount: number, m: EntryMeta): Promise<void> {
-  if (accountId == null || !amount) return; // hesapsız kayıt bakiyeye dokunmaz; 0 tutar defteri kirletmez
-  await t.run("UPDATE accounts SET balance = balance + ? WHERE id=? AND user_id=?", amount, accountId, uid);
+  if (accountId == null || !amount) return; // hesapsız kayıt deftere girmez; 0 tutar defteri kirletmez
   await t.run(
     "INSERT INTO account_entries (account_id,date,amount,kind,source_table,source_id,note,created_at,user_id) VALUES (?,?,?,?,?,?,?,?,?)",
     accountId, m.date, amount, m.kind, m.source_table ?? null, m.source_id ?? null, m.note, nowLocal(), uid,
   );
 }
 async function revertEntries(t: TxClient, uid: number, sourceTable: string, sourceId: number | string): Promise<void> {
-  const rows = await t.all<{ id: number; account_id: number; amount: number }>(
-    "SELECT id, account_id, amount FROM account_entries WHERE source_table=? AND source_id=? AND user_id=?",
+  const rows = await t.all<{ id: number }>(
+    "SELECT id FROM account_entries WHERE source_table=? AND source_id=? AND user_id=?",
     sourceTable, sourceId, uid,
   );
-  for (const r of rows) {
-    await t.run("UPDATE accounts SET balance = balance - ? WHERE id=? AND user_id=?", r.amount, r.account_id, uid);
-    await t.run("DELETE FROM account_entries WHERE id=? AND user_id=?", r.id, uid);
-  }
+  // Aritmetik kalmadı: satırı silmek bakiyeyi geri almanın kendisidir (bakiye = Σ satırlar).
+  for (const r of rows) await t.run("DELETE FROM account_entries WHERE id=? AND user_id=?", r.id, uid);
 }
 
 /* accounts: jenerik crud yerine elle — bakiye defterle birlikte yaşıyor. POST'ta açılış bakiyesi bir
@@ -369,7 +370,7 @@ api.post("/accounts", async (c) => {
   if (!Number.isFinite(balance)) return c.json({ error: "geçersiz bakiye" }, 400);
   const kind = ACCOUNT_KINDS.includes(b.kind) ? b.kind : "banka";
   const id = await db.tx(async (t) => {
-    const info = await t.run("INSERT INTO accounts (name,balance,kind,user_id) VALUES (?,?,?,?) RETURNING id", b.name, 0, kind, uid);
+    const info = await t.run("INSERT INTO accounts (name,kind,user_id) VALUES (?,?,?) RETURNING id", b.name, kind, uid);
     await applyEntry(t, uid, info.id ?? null, balance, { date: todayLocal(), kind: "acilis", note: "Açılış bakiyesi" });
     return info.id;
   });
@@ -379,16 +380,15 @@ api.put("/accounts/:id", async (c) => {
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
   const uid = c.get("user").id, id = c.req.param("id");
+  /* `balance` dalı KALDIRILDI (E2EE aşama 1a): eski bakiyeyi kolondan okuyup fark
+     hesaplıyordu, şifreli tutarla yapılamaz. Kayıp yok — arayüz bu uca hiç bakiye
+     göndermiyordu (yalnız name/kind) ve elle düzeltmenin desteklenen yolu zaten
+     mutabakat; asistanın SKIPPED gerekçesi de bunu söylüyor. */
   const found = await db.tx(async (t) => {
-    const old = await t.get<{ balance: number }>("SELECT balance FROM accounts WHERE id=? AND user_id=?", id, uid);
+    const old = await t.get<{ id: number }>("SELECT id FROM accounts WHERE id=? AND user_id=?", id, uid);
     if (!old) return false;
     if (b.name !== undefined) await t.run("UPDATE accounts SET name=? WHERE id=? AND user_id=?", b.name, id, uid);
     if (b.kind !== undefined && ACCOUNT_KINDS.includes(b.kind)) await t.run("UPDATE accounts SET kind=? WHERE id=? AND user_id=?", b.kind, id, uid);
-    if (b.balance !== undefined) {
-      const next = Number(b.balance);
-      if (!Number.isFinite(next)) return false;
-      await applyEntry(t, uid, Number(id), next - old.balance, { date: todayLocal(), kind: "duzeltme", note: "Elle bakiye düzeltmesi" });
-    }
     return true;
   });
   if (!found) return c.json({ error: "kayıt yok veya geçersiz değer" }, 404);
@@ -411,12 +411,25 @@ api.post("/accounts/:id/reconcile", async (c) => {
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
   const real = Number(b.balance);
   if (!Number.isFinite(real)) return c.json({ error: "geçersiz bakiye" }, 400);
+  /* Fark tercihen İSTEMCİDEN gelir (E2EE aşama 1a): sunucu eskiden kayıtlı bakiyeyi
+     KOLONDAN okuyup `real - acc.balance` yapıyordu; kolon kalktı ve şifreli tutarla
+     zaten yapılamaz. İstemci aynı matematiği engine'den çalıştırır (`reconcileDiff`).
+
+     Yedek yol DEFTERDEN türetir — kolondan değil, yani her iki yol da doğru. Var olma
+     sebebi asistan: `hesap_mutabakat` aracı bu uca iç istek atıyor ve aşama 4'e kadar
+     SUNUCUDA koşuyor, yani `diff` hesaplayacak çözülmüş veriye sahip değil. Modele
+     çıkarma yaptırmak seçenek değildi (tutarı model değil sunucu hesaplar kuralı).
+     Asistan istemciye taşınınca (aşama 4) bu dal silinecek — o gün toplam zaten
+     şifreli tutarlar üzerinde çalışmayacak. */
   const uid = c.get("user").id, id = Number(c.req.param("id"));
   const date = typeof b.date === "string" && b.date ? b.date : todayLocal();
   const res = await db.tx(async (t) => {
-    const acc = await t.get<{ balance: number }>("SELECT balance FROM accounts WHERE id=? AND user_id=?", id, uid);
+    const acc = await t.get<{ bakiye: number }>(
+      `SELECT COALESCE(SUM(e.amount), 0) AS bakiye
+         FROM accounts a LEFT JOIN account_entries e ON e.account_id = a.id AND e.user_id = a.user_id
+        WHERE a.id = ? AND a.user_id = ? GROUP BY a.id`, id, uid);
     if (!acc) return null;
-    const diff = real - acc.balance;
+    const diff = Number.isFinite(Number(b.diff)) ? Number(b.diff) : real - Number(acc.bakiye);
     await applyEntry(t, uid, id, diff, {
       date, kind: "duzeltme",
       note: b.note ? `Mutabakat: ${String(b.note).slice(0, 120)}` : "Mutabakat farkı",

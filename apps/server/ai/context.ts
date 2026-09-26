@@ -25,7 +25,14 @@ const r2 = (n: number) => Math.round(Number(n) * 100) / 100;
 
 export async function buildContext(uid: number): Promise<UserContext> {
   const [accounts, cards, categories, portfolios, recurring, symbols, autoPrices, userPrices, settings] = await Promise.all([
-    db.all<any>("SELECT id, name, kind, balance FROM accounts WHERE user_id=? ORDER BY id", uid),
+    /* Bakiye kolonu kalktı (E2EE aşama 1a) → defterden toplanır. Bu toplam SUNUCUDA
+       yapılıyor ve şifreli dünyada yapılamayacak; aşama 4'te bu dosya tamamen istemciye
+       taşınacak (bağlam orada zaten çözülmüş veriden kurulacak). O güne kadar asistanın
+       doğru bakiyeyi görmesi şart — bayat bir kolon okumak sessizce yanlış cevap verirdi. */
+    db.all<any>(
+      `SELECT a.id, a.name, a.kind, COALESCE(SUM(e.amount), 0) AS balance
+         FROM accounts a LEFT JOIN account_entries e ON e.account_id = a.id AND e.user_id = a.user_id
+        WHERE a.user_id = ? GROUP BY a.id, a.name, a.kind ORDER BY a.id`, uid),
     db.all<any>("SELECT id, name, statement_day, due_day FROM cards WHERE user_id=? ORDER BY id", uid),
     db.all<any>("SELECT id, name, kind FROM categories WHERE user_id=? ORDER BY name", uid),
     db.all<any>("SELECT id, name FROM portfolios WHERE user_id=? ORDER BY name", uid),

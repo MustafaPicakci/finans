@@ -4,7 +4,7 @@ import {
   PieChart, Pie, Cell,
 } from "recharts";
 import {
-  fmtD, parseD, keyOf, convert, depositValueOn, fundSellSuggestion, setupGaps,
+  fmtD, parseD, keyOf, convert, depositValueOn, fundSellSuggestion, setupGaps, balancesByAccount,
   kurumsalOneriler, dripSet, type KurumsalOneri,
   type AllData, type Day, type Position, type Rates,
 } from "@finans/engine";
@@ -51,6 +51,8 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAcc
   /** Faz 36 — kaçırılan kurumsal olayı önden dolu işlem formuyla açar */
   onKurumsalOlay: (p: TradePrefill) => void;
 }) {
+  // bakiye kolonu yok, defterden türetilir (E2EE aşama 1a)
+  const hesapBakiyeleri = balancesByAccount(data.account_entries);
   /* "Ödeme öncesi fon boz" önerisi (Faz 17): saf nakit önümüzdeki hafta eksiye düşüyorsa,
      nakit sayılan fondan ne kadar bozulacağını hesaplar. Bkz. funds.ts — tutar pencerenin
      EN DERİN noktasından gelir, yoksa iki gün sonra yine açık verilir. */
@@ -528,7 +530,7 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAcc
           <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 13, padding: "12px 0", borderBottom: i < data.accounts.length - 1 ? `1px solid ${T.line2}` : "none" }}>
             <span style={{ width: 34, height: 34, borderRadius: 10, background: T.panel2, display: "grid", placeItems: "center", fontSize: 14, color: "var(--type-nakit)" }}>◈</span>
             <div style={{ flex: 1, fontSize: 13.5, fontWeight: 500 }}>{a.name}</div>
-            <span style={{ ...css.mono, fontSize: 14, fontWeight: 500 }}>{m(a.balance)}</span>
+            <span style={{ ...css.mono, fontSize: 14, fontWeight: 500 }}>{m(hesapBakiyeleri.get(a.id) ?? 0)}</span>
           </div>
         ))}
     </div>

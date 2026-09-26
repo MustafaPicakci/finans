@@ -5,6 +5,7 @@ import { loanPayDay, loanRemaining, loanActiveOn } from "./loans.js";
 import { cardInfos, stmtKey } from "./cards.js";
 import { convert, qtyDelta, positions, portfolioValueTry, type Rates } from "./portfolio.js";
 import { depositValueOn } from "./deposits.js";
+import { totalCash } from "./accounts.js";
 
 /** `cashFunds` = o gün elde tutulan para piyasası fonlarının TRY değeri (assets'in bir alt kümesi);
     nakit gibi likit sayılır. Etkin nakit = `bal + cashFunds`.
@@ -65,7 +66,7 @@ export function project(data: AllData, months: number, rates: Rates = { usdTry: 
     });
     return { assets, cashFunds };
   };
-  let bal = data.accounts.reduce((s, a) => s + a.balance, 0);
+  let bal = totalCash(data.account_entries ?? []); // bakiye defterden türetilir (E2EE aşama 1a)
   /* kart ekstre ödemeleri: son ödeme tarihine gider olarak düşer; ödendi işaretlenen ekstre atlanır
      (ödeme zaten transactions'a yazıldı → başlangıç bakiyesinde; tekrar düşmek çift sayım olurdu) */
   const paidStmts = new Set((data.statement_payments ?? []).map((p) => `${p.card_id}:${p.due}`));
@@ -120,7 +121,7 @@ export function project(data: AllData, months: number, rates: Rates = { usdTry: 
    App.tsx'in içinde, hero'yu besleyen dört ayrı `useMemo`'da duruyordu — yani ekranın dışından
    (asistan) sorulabilir bir yerde değildi. Kopyalamak yerine tanım buraya taşınıyor.
 
-   ÇAPA BUGÜNÜN GERÇEK BAKİYESİDİR (`Σ accounts.balance`), `project(...)[0].bal` DEĞİL: gün 0
+   ÇAPA BUGÜNÜN GERÇEK BAKİYESİDİR (`totalCash(account_entries)`), `project(...)[0].bal` DEĞİL: gün 0
    bugüne düşen PLANLI hareketleri (bugün ödeme günü olan bir maaş/kira) zaten işlemiştir, oysa
    "ne kadar nakdim var" sorusunun cevabı bankanın şu an söylediği rakamdır. İkisi çoğu gün
    eşittir, bugüne bir hareket düştüğünde ayrışır — hangisinin hangisi olduğu testte yazılı. */
@@ -145,7 +146,7 @@ export type NetVarlik = {
 /** Net varlığın bileşenleri (hepsi TRY). `Day.worth` ile aynı tanım — testli. */
 export function netWorthBreakdown(data: AllData, rates: Rates = { usdTry: 0 }): NetVarlik {
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const nakit = data.accounts.reduce((s, a) => s + a.balance, 0);
+  const nakit = totalCash(data.account_entries ?? []);
   const portfoy = portfolioValueTry(positions(data.trades, data.prices), rates);
   const vadeli = data.deposits.reduce((s, d) => s + depositValueOn(d, today), 0);
   const paid = new Set((data.statement_payments ?? []).map((p) => stmtKey(p.card_id, p.due)));

@@ -1,12 +1,30 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { project, netWorthBreakdown } from "./projection.js";
-import type { AllData } from "./types.js";
+import type { AllData, Account, AccountEntry } from "./types.js";
 
-const baseData = (over: Partial<AllData> = {}): AllData => ({
-  accounts: [], recurring: [], loans: [], oneoffs: [], trades: [], portfolios: [], cards: [], card_txs: [], prices: [], price_history: [],
-  categories: [], transactions: [], deposits: [], recurring_realized: [], statement_payments: [], settings: {}, recurring_amounts: [], account_entries: [], transfers: [],
-  ...over,
-});
+/* Fixture'da hesap hâlâ `balance` ile yazılır ama o alan artık `Account` tipinde YOK
+   (E2EE aşama 1a): bakiye `account_entries`'ten türetiliyor. Yardımcı, fixture'daki
+   bakiyeyi bir AÇILIŞ HAREKETİNE çevirir — yani gerçek `POST /accounts` ne yapıyorsa
+   onu (Faz 15'ten beri açılış bakiyesi bir 'acilis' satırıdır). Böylece testlerin
+   gövdesi olduğu gibi kalıyor ve okunurluğu ("bakiyesi 1000 olan hesap") bozulmuyor. */
+type HesapFix = Omit<Account, "id" | "name"> & { id: number; name: string; balance?: number };
+
+const baseData = (over: Partial<Omit<AllData, "accounts">> & { accounts?: HesapFix[] } = {}): AllData => {
+  const { accounts = [], account_entries = [], ...rest } = over;
+  const acilis: AccountEntry[] = accounts
+    .filter((a) => a.balance)
+    .map((a, i) => ({
+      id: 9000 + i, account_id: a.id, date: "2000-01-01", amount: a.balance!, kind: "acilis",
+      source_table: null, source_id: null, note: "Açılış bakiyesi", created_at: "2000-01-01 00:00:00",
+    }));
+  return {
+    recurring: [], loans: [], oneoffs: [], trades: [], portfolios: [], cards: [], card_txs: [], prices: [], price_history: [],
+    categories: [], transactions: [], deposits: [], recurring_realized: [], statement_payments: [], settings: {}, recurring_amounts: [], transfers: [],
+    ...rest,
+    accounts: accounts.map(({ balance, ...a }) => a),
+    account_entries: [...acilis, ...account_entries],
+  };
+};
 
 describe("project", () => {
   beforeEach(() => {

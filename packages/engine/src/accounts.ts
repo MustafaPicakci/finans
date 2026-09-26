@@ -31,11 +31,38 @@ export function accountLedger(entries: AccountEntry[], accountId: number): Ledge
   return rows.reverse();
 }
 
-/** Defter ile kayıtlı bakiye arasındaki fark (0 olmalı). 0 değilse hesabın bakiyesini
-    açıklayamayan bir değişiklik olmuş demektir — arayüz bunu uyarı olarak gösterir. */
-export function ledgerDrift(entries: AccountEntry[], account: Account): number {
-  const sum = entries.filter((e) => e.account_id === account.id).reduce((s, e) => s + e.amount, 0);
-  return account.balance - sum;
+/* ————— BAKİYE ARTIK TÜRETİLİR (E2EE aşama 1a) —————
+   `accounts.balance` kolonu kalktı; bakiye defterin kendisinden gelir. Değişmez zaten
+   "bakiye = Σ hareketler" diyordu, yani bu yeni bir kural DEĞİL — tek gerçeği iki yerde
+   tutmayı bırakmak. Doğrudan sonucu: `ledgerDrift` kavramsal olarak öldü (fark tanım
+   gereği 0) ve onunla birlikte "defter ile bakiye ayrıştı" diye bir hata sınıfı kalmadı.
+
+   Sebebi E2EE: sunucu şifreli tutarları toplayamaz, yani `UPDATE accounts SET balance =
+   balance + ?` şifreli dünyada çalışmaz. Maliyeti yok — `account_entries` zaten `/api/all`
+   ile tamamen istemciye geliyor ve `accountLedger` aynı diziyi zaten geziyor. */
+
+/** Tek bir hesabın bakiyesi = o hesabın hareketlerinin toplamı (açılış dahil). */
+export function accountBalance(entries: AccountEntry[], accountId: number): number {
+  let sum = 0;
+  for (const e of entries) if (e.account_id === accountId) sum += e.amount;
+  return sum;
+}
+
+/** Tüm hesapların bakiyesi tek geçişte — hesap başına `accountBalance` çağırmak
+    N×M gezinti demekti (hesap sayısı × hareket sayısı); toplam nakit ve hesap listesi
+    her render'da hesaplanıyor. */
+export function balancesByAccount(entries: AccountEntry[]): Map<number, number> {
+  const m = new Map<number, number>();
+  for (const e of entries) m.set(e.account_id, (m.get(e.account_id) ?? 0) + e.amount);
+  return m;
+}
+
+/** Toplam nakit: tüm hesapların bakiyeleri. Çağrı yerleri bunu dört ayrı yerde
+    `accounts.reduce((s,a) => s + a.balance, 0)` diye tekrarlıyordu. */
+export function totalCash(entries: AccountEntry[]): number {
+  let sum = 0;
+  for (const e of entries) sum += e.amount;
+  return sum;
 }
 
 /** Dönem özeti: seçili hareketlerin giren/çıkan toplamı (net = giren − çıkan) */
@@ -59,8 +86,8 @@ export const accountKindOf = (a: Account): AccountKind => a.kind ?? "banka";
 
 /** Mutabakat farkı: gerçek bakiye − kayıtlı bakiye. Pozitif = defterde eksik para (girilmemiş gelir/
     unutulan transfer), negatif = defterde fazla para (girilmemiş harcama). */
-export function reconcileDiff(account: Account, realBalance: number): number {
-  return realBalance - account.balance;
+export function reconcileDiff(currentBalance: number, realBalance: number): number {
+  return realBalance - currentBalance;
 }
 
 /** Mutabakat durumu — `staleDays` günden eski (veya hiç yapılmamış) doğrulama arayüzde hatırlatılır.
