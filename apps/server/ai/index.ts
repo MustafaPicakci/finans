@@ -18,18 +18,8 @@
 
 import { randomUUID } from "node:crypto";
 import { getProvider } from "./provider.js";
-import {
-  ROUTE_TOOLS, READ_TOOLS, buildContext, nameLookup, enrichSummary, systemPrompt, safeSummary,
-  agentLoop, executeActions, konusmaBasligi, formatResults, MAX_HISTORY,
-  type ChatTurn, type PendingAction, type ExecutionResult,
-} from "@finans/asistan";
-import { db, nowLocal, todayLocal } from "../db.js";
-import { loadAllData } from "../data.js";
-
-/** İç istek gönderici — index.ts sağlar (kök Hono uygulaması orada). */
-export type Invoke = (c: any, method: string, path: string, body?: unknown) => Promise<{ status: number; data: any }>;
-
-export type ChatResponse = { reply: string; pending: PendingAction[]; model: string; planId: string };
+import { systemPrompt, toolDefs, konusmaBasligi, type PendingAction, type UserContext, type ChatMessage } from "@finans/asistan";
+import { db, nowLocal } from "../db.js";
 
 /* ————— Plan deposu (Faz 34) —————
    Plan artık `ai_plans` tablosunda yaşar. İki şeyi birden düzeltir:
@@ -82,29 +72,6 @@ async function takePlan(uid: number, planId: string): Promise<TakenPlan> {
   return { ok: false, error: p.consumed_at ? "Bu plan zaten uygulandı" : "Planın süresi doldu — isteğini tekrar yazar mısın?" };
 }
 
-/** Gerçek bağımlılıkları (model + kullanıcının verisi) bağlar ve döngüyü çalıştırır. */
-export async function runAgent(uid: number, history: ChatTurn[]): Promise<ChatResponse> {
-  const provider = getProvider();
-  if (!provider) throw new Error("AI yapılandırılmadı");
-  /* E2EE aşama 4a: bağlam, okuma araçları ve önizleme artık `@finans/asistan`'da SAF
-     fonksiyon ve `AllData` alıyor. Sunucu onu isteğin başında BİR KEZ yükler — eskiden
-     bağlam 9 sorgu atıyor, her okuma aracı ayrıca kendi sorgularını atıyordu. Aşama 4c'de
-     sürücü tarayıcıya geçince bu yükleme tamamen kalkacak (veri zaten bellekte). */
-  const data = await loadAllData(uid);
-  const bugun = todayLocal();
-  const ctx = buildContext(data, bugun);
-  const names = nameLookup(ctx);
-  const { reply, pending } = await agentLoop({
-    provider,
-    system: systemPrompt(ctx),
-    runRead: async (name, args) => READ_TOOLS.find((t) => t.name === name)!.run(data, args, bugun),
-    /* Özet, sistemin hesapladığı tutarla zenginleştirilir (ekstre tutarı, düzenli
-       kalemin o ayki tutarı, mutabakat farkı) — kullanıcı neyi onayladığını görsün. */
-    summarize: async (tool, args) => enrichSummary(data, tool.name, args, safeSummary(tool, args, names)),
-  }, history);
-  return { reply, pending, model: provider.label, planId: randomUUID() };
-}
-
 /* ---------------- Sohbet deposu (Faz 34) ---------------- */
 
 const KONUSMA_SAYFA = 30;   // konuşma listesi sayfa boyutu (liste sınırsız büyür — sunucu sayfalar)
@@ -122,17 +89,6 @@ async function mesajYaz(uid: number, convId: number, role: "user" | "assistant",
   });
 }
 
-/* Modele verilen geçmiş artık SUNUCUDAN okunur. Eskiden istemci gönderiyordu: her istek
-   tüm sohbeti tekrar yüklüyordu ve istemci "assistant" rolünde uydurma turlar
-   ekleyebiliyordu. Uygulama sonucu mesajları da geçmişe girer — model neyin yazıldığını
-   bilsin diye (aynı olayı ikinci kez kaydetmemesi buna bağlı). */
-async function gecmisOku(uid: number, convId: number): Promise<ChatTurn[]> {
-  const rows = await db.all<{ role: "user" | "assistant"; content: string }>(
-    "SELECT role, content FROM ai_messages WHERE user_id=? AND conversation_id=? ORDER BY id DESC LIMIT ?",
-    uid, convId, MAX_HISTORY,
-  );
-  return rows.reverse();
-}
 
 /* ---------------- HTTP uçları ---------------- */
 type RateLimiter = (key: string, max: number, windowMs: number) => boolean;
@@ -151,7 +107,7 @@ const asistanAcik = async (uid: number): Promise<boolean> => {
   return r?.value !== "0";
 };
 
-export function mountAi(api: any, deps: { invoke: Invoke; rateLimited: RateLimiter }): void {
+export function mountAi(api: any, deps: { rateLimited: RateLimiter }): void {
   /* `neden` şart: "sunucuda anahtar yok" ile "kullanıcı kapattı" tamamen farklı iki durum ve
      arayüzün söyleyeceği şey de farklı (birinde env kurulumu anlatılır, diğerinde geri açma
      düğmesi gösterilir). Tek bir `enabled:false` ikisini ayırt edilemez kılıyordu. */
@@ -270,134 +226,159 @@ export function mountAi(api: any, deps: { invoke: Invoke; rateLimited: RateLimit
     return c.json({ ok: true });
   });
 
-  api.post("/ai/chat", async (c: any) => {
+  /* ================= E2EE aşama 4: SUNUCU = RÖLE + DEPO =================
+     Ajan döngüsü tarayıcıda koşar (`@finans/asistan`, sunucudakiyle aynı kod). Sunucunun
+     kalan işi üç şey ve hiçbiri içerik mantığı değil:
+       1) RÖLE — model çağrısı; API anahtarları tarayıcıya inmemeli.
+       2) DEPO — mesajlar, planlar, uygulama günlüğü (aşama 6'da içerikleri şifreli olacak).
+       3) ATOMİK KİLİTLER — planın tek kullanımlığı (ağ tekrarında çift kayıt yazılmasın).
+     Eski sunucu güdümlü /ai/chat · /ai/execute · /ai/undo ve onların ayrıcalıklı iç istek
+     yolu (`app.request`) aşama 4e'de SİLİNDİ: asistanın yazma işlemleri artık normal API
+     uçlarına kullanıcının KENDİ oturumuyla, tarayıcıdan gidiyor. */
+
+  /* RÖLE. İstemci SİSTEM PROMPTUNU GÖNDEREMEZ, yalnız bağlamı (kendi verisini) ve mesajları:
+     prompt ve araç listesi burada, aynı paketten kurulur. Aksi hâlde giriş yapmış herkes
+     API anahtarımızı genel amaçlı bir sohbet botu olarak kullanabilir, KAPSAM kuralları
+     ("yalnız bu panelin konuları") istemcinin elinde olurdu ve kotayı biz öderdik.
+     Gövde LOGLANMAZ ve SAKLANMAZ — kullanıcının verisi buradan yalnız GEÇER.
+     Hız sınırı artık model TURU başına: bir mesaj en çok 6 tur sürebilir, mesaj başına
+     sınır ise /ai/messages'ta (eski 30/5dk bütçesi orada korunuyor). */
+  const BAGLAM_TAVAN = 60_000;
+  const TUR_TAVAN = 60;
+  api.post("/ai/relay", async (c: any) => {
     const uid = c.get("user").id;
-    if (!getProvider()) return c.json({ error: "Asistan yapılandırılmadı (AI_API_KEY eksik)" }, 503);
-    /* Kapatma SUNUCUDA da zorlanır, yalnız arayüzde gizlenmez: ayarın anlamı "verim
-       sağlayıcıya gitmesin" ve veri tam bu uçtan çıkıyor. Yalnız /ai/chat korunur —
-       execute/undo sağlayıcıya hiçbir şey göndermez (onaylanmış planı uygular), onları
-       da kapatmak kapatma anından önce onaylanmış bir planı yarı yolda bırakırdı. */
+    const p = getProvider();
+    if (!p) return c.json({ error: "Asistan yapılandırılmadı (AI_API_KEY eksik)" }, 503);
     if (!(await asistanAcik(uid))) return c.json({ error: "Asistan kapalı (Hesabım'dan açabilirsin)" }, 403);
-    if (deps.rateLimited(`ai:${uid}`, 30, 5 * 60_000)) return c.json({ error: "Çok fazla istek, biraz sonra tekrar dene" }, 429);
+    if (deps.rateLimited(`airelay:${uid}`, 120, 5 * 60_000)) return c.json({ error: "Çok fazla istek, biraz sonra tekrar dene" }, 429);
     const b = await c.req.json().catch(() => null);
-    const text = b && typeof b.message === "string" ? b.message.trim().slice(0, 4000) : "";
-    if (!text) return c.json({ error: "mesaj yok" }, 400);
-
-    /* Konuşma: verilmişse SAHİPLİĞİ doğrulanır, verilmemişse yenisi açılır (başlık ilk
-       cümleden). Ayrı bir "konuşma oluştur" ucu yok — ilk mesaj zaten o kararı veriyor. */
-    let convId = 0;
-    if (b.conversationId != null) {
-      const id = Number(b.conversationId);
-      const own = Number.isInteger(id)
-        ? await db.get<{ id: number }>("SELECT id FROM ai_conversations WHERE id=? AND user_id=?", id, uid)
-        : undefined;
-      if (!own) return c.json({ error: "konuşma bulunamadı" }, 404);
-      convId = own.id;
-    } else {
-      const now = nowLocal();
-      const r = await db.run(
-        "INSERT INTO ai_conversations (user_id, title, created_at, updated_at) VALUES (?,?,?,?) RETURNING id",
-        uid, konusmaBasligi(text), now, now,
-      );
-      convId = r.id!;
-    }
-
-    /* Kullanıcının mesajı model ÇAĞRISINDAN ÖNCE yazılır: sağlayıcı patlarsa yazdığı
-       cümle kaybolmasın (istemci kutuyu çoktan temizledi). Cevapsız kalan tur geçmişte
-       öylece durur — bu dürüst hâldir, sonraki turda model onu da görür. */
-    const history = await gecmisOku(uid, convId);
-    history.push({ role: "user", content: text });
-    await mesajYaz(uid, convId, "user", text);
-
+    const ctx = b?.context, messages = b?.messages;
+    if (!ctx || typeof ctx !== "object" || !Array.isArray(messages) || !messages.length) return c.json({ error: "geçersiz istek" }, 400);
+    if (messages.length > TUR_TAVAN) return c.json({ error: "konuşma çok uzun" }, 400);
+    if (JSON.stringify(ctx).length > BAGLAM_TAVAN) return c.json({ error: "bağlam çok büyük" }, 413);
+    const bicimOk = messages.every((m: any) =>
+      (m?.role === "user" && typeof m.content === "string") ||
+      (m?.role === "assistant" && typeof m.content === "string" && (m.toolCalls === undefined || Array.isArray(m.toolCalls))) ||
+      (m?.role === "tool" && typeof m.callId === "string" && typeof m.name === "string"));
+    if (!bicimOk) return c.json({ error: "geçersiz mesaj biçimi" }, 400);
     try {
-      const res = await runAgent(uid, history);
-      await mesajYaz(uid, convId, "assistant", res.reply);
-      if (res.pending.length) {
-        await db.run(
-          "INSERT INTO ai_plans (plan_id, user_id, conversation_id, actions, created_at) VALUES (?,?,?,?,?)",
-          res.planId, uid, convId, JSON.stringify(res.pending), nowLocal(),
-        );
-      }
-      return c.json({ conversationId: convId, reply: res.reply, pending: res.pending, model: res.model, planId: res.planId });
+      const r = await p.chat({ system: systemPrompt(ctx as UserContext), messages: messages as ChatMessage[], tools: toolDefs() });
+      return c.json({ text: r.text, toolCalls: r.toolCalls, model: p.label });
     } catch (e) {
-      console.error("[ai] sohbet hatası:", e);
-      return c.json({ conversationId: convId, error: String((e as Error).message).slice(0, 200) }, 502);
+      console.error("[ai] röle hatası:", (e as Error).message); // gövde DEĞİL, yalnız hata
+      return c.json({ error: String((e as Error).message).slice(0, 200) }, 502);
     }
   });
 
-  api.post("/ai/execute", async (c: any) => {
+  /** Konuşmanın sahipliğini doğrular; `id` yoksa yenisini açar. */
+  async function konusmaAl(uid: number, id: unknown, baslik: string): Promise<number | null> {
+    if (id != null) {
+      const n = Number(id);
+      const own = Number.isInteger(n) ? await db.get<{ id: number }>("SELECT id FROM ai_conversations WHERE id=? AND user_id=?", n, uid) : undefined;
+      return own ? own.id : null;
+    }
+    const now = nowLocal();
+    const r = await db.run("INSERT INTO ai_conversations (user_id, title, created_at, updated_at) VALUES (?,?,?,?) RETURNING id", uid, baslik, now, now);
+    return r.id!;
+  }
+
+  /* DEPO: mesaj ekle. Kullanıcı mesajı model çağrısından ÖNCE buraya yazılır (Faz 34:
+     sağlayıcı patlarsa yazdığı cümle kaybolmasın) — istemci bu sırayı korur. Başlık
+     aşama 6'da istemcide türeyip şifreli gelecek; şimdilik verilmezse içerikten türer. */
+  api.post("/ai/messages", async (c: any) => {
+    const uid = c.get("user").id;
+    const b = await c.req.json().catch(() => null);
+    const role = b?.role;
+    if (role !== "user" && role !== "assistant") return c.json({ error: "geçersiz rol" }, 400);
+    const content = typeof b.content === "string" ? b.content.trim().slice(0, role === "user" ? 4000 : 8000) : "";
+    if (!content) return c.json({ error: "mesaj yok" }, 400);
+    if (role === "user" && deps.rateLimited(`ai:${uid}`, 30, 5 * 60_000)) return c.json({ error: "Çok fazla istek, biraz sonra tekrar dene" }, 429);
+    let planId: string | null = null;
+    if (b.planId != null) {
+      planId = String(b.planId);
+      if (!(await db.get("SELECT 1 FROM ai_plans WHERE plan_id=? AND user_id=?", planId, uid))) return c.json({ error: "plan bulunamadı" }, 404);
+    }
+    const convId = await konusmaAl(uid, b.conversationId, typeof b.title === "string" && b.title.trim() ? b.title.trim().slice(0, 120) : konusmaBasligi(content));
+    if (!convId) return c.json({ error: "konuşma bulunamadı" }, 404);
+    await mesajYaz(uid, convId, role, content, planId);
+    return c.json({ conversationId: convId });
+  });
+
+  /* DEPO: onay bekleyen planı sakla. Plan artık İSTEMCİDE üretiliyor (döngü orada), yani
+     Faz 34'ün "onaylanan = uygulanan, bunu sunucu garanti eder" güvencesi düşüyor — bilinçli
+     ve belgeli (docs/E2EE.md §4.4): o güvence kullanıcının KENDİ istemcisine karşıydı ve
+     sıfır bilgi modelinde istemci kullanıcının kendisidir. Kalan iki değer burada: planın
+     yenilemeden/başka cihazdan geri gelmesi ve tek kullanımlık kilit. */
+  api.post("/ai/plans", async (c: any) => {
+    const uid = c.get("user").id;
+    const b = await c.req.json().catch(() => null);
+    const actions = b?.actions;
+    if (!Array.isArray(actions) || !actions.length || actions.length > 12) return c.json({ error: "geçersiz plan" }, 400);
+    if (!actions.every((a: any) => typeof a?.tool === "string" && a.args && typeof a.args === "object" && typeof a.summary === "string"))
+      return c.json({ error: "geçersiz plan satırı" }, 400);
+    const convId = await konusmaAl(uid, b.conversationId, "Yeni sohbet");
+    if (!convId || b.conversationId == null) return c.json({ error: "konuşma bulunamadı" }, 404);
+    const planId = randomUUID();
+    await db.run("INSERT INTO ai_plans (plan_id, user_id, conversation_id, actions, created_at) VALUES (?,?,?,?,?)",
+      planId, uid, convId, JSON.stringify(actions), nowLocal());
+    return c.json({ planId });
+  });
+
+  /* KİLİT: planı ATOMİK tüket, işlemleri döndür. Uygulamayı istemci yapar. Sıra "önce yak":
+     tüketim ile uygulama artık iki istek; arada istemci çökerse plan yanar ve HİÇBİR ŞEY
+     yazılmaz. Tersi (önce uygula, sonra tüket) ağ tekrarında çift kayda açıktı — Faz 34'ün
+     varlık sebebi tam olarak oydu. */
+  api.post("/ai/plans/:id/consume", async (c: any) => {
     const uid = c.get("user").id;
     if (deps.rateLimited(`aiexec:${uid}`, 30, 5 * 60_000)) return c.json({ error: "Çok fazla istek, biraz sonra tekrar dene" }, 429);
-    const b = await c.req.json().catch(() => null);
-    const planId = b && typeof b.planId === "string" ? b.planId : "";
-    if (!planId) return c.json({ error: "plan kimliği gerekli" }, 400);
-    /* Onay kartından ✕ ile çıkarılan satırların SIRA NUMARALARI. İşlemlerin kendisi
-       istemciden gelmez — argümanlar sunucudaki plandan okunur, istemci yalnız
-       "şu satırları uygulama" diyebilir. Onaylanan ile uygulanan böylece ayrışamaz. */
-    const skip = new Set<number>(
-      Array.isArray(b.skip) ? b.skip.filter((n: unknown) => Number.isInteger(n)).map(Number) : [],
-    );
-
-    // tek kullanımlık + argümanların kaynağı: atomik olarak planı tüket
-    const plan = await takePlan(uid, planId);
+    const plan = await takePlan(uid, String(c.req.param("id")));
     if (!plan.ok) return c.json({ error: plan.error }, 409);
-    const actions = plan.actions.filter((_, i) => !skip.has(i));
-    if (!actions.length) return c.json({ error: "uygulanacak işlem kalmadı" }, 400);
-
-    const results = await executeActions(actions, (m, yol, govde) => deps.invoke(c, m, yol, govde));
-    /* Uygulama günlüğü: "Geri al" bunu okur. Günlük yazımı başarısız olsa bile işlemler
-       uygulanmıştır — kullanıcıya yalan söylememek için hata yutulur, yalnız loglanır
-       (geri alma o plan için kullanılamaz, kayıtlar arayüzden silinebilir). */
-    const undoable = results.filter((r) => r.ok && r.undo);
-    if (undoable.length) {
-      await db.tx(async (t) => {
-        for (const [i, r] of results.entries()) {
-          if (!r.ok || !r.undo) continue;
-          await t.run(
-            "INSERT INTO ai_actions (user_id, plan_id, conversation_id, created_at, tool, summary, undo_method, undo_path) VALUES (?,?,?,?,?,?,?,?)",
-            uid, planId, plan.conversationId, nowLocal(), actions[i].tool, r.summary, r.undo.method, r.undo.path,
-          );
-        }
-      }).catch((e) => console.error("[ai] uygulama günlüğü yazılamadı:", e));
-    }
-    /* Sonuç dökümü sohbete yazılır ve PLANA bağlanır: "geri al" düğmesi böylece olayın
-       geçtiği yerde, balonun altında durur — eskiden sohbetin dışında ayrı bir listedeydi
-       ve yalnız son 5 planı gösteriyordu. */
-    if (plan.conversationId) {
-      await mesajYaz(uid, plan.conversationId, "assistant", formatResults(results), undoable.length ? planId : null)
-        .catch((e) => console.error("[ai] sonuç mesajı yazılamadı:", e));
-    }
-    console.log(`[audit] Asistan ${results.filter((r) => r.ok).length}/${results.length} işlem uyguladı (id:${uid})`);
-    return c.json({ conversationId: plan.conversationId, results, undoable: undoable.length });
+    return c.json({ conversationId: plan.conversationId, actions: plan.actions });
   });
 
-  /* Geri al: o planın günlükteki işlemlerini TERS SIRADA geri alır. Ters sıra önemli —
-     "hesap aç + o hesaba işlem yaz" planında önce işlem silinmeli, yoksa hesap silinemez
-     (ya da işlemi de cascade götürür). Zaten geri alınmış satır atlanır (idempotent). */
-  api.post("/ai/undo", async (c: any) => {
-    const uid = c.get("user").id;
+  /* DEPO: uygulama günlüğü ("Geri al" bunu okur). Yalnız TÜKETİLMİŞ bir planın günlüğü
+     yazılabilir — uygulanmamış bir plana sahte geri alma satırı eklenmesin. Geri alma
+     isteğini de istemci kendi oturumuyla atar, yani buradaki yol ayrıcalık taşımaz. */
+  api.post("/ai/plans/:id/actions", async (c: any) => {
+    const uid = c.get("user").id, planId = String(c.req.param("id"));
     const b = await c.req.json().catch(() => null);
-    const planId = b && typeof b.planId === "string" ? b.planId : "";
-    if (!planId) return c.json({ error: "plan kimliği gerekli" }, 400);
+    const items = b?.items;
+    if (!Array.isArray(items) || !items.length || items.length > 12) return c.json({ error: "geçersiz günlük" }, 400);
+    if (!items.every((x: any) => typeof x?.tool === "string" && typeof x.summary === "string" && x.undo_method === "DELETE" && /^\/[A-Za-z0-9/_:.-]+$/.test(String(x.undo_path))))
+      return c.json({ error: "geçersiz günlük satırı" }, 400);
+    const plan = await db.get<{ conversation_id: number | null }>(
+      "SELECT conversation_id FROM ai_plans WHERE plan_id=? AND user_id=? AND consumed_at IS NOT NULL", planId, uid);
+    if (!plan) return c.json({ error: "uygulanmış böyle bir plan yok" }, 404);
+    await db.tx(async (t) => {
+      for (const x of items) {
+        await t.run(
+          "INSERT INTO ai_actions (user_id, plan_id, conversation_id, created_at, tool, summary, undo_method, undo_path) VALUES (?,?,?,?,?,?,?,?)",
+          uid, planId, plan.conversation_id, nowLocal(), x.tool, x.summary, x.undo_method, x.undo_path);
+      }
+    });
+    return c.json({ ok: true });
+  });
+
+  /* Geri alınabilir satırlar — TERS SIRADA (önce işlem, sonra onu tutan hesap). */
+  api.get("/ai/plans/:id/actions", async (c: any) => {
+    const uid = c.get("user").id;
     const rows = await db.all<{ id: number; summary: string; undo_method: string; undo_path: string; conversation_id: number | null }>(
       "SELECT id, summary, undo_method, undo_path, conversation_id FROM ai_actions WHERE user_id=? AND plan_id=? AND undone_at IS NULL ORDER BY id DESC",
-      uid, planId,
-    );
-    if (!rows.length) return c.json({ error: "geri alınacak işlem yok" }, 404);
-    const results: ExecutionResult[] = [];
-    for (const r of rows) {
-      const res = await deps.invoke(c, r.undo_method, r.undo_path)
-        .catch((e) => ({ status: 500, data: { error: String((e as Error).message) } }));
-      const ok = res.status < 400;
-      if (ok) await db.run("UPDATE ai_actions SET undone_at=? WHERE id=? AND user_id=?", nowLocal(), r.id, uid);
-      results.push({ summary: r.summary, ok, detail: ok ? "geri alındı" : res.data?.error || `hata (${res.status})` });
-    }
-    /* Geri alma da sohbete yazılır (plan bağı YOK: düğme uygulama mesajında kalır, ikinci
-       bir "geri al" doğurmaz). Sohbet silinmişse conversation_id NULL'dır — mesaj yazılmaz,
-       işlem yine geri alınır. */
-    const conv = rows[0].conversation_id;
-    if (conv) await mesajYaz(uid, conv, "assistant", formatResults(results)).catch((e) => console.error("[ai] geri alma mesajı yazılamadı:", e));
-    console.log(`[audit] Asistan ${results.filter((r) => r.ok).length}/${results.length} işlemi geri aldı (id:${uid})`);
-    return c.json({ conversationId: conv, results });
+      uid, String(c.req.param("id")));
+    return c.json({ actions: rows });
   });
+
+  /* Yalnız BAŞARIYLA geri alınanlar işaretlenir (başarısız olan tekrar denenebilsin). */
+  api.post("/ai/plans/:id/undone", async (c: any) => {
+    const uid = c.get("user").id;
+    const b = await c.req.json().catch(() => null);
+    const ids = Array.isArray(b?.ids) ? b.ids.filter((n: unknown) => Number.isInteger(n)).map(Number) : [];
+    if (!ids.length) return c.json({ error: "id yok" }, 400);
+    await db.tx(async (t) => {
+      for (const id of ids) await t.run("UPDATE ai_actions SET undone_at=? WHERE id=? AND user_id=? AND plan_id=? AND undone_at IS NULL",
+        nowLocal(), id, uid, String(c.req.param("id")));
+    });
+    return c.json({ ok: true });
+  });
+
 }

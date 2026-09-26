@@ -12,7 +12,7 @@ import { refreshAll, backfillPriceHistory, refreshCorporateActions, refreshCompa
 import { refreshBenchmarks, autoBackfill } from "./benchmarks.js";
 import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, purgeStaleEmailTokens, SESSION_COOKIE, type SessionUser , sahteSalt, e2eeMalzemeDogrula } from "./auth.js";
 import { sendMail, resetEmail, verifyEmail, mailConfigured, verifyMailConfig, mailFromWarning } from "./mail.js";
-import { mountAi, type Invoke } from "./ai/index.js";
+import { mountAi } from "./ai/index.js";
 import { getProvider } from "./ai/provider.js";
 
 const app = new Hono();
@@ -1293,25 +1293,12 @@ api.post("/account/delete", async (c) => {
   return c.json({ ok: true });
 });
 
-/* ---- AI asistan (Faz 22) ----
-   Asistanın onayladığın işlemleri "iç istek" olarak aynı uygulamaya gönderilir:
-   kullanıcının kendi oturum çerezi taşınır (guard yeniden doğrular → tenant-scope,
-   doğrulama ve bakiye/defter yan etkileri ucun kendi kodundan gelir; asistana özel
-   bir yazma yolu YOKTUR). İstemcinin IP'si de taşınır ki iç istekler kullanıcının
-   kendi rate-limit bütçesinden düşsün, ortak "local" kovasından değil. */
-const invoke: Invoke = async (c, method, path, body) => {
-  const res = await app.request(`/api${path}`, {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-      cookie: c.req.header("cookie") ?? "",
-      "x-forwarded-for": clientIp(c),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  return { status: res.status, data: await res.json().catch(() => ({})) };
-};
-mountAi(api, { invoke, rateLimited });
+/* ---- AI asistan (Faz 22; E2EE aşama 4'te sunucu = röle + depo) ----
+   Eskiden onaylanan işlemler burada "iç istek" olarak (`app.request`, kullanıcının çerezi
+   taşınarak) aynı uygulamaya gönderiliyordu. O yol aşama 4e'de SİLİNDİ: ajan döngüsü artık
+   tarayıcıda koşuyor ve yazma işlemleri normal API uçlarına kullanıcının kendi oturumuyla,
+   doğrudan gidiyor. Asistana özel bir yazma yolu diye bir şey kalmadı. */
+mountAi(api, { rateLimited });
 
 app.route("/api", api);
 

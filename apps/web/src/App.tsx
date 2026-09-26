@@ -537,7 +537,7 @@ export default function App() {
             {tab === "kart" && <Kartlar data={data} reload={reload} onAdd={(k) => openAdd(k)} />}
             {tab === "portfoy" && <Portfoy data={data} pos={pos} rates={rates} ccy={ccy} reload={reload} />}
             {tab === "kayitlar" && <Kayitlar data={data} reload={reload} />}
-            {tab === "asistan" && <Asistan reload={reload} initialText={shared} onConsumed={() => setShared(null)} />}
+            {tab === "asistan" && <Asistan data={data} reload={reload} initialText={shared} onConsumed={() => setShared(null)} />}
           </div>
         </div>
       </main>

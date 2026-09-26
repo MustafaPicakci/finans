@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { api, type AiKonusma, type AiSohbet } from "../../api";
+import { api, type AiKonusma, type AiSohbet, type AllData } from "../../api";
+import { sohbetEt, planUygula, planGeriAl } from "./istemci";
 import { T, css } from "../../theme";
 import { Aciklama, Empty, SilDugmesi } from "../../ui";
 import { useDictation } from "./dictation";
@@ -52,7 +53,9 @@ const ORNEKLER = [
   "Dün markete 850 TL harcadım, kartla",
 ];
 
-export function Asistan({ reload, initialText, onConsumed }: {
+export function Asistan({ data, reload, initialText, onConsumed }: {
+  /** E2EE aşama 4: ajan döngüsü tarayıcıda koşar, bağlamı ve okuma araçlarını bu veriden kurar. */
+  data: AllData;
   reload: () => void;
   /** Paylaşımdan gelen metin (Faz 23) — YENİ bir sohbette bir kez otomatik gönderilir */
   initialText?: string | null;
@@ -138,7 +141,11 @@ export function Asistan({ reload, initialText, onConsumed }: {
     const hedef = yeni ? null : convId; // `yeni`: paylaşılan SMS kendi sohbetini açar
     setInput(""); setErr(""); setBusy(true); setBekleyen(t); setListeAcik(false);
     try {
-      const res = await api.aiChat(t, hedef ?? undefined);
+      /* Geçmiş yalnız AYNI sohbete devam ediliyorsa verilir (yeni sohbet boş başlar). */
+      const onceki = hedef && sohbet?.id === hedef
+        ? sohbet.messages.map((m) => ({ role: m.role, content: m.content }))
+        : [];
+      const res = await sohbetEt(data, t, hedef, onceki);
       await sohbetYukle(res.conversationId);
       listeYukle();
     } catch (e) {
@@ -150,14 +157,14 @@ export function Asistan({ reload, initialText, onConsumed }: {
       if (!hedef && ks?.length) await sohbetYukle(ks[0].id);
       else if (hedef) await sohbetYukle(hedef);
     } finally { setBusy(false); setBekleyen(null); }
-  }, [busy, convId, sohbetYukle, listeYukle]);
+  }, [busy, convId, sohbet, data, sohbetYukle, listeYukle]);
 
   const apply = useCallback(async () => {
     const p = sohbet?.pending;
     if (!p || busy) return;
     setBusy(true); setErr("");
     try {
-      await api.aiExecute(p.planId, cikarilan);
+      await planUygula(p.planId, cikarilan);
       if (convId) await sohbetYukle(convId);
       reload();        // defter değişti → tüm veriyi tazele
       listeYukle();
@@ -173,7 +180,7 @@ export function Asistan({ reload, initialText, onConsumed }: {
     if (busy) return;
     setBusy(true); setErr("");
     try {
-      await api.aiUndo(planId);
+      await planGeriAl(planId);
       if (convId) await sohbetYukle(convId);
       reload(); listeYukle();
     } catch (e) {

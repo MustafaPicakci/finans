@@ -8,6 +8,7 @@
     "build": "vite build && tsc --noEmit"
   },
   "dependencies": {
+    "@finans/asistan": "workspace:*",
     "@finans/crypto": "workspace:*",
     "@finans/engine": "workspace:*",
     "react": "^18.3.1",

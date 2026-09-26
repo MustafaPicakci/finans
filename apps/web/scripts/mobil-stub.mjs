@@ -256,29 +256,51 @@ createServer(async (req, res) => {
     if (req.method === "PUT") { k.title = "Yeniden adlandırıldı"; return json({ ok: true, title: k.title }); }
     return json({ id: k.id, title: k.title, messages: k.messages, truncated: false, plans: k.plans, pending: k.pending });
   }
-  if (url.pathname === "/api/ai/chat") {
-    const k = aiKonusmalar[0];
-    k.messages.push({ id: ++aiMesajNo, role: "user", content: "dün markete 1.250 TL harcadım, Axess'le", at: aiSimdi(), planId: null });
-    k.messages.push({ id: ++aiMesajNo, role: "assistant", content: "Anladım. Aşağıdaki iki kaydı oluşturacağım, onayına sunuyorum.", at: aiSimdi(), planId: null });
-    k.pending = {
-      planId: "stub-plan", at: aiSimdi(),
-      actions: [
-        { tool: "kart_harcamasi", summary: "Akbank Axess kartına 1.250,00 ₺ market harcaması (3 taksit), 6 Eyl", args: {} },
-        { tool: "gelir_gider", summary: "Garanti Vadesiz hesabından 480,00 ₺ ulaşım gideri, bugün", args: {} },
-      ],
-    };
-    return json({ conversationId: k.id, reply: "Anladım.", pending: k.pending.actions, model: "gemini/gemini-3.6-flash", planId: "stub-plan" });
+  /* E2EE aşama 4: ajan döngüsü TARAYICIDA koşuyor; sunucu yalnız röle + depo. Stub da bu
+     sözleşmeyi taklit eder — eski /ai/chat taklidi kalsaydı arayüz onu hiç çağırmaz ve asistan
+     sekmesi mobil denetimde kırık görünürdü. Röle kullanıcı mesajına bir YAZMA aracıyla,
+     araç sonucuna düz metinle cevap verir: onay kartı böylece gerçekten istemcideki döngünün
+     planından doğar (stub'ın elle kurduğu bir karttan değil). */
+  const govdeOku = async () => { let g = ""; for await (const x of req) g += x; try { return JSON.parse(g || "{}"); } catch { return {}; } };
+  if (url.pathname === "/api/ai/relay") {
+    const b = await govdeOku();
+    const son = (b.messages ?? []).at(-1);
+    if (son?.role === "user") {
+      return json({ text: "", model: "gemini/gemini-3.6-flash", toolCalls: [{ id: "c1", name: "islem_ekle",
+        args: { date: new Date().toISOString().slice(0, 10), name: "Market", amount: -480, account_id: 1 } }] });
+    }
+    return json({ text: "Aşağıdaki kaydı hazırladım, onaylarsan uygulayayım.", toolCalls: [], model: "gemini/gemini-3.6-flash" });
   }
-  if (url.pathname === "/api/ai/execute") {
-    const k = aiKonusmalar[0];
-    k.messages.push({ id: ++aiMesajNo, role: "assistant", content: "✓ Akbank Axess · Market · 1.250,00 ₺\n✓ Gider: Ulaşım · 480,00 ₺", at: aiSimdi(), planId: "stub-plan" });
-    k.plans = [{ planId: "stub-plan", at: aiSimdi(), total: 2, undoable: 2, summary: "Akbank Axess kartına 1.250,00 ₺ market harcaması" }]; k.pending = null; k.undoable = 2;
-    return json({ conversationId: k.id, results: [], undoable: 2 });
+  if (url.pathname === "/api/ai/messages") {
+    const b = await govdeOku();
+    let k = aiKonusmalar.find((x) => x.id === Number(b.conversationId));
+    if (!k) { k = { id: 100 + aiKonusmalar.length, title: b.title ?? "Yeni sohbet", at: aiSimdi(), undoable: 0, messages: [], plans: [], pending: null }; aiKonusmalar.unshift(k); }
+    k.messages.push({ id: ++aiMesajNo, role: b.role, content: b.content, at: aiSimdi(), planId: b.planId ?? null });
+    return json({ conversationId: k.id });
   }
-  if (url.pathname === "/api/ai/undo") {
-    const k = aiKonusmalar[0];
-    k.plans = k.plans.map((p) => ({ ...p, undoable: 0 })); k.undoable = 0;
-    return json({ conversationId: k.id, results: [] });
+  if (url.pathname === "/api/ai/plans" && req.method === "POST") {
+    const b = await govdeOku();
+    const k = aiKonusmalar.find((x) => x.id === Number(b.conversationId));
+    if (!k) return json({ error: "konuşma bulunamadı" }, 404);
+    k.pending = { planId: `stub-${aiMesajNo}`, at: aiSimdi(), actions: b.actions };
+    return json({ planId: k.pending.planId });
+  }
+  const aiPlan = url.pathname.match(/^\/api\/ai\/plans\/([^/]+)\/(consume|actions|undone)$/);
+  if (aiPlan) {
+    const [, planId, is] = aiPlan;
+    const k = aiKonusmalar.find((x) => x.pending?.planId === planId || x.plans.some((p) => p.planId === planId));
+    if (is === "consume") {
+      if (!k?.pending || k.pending.planId !== planId) return json({ error: "Bu plan zaten uygulandı" }, 409);
+      const actions = k.pending.actions; k.pending = null;
+      return json({ conversationId: k.id, actions });
+    }
+    if (is === "actions" && req.method === "POST") {
+      const b = await govdeOku();
+      if (k) { k.plans = [{ planId, at: aiSimdi(), total: b.items.length, undoable: b.items.length, summary: b.items[0].summary }, ...k.plans]; k.undoable = b.items.length; }
+      return json({ ok: true });
+    }
+    if (is === "actions") return json({ actions: [] }); // stub'da geri alınacak gerçek kayıt yok
+    return json({ ok: true });
   }
   /* AYAR YAZMALARI GERÇEKTEN UYGULANIR — aşağıdaki catch-all'a düşseydi stub {ok:true} der,
      değeri saklamaz ve arayüz reload'dan sonra ESKİ değeri geri okurdu. Sonuç: "nakit say",

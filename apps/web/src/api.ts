@@ -1,4 +1,5 @@
 import type { AllData } from "@finans/engine";
+import type { UserContext, ChatMessage, ChatResult } from "@finans/asistan";
 
 export type { Account, Recurring, RecurringAmount, Loan, OneOff, AssetType, Currency, Trade, Portfolio, Card, CardTx, Price, AllData } from "@finans/engine";
 
@@ -65,10 +66,10 @@ export const api = {
     fetch(`/api/cards/${cardId}/pay-statement`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ due, ...body }) }).then(j),
   unpayStatement: (cardId: number, due: string) =>
     fetch(`/api/cards/${cardId}/pay-statement/${due}`, { method: "DELETE" }).then(j),
-  /* ---- AI asistan (Faz 22; sohbet Faz 34'te sunucuya taşındı) ----
-     chat yalnız PLAN üretir (hiçbir kayıt oluşmaz); execute kullanıcının onayladığı planı
-     uygular. Sohbet artık sunucuda yaşar: geçmiş istekle GİTMEZ, sunucu kendi okur — yani
-     mesajlar cihaza bağlı değildir ve istemci uydurma bir "asistan" turu enjekte edemez. */
+  /* ---- AI asistan (Faz 22; sohbet Faz 34'te sunucuya taşındı; döngü E2EE aşama 4'te tarayıcıya) ----
+     Sohbet sunucuda SAKLANIR (cihazlar arası devam eder), ama ajan döngüsü tarayıcıda koşar
+     ve geçmişi tarayıcı verir — Faz 34'ün "istemci uydurma tur enjekte edemez" güvencesi
+     bilerek düştü (bkz. features/asistan/istemci.ts ve docs/E2EE.md §4.4). */
   /* `neden`: "anahtar" = sunucuda AI_API_KEY yok, "kapali" = kullanıcı kendi kapattı. İkisi
      ayrı çünkü arayüzün söyleyeceği şey ayrı (env kurulumu vs geri açma düğmesi). */
   aiStatus: () => fetch("/api/ai/status").then((r) => j<{ enabled: boolean; model: string | null; neden: "anahtar" | "kapali" | null }>(r)),
@@ -82,20 +83,25 @@ export const api = {
     fetch(`/api/ai/conversations/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title }) })
       .then((r) => j<{ ok: true; title: string }>(r)),
   aiSohbetSil: (id: number) => fetch(`/api/ai/conversations/${id}`, { method: "DELETE" }).then(j),
-  /** conversationId yoksa yeni sohbet açılır (başlık ilk cümleden türetilir) */
-  aiChat: (message: string, conversationId?: number) =>
-    fetch("/api/ai/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message, conversationId }) })
-      .then((r) => j<{ conversationId: number; reply: string; pending: AiAction[]; model: string; planId: string }>(r)),
-  /* Uygulanacak işlemler GÖNDERİLMEZ — sunucu onları kendi planından okur (onaylanan ile
-     uygulanan ayrışamaz). `skip` = onay kartından ✕ ile çıkarılan satırların sıra numaraları.
-     planId tek kullanımlıktır: ikinci gönderim 409 döner (çift kayıt koruması). */
-  aiExecute: (planId: string, skip: number[] = []) =>
-    fetch("/api/ai/execute", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ planId, skip }) })
-      .then((r) => j<{ conversationId: number | null; results: AiResult[]; undoable: number }>(r)),
-  /* uygulanan planı geri alır (kayıtları ters sırada siler); yalnız geri alınabilir işlemler için */
-  aiUndo: (planId: string) =>
-    fetch("/api/ai/undo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ planId }) })
-      .then((r) => j<{ conversationId: number | null; results: AiResult[] }>(r)),
+  /* ---- E2EE aşama 4: sunucu = röle + depo. Döngüyü `features/asistan/istemci.ts` koşturur;
+     bu uçları DOĞRUDAN çağırma, oradan geç. ---- */
+  aiRelay: (context: UserContext, messages: ChatMessage[]) =>
+    fetch("/api/ai/relay", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ context, messages }) })
+      .then((r) => j<{ text: string; toolCalls: ChatResult["toolCalls"]; model: string }>(r)),
+  aiMesaj: (m: { conversationId?: number | null; role: "user" | "assistant"; content: string; title?: string; planId?: string | null }) =>
+    fetch("/api/ai/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(m) }).then((r) => j<{ conversationId: number }>(r)),
+  aiPlanKaydet: (conversationId: number, actions: AiAction[]) =>
+    fetch("/api/ai/plans", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ conversationId, actions }) }).then((r) => j<{ planId: string }>(r)),
+  aiPlanTuket: (planId: string) =>
+    fetch(`/api/ai/plans/${encodeURIComponent(planId)}/consume`, { method: "POST" })
+      .then((r) => j<{ conversationId: number | null; actions: AiAction[] }>(r)),
+  aiGunlukYaz: (planId: string, items: { tool: string; summary: string; undo_method: string; undo_path: string }[]) =>
+    fetch(`/api/ai/plans/${encodeURIComponent(planId)}/actions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items }) }).then(j),
+  aiGunlukOku: (planId: string) =>
+    fetch(`/api/ai/plans/${encodeURIComponent(planId)}/actions`)
+      .then((r) => j<{ actions: { id: number; summary: string; undo_method: string; undo_path: string; conversation_id: number | null }[] }>(r)),
+  aiGeriAlindi: (planId: string, ids: number[]) =>
+    fetch(`/api/ai/plans/${encodeURIComponent(planId)}/undone`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) }).then(j),
   /* ---- auth (Faz 5.1) ---- */
   me: () => fetch("/api/auth/me").then((r) => j<{ user: SessionUser | null }>(r)),
   /* ---- sıfır bilgi girişi (E2EE aşama 3b) ----
