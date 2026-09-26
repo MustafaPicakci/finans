@@ -60,6 +60,10 @@ export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => 
     await api.payStatement(paying.cardId, paying.dueK, {
       account_id: pp.account_id ? +pp.account_id : null,
       category_id: pp.category_id ? +pp.category_id : null,
+      /* Tutar artık İSTEMCİDEN gider (E2EE aşama 1b). Ekranda zaten bu rakam yazıyor ve
+         `statementAmount`'tan geliyor — yani kullanıcının onayladığı tutarla yazılan tutar
+         tanım gereği aynı; sunucunun ikinci kez hesaplaması bir kopyaydı. */
+      amount: paying.amount,
     });
     setPaying(null); setPp({ account_id: "", category_id: "" }); reload();
   };

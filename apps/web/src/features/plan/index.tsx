@@ -27,7 +27,16 @@ export function Plan({ data, reload, onRealize }: { data: AllData; reload: () =>
   /* tutar zaman çizelgesi: satırda bu ayın tutarı gösterilir, gelecek değişiklikler ipucu olur */
   const amtIdx = recurringAmountIndex(data.recurring_amounts ?? []);
   const realizeRec = async (r: Recurring, body: { account_id?: number | null; category_id?: number | null } = {}) => {
-    await api.realizeRecurring(r.id, curYm, body);
+    /* Tutarı istemci çözüp gönderir (E2EE aşama 1b): zaman çizelgesinden bu ayın tutarı,
+       İŞARETİYLE. İşaret hedefe göre değişiyor — KARTA düşen gider kart ekstresine POZİTİF
+       yazılır (borç büyür), hesaba düşen ise gider olarak EKSİ. Hangi dala gideceğini
+       istemci de biliyor (`r.card_id`), o yüzden tek alan yetiyor.
+       Tutar çözülemiyorsa alan hiç gönderilmez ve sunucu yedek yoldan hesaplar — burada
+       0 göndermek kalemi "tutarsız gerçekleşti" diye yazardı. */
+    const ham = recAmountOn(amtIdx.get(r.id), curYm);
+    const kartaMi = r.card_id != null && r.kind === "expense";
+    const amount = ham === undefined ? undefined : (kartaMi || r.kind === "income" ? ham : -ham);
+    await api.realizeRecurring(r.id, curYm, { ...body, amount });
     setRealizing(null); setRp({ account_id: "", category_id: "" }); reload();
   };
   const undoRealize = async (id: number) => { await api.unrealizeRecurring(id, curYm); reload(); };

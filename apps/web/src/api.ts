@@ -49,12 +49,14 @@ export const api = {
   delRecurringAmount: (id: number, from_month: string) =>
     fetch(`/api/recurring/${id}/amount/${from_month}`, { method: "DELETE" }).then(j),
   /* ---- düzenli kalem gerçekleştirme (Faz 8) ---- */
-  realizeRecurring: (id: number, ym: string, body: { account_id?: number | null; category_id?: number | null } = {}) =>
+  /* `amount` (E2EE aşama 1b): deftere/karta yazılacak tutar, İŞARETİYLE — sunucu artık
+     tutar türetmiyor. Gönderilmezse sunucu yedek yoldan hesaplar (cron ve asistan için). */
+  realizeRecurring: (id: number, ym: string, body: { account_id?: number | null; category_id?: number | null; amount?: number } = {}) =>
     fetch(`/api/recurring/${id}/realize`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ym, ...body }) }).then(j),
   unrealizeRecurring: (id: number, ym: string) =>
     fetch(`/api/recurring/${id}/realize/${ym}`, { method: "DELETE" }).then(j),
   /* ---- kart ekstresi ödeme (Faz 8.2) ---- */
-  payStatement: (cardId: number, due: string, body: { account_id?: number | null; category_id?: number | null } = {}) =>
+  payStatement: (cardId: number, due: string, body: { account_id?: number | null; category_id?: number | null; amount?: number } = {}) =>
     fetch(`/api/cards/${cardId}/pay-statement`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ due, ...body }) }).then(j),
   unpayStatement: (cardId: number, due: string) =>
     fetch(`/api/cards/${cardId}/pay-statement/${due}`, { method: "DELETE" }).then(j),

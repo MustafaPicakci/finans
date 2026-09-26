@@ -340,6 +340,22 @@ function crud(route: string, table: string, cols: Col[]) {
    `applyEntry` hareketi yazar; `revertEntries` kaynağın YAZILMIŞ hareketlerini
    okuyup tersini uygular ve satırları siler — eski tutarı yeniden hesaplamaz, bu yüzden kaynak kaydı
    düzenlenmiş/silinmiş olsa da geri alma her zaman tutar. Düzenleme = revert + apply. */
+/* ————— TUTARI SUNUCU HESAPLAMAZ (E2EE aşama 1b) —————
+   Sunucu tutarı İKİNCİ kez hesaplamayı bırakıyor. İki sebep:
+   (1) şifreli qty/price/amount ile yapamayacak (sıfır bilgi modelinde bunlar opak);
+   (2) zaten gerekmiyordu — her yazma tarayıcıdan doğuyor ve aynı engine fonksiyonunu
+       (`cashDelta`, `statementAmount`, `recAmountOn`) orada çağırıyor, yani sunucudaki
+       hesap bir KOPYAYDI. Faz 8.2'nin gerekçesi ("istemciden gelen tutara güvenilmez")
+       burada düşer: istemci kullanıcının kendisidir ve yanlış tutar yalnız kendi
+       defterini bozar — başkasının verisine dokunamaz (tenant scope).
+
+   `sunucuHesabi` YEDEK yoldur ve ÖMÜRLÜDÜR: asistan araçları bu uçlara aşama 4'e kadar
+   SUNUCUDAN iç istek atıyor (`app.request`) ve çözülmüş veriye sahip değil; cron da öyle.
+   Asistan istemciye taşınıp cron etkinleştiriciye dönünce (aşama 2/4) bu yedekler ve
+   onları besleyen hesaplar silinecek. */
+const entryAmount = (istemci: unknown, sunucuHesabi: () => number): number =>
+  Number.isFinite(Number(istemci)) && istemci !== null && istemci !== "" ? Number(istemci) : sunucuHesabi();
+
 type EntryMeta = { date: string; kind: "islem" | "portfoy" | "mevduat" | "duzeltme" | "acilis" | "virman"; note: string; source_table?: string; source_id?: number };
 async function applyEntry(t: TxClient, uid: number, accountId: number | null, amount: number, m: EntryMeta): Promise<void> {
   if (accountId == null || !amount) return; // hesapsız kayıt deftere girmez; 0 tutar defteri kirletmez
@@ -626,7 +642,8 @@ function occurrenceDate(ym: string, day: number): string {
 }
 /** Tek tx içinde, idempotent. Yeni işaretlendiyse true; zaten gerçekleşmişse false döner. */
 async function realizeOccurrence(
-  t: TxClient, uid: number, r: RecurringRow, ym: string, opts?: { account_id?: number | null; category_id?: number | null },
+  t: TxClient, uid: number, r: RecurringRow, ym: string,
+  opts?: { account_id?: number | null; category_id?: number | null; amount?: number },
 ): Promise<boolean> {
   /* tutar hedef ayın zaman çizelgesinden çözülür — İŞARETLEMEDEN ÖNCE: tutarı olmayan kalem
      "gerçekleşti ama kayıt yok" durumuna düşmesin */
@@ -647,11 +664,13 @@ async function realizeOccurrence(
        (hesaba düşen aynı kalem kategoriyi koruyordu); aynı kalemin iki hedefi farklı davranıyordu. */
     const info = await t.run(
       "INSERT INTO card_txs (card_id,date,name,amount,installments,category_id,user_id) VALUES (?,?,?,?,?,?,?) RETURNING id",
-      r.card_id, date, r.name, amt.amount, 1, opts?.category_id ?? r.category_id ?? null, uid,
+      r.card_id, date, r.name, entryAmount(opts?.amount, () => amt.amount), 1, opts?.category_id ?? r.category_id ?? null, uid,
     );
     await t.run("UPDATE recurring_realized SET card_tx_id=? WHERE recurring_id=? AND ym=?", info.id, r.id, ym);
   } else {
-    const signed = (r.kind === "income" ? 1 : -1) * amt.amount;
+    /* İŞARETLİ tutar. İstemci hangi dala düşüleceğini (kart mı hesap mı) zaten biliyor —
+       `r.card_id` onda da var — yani doğru işaretli değeri gönderebiliyor; tek alan yeterli. */
+    const signed = entryAmount(opts?.amount, () => (r.kind === "income" ? 1 : -1) * amt.amount);
     const accountId = opts?.account_id ?? r.account_id ?? null;
     const categoryId = opts?.category_id ?? r.category_id ?? null;
     const info = await t.run(
@@ -674,7 +693,11 @@ api.post("/recurring/:id/realize", async (c) => {
   if (!recActiveInYm(r, ym)) return c.json({ error: "kalem o ay aktif değil" }, 400);
   const acc = (b as any).account_id != null && (b as any).account_id !== "" ? Number((b as any).account_id) : undefined;
   const cat = (b as any).category_id != null && (b as any).category_id !== "" ? Number((b as any).category_id) : undefined;
-  const created = await db.tx((t) => realizeOccurrence(t, uid, r, ym, { account_id: acc, category_id: cat }));
+  const amount = (b as any).amount;
+  const created = await db.tx((t) => realizeOccurrence(t, uid, r, ym, {
+    account_id: acc, category_id: cat,
+    amount: Number.isFinite(Number(amount)) && amount !== null && amount !== "" ? Number(amount) : undefined,
+  }));
   if (created) console.log(`[audit] Düzenli işlem/ödeme gerçekleşti: ${r.name} (ay: ${ym}, id:${uid})`);
   return c.json({ ok: true, already: !created });
 });
@@ -748,7 +771,7 @@ api.post("/trades", async (c) => {
       b.date, b.asset_type, b.symbol, b.side, qty, price, fee, currency, accountId, portfolioId, uid,
     );
     if (affects) {
-      await applyEntry(t, uid, accountId, tradeBalanceDelta(b.side, qty, price, fee),
+      await applyEntry(t, uid, accountId, entryAmount(b.entry_amount, () => tradeBalanceDelta(b.side, qty, price, fee)),
         { date: b.date, kind: "portfoy", note: `${b.symbol} ${b.side}`, source_table: "trades", source_id: info.id });
     }
     return info.id;
@@ -804,7 +827,7 @@ api.put("/trades/:id", async (c) => {
       b.date, b.asset_type, b.symbol, b.side, qty, price, fee, currency, accountId, portfolioId, id, uid,
     );
     if (currency === "TRY") {
-      await applyEntry(t, uid, accountId, tradeBalanceDelta(b.side, qty, price, fee),
+      await applyEntry(t, uid, accountId, entryAmount(b.entry_amount, () => tradeBalanceDelta(b.side, qty, price, fee)),
         { date: b.date, kind: "portfoy", note: `${b.symbol} ${b.side}`, source_table: "trades", source_id: Number(id) });
     }
     return true;
@@ -841,7 +864,7 @@ api.post("/deposits", async (c) => {
       "INSERT INTO deposits (name,principal,rate,open_date,term_days,withholding,account_id,user_id) VALUES (?,?,?,?,?,?,?,?) RETURNING id",
       b.name, principal, rate, b.open_date, termDays, withholding, accountId, uid,
     );
-    await applyEntry(t, uid, accountId, -principal,
+    await applyEntry(t, uid, accountId, entryAmount(b.entry_amount, () => -principal),
       { date: b.open_date, kind: "mevduat", note: `${b.name} (vadeli açılış)`, source_table: "deposits", source_id: info.id });
     return info.id;
   });
@@ -872,7 +895,7 @@ api.put("/deposits/:id", async (c) => {
       "UPDATE deposits SET name=?, principal=?, rate=?, open_date=?, term_days=?, withholding=?, account_id=? WHERE id=? AND user_id=?",
       b.name, principal, rate, b.open_date, termDays, withholding, accountId, id, uid,
     );
-    await applyEntry(t, uid, accountId, -principal,
+    await applyEntry(t, uid, accountId, entryAmount(b.entry_amount, () => -principal),
       { date: b.open_date, kind: "mevduat", note: `${b.name} (vadeli açılış)`, source_table: "deposits", source_id: id });
     return true;
   });
@@ -938,7 +961,11 @@ api.post("/cards/:id/pay-statement", async (c) => {
   const card = await db.get<Card>("SELECT * FROM cards WHERE id=? AND user_id=?", c.req.param("id"), uid);
   if (!card) return c.json({ error: "kart yok" }, 404);
   const txs = await db.all<CardTx>("SELECT * FROM card_txs WHERE card_id=? AND user_id=?", card.id, uid);
-  const amount = statementAmount(card, txs, due);
+  /* Ekstre tutarı istemciden gelir; sunucu yalnız YEDEK olarak hesaplar (bkz. entryAmount).
+     Faz 8.2 bunu bilerek sunucuya almıştı ("istemciden gelen tutara güvenilmez") — o gerekçe
+     sıfır bilgi modelinde düşüyor, çünkü istemci kullanıcının kendisi. Önizleme (enrich.ts)
+     hâlâ aynı engine fonksiyonunu çağırıyor, yani onay kartındaki rakam değişmedi. */
+  const amount = entryAmount((b as any).amount, () => statementAmount(card, txs, due));
   if (!(amount > 0)) return c.json({ error: "bu tarihte ekstre yok" }, 400);
   const accountId = (b as any).account_id != null && (b as any).account_id !== "" ? Number((b as any).account_id) : null;
   const categoryId = (b as any).category_id != null && (b as any).category_id !== "" ? Number((b as any).category_id) : null;
