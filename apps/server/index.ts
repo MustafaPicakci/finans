@@ -10,7 +10,7 @@ import { db, initDb, nowLocal, todayLocal, TENANT_TABLES, GLOBAL_SETTING_KEYS, t
 import { loadAllData } from "./data.js";
 import { refreshAll, backfillPriceHistory, refreshCorporateActions, refreshCompanyEvents } from "./prices.js";
 import { refreshBenchmarks, autoBackfill } from "./benchmarks.js";
-import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, purgeStaleEmailTokens, SESSION_COOKIE, type SessionUser } from "./auth.js";
+import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, purgeStaleEmailTokens, SESSION_COOKIE, type SessionUser , sahteSalt, e2eeMalzemeDogrula } from "./auth.js";
 import { sendMail, resetEmail, verifyEmail, mailConfigured, verifyMailConfig, mailFromWarning } from "./mail.js";
 import { mountAi, type Invoke } from "./ai/index.js";
 import { getProvider } from "./ai/provider.js";
@@ -94,9 +94,16 @@ const setSessionCookie = (c: any, token: string, expires: Date) =>
 
 api.post("/auth/register", async (c) => {
   if (rateLimited(`reg:${clientIp(c)}`, 10, 5 * 60_000)) return c.json({ error: "Çok fazla deneme, biraz sonra tekrar dene" }, 429);
-  const { email, password } = await c.req.json().catch(() => ({}));
+  const b = await c.req.json().catch(() => ({}));
+  const { email } = b;
   if (!email || typeof email !== "string" || !email.includes("@")) return c.json({ error: "Geçerli e-posta gir" }, 400);
-  if (!password || typeof password !== "string" || password.length < 8) return c.json({ error: "Parola en az 8 karakter olmalı" }, 400);
+  /* E2EE aşama 3b: kayıt YALNIZ sıfır bilgi yoluyla. Parola sunucuya gelmez; istemci onu
+     türetip auth_token + sarılı DEK gönderir. Parola uzunluk/güç kuralı bu yüzden YALNIZ
+     istemcide uygulanabilir — sunucu parolayı hiç görmüyor. Eski (parola gönderen) bir
+     istemciye anlaşılır hata dönülür: sessizce legacy kullanıcı açmak göç penceresini uzatırdı. */
+  if (typeof b.password === "string") return c.json({ error: "Uygulamanın yeni sürümü gerekli — sayfayı yenile" }, 400);
+  const m = e2eeMalzemeDogrula(b);
+  if (typeof m === "string") return c.json({ error: m }, 400);
   const email2 = email.trim().toLowerCase();
   if (await db.get<{ id: number }>("SELECT id FROM users WHERE email = ?", email2)) {
     return c.json({ error: "Bu e-posta zaten kayıtlı" }, 409);
@@ -104,8 +111,11 @@ api.post("/auth/register", async (c) => {
   const { count } = (await db.get<{ count: number }>("SELECT COUNT(*)::int AS count FROM users"))!;
   const isOwner = count === 0; // ilk kullanıcı = owner: doğrulanmış gelir, sahipsiz veriyi devralır, otomatik giriş yapar
   const info = await db.run(
-    "INSERT INTO users (email, password_hash, email_verified, created_at) VALUES (?,?,?,?) RETURNING id",
-    email2, await hashPassword(password), isOwner, new Date().toISOString(),
+    `INSERT INTO users (email, password_hash, email_verified, created_at,
+                        password_kdf, kdf_salt, kdf_params, dek_wrapped_pw, dek_wrapped_rk)
+     VALUES (?,?,?,?, 'v2',?,?,?,?) RETURNING id`,
+    email2, await hashPassword(m.auth_token), isOwner, new Date().toISOString(),
+    m.kdf_salt, m.kdf_params, m.dek_wrapped_pw, m.dek_wrapped_rk,
   );
 
   if (isOwner) {
@@ -146,24 +156,73 @@ api.post("/auth/register", async (c) => {
   return c.json({ pending: true });
 });
 
+/* ---- sıfır bilgi girişinin ilk adımı (E2EE aşama 3b) ----
+   İstemci paroladan anahtar türetebilmek için ÖNCE bu e-postanın salt'ını bilmeli. Kayıtlı
+   olmayan e-postaya da (gizli anahtarla türetilmiş, her seferinde aynı) sahte bir salt dönülür,
+   yoksa bu uç "bu e-posta kayıtlı mı" sorusunu cevaplardı.
+   Bilinen ve SINIRLI tek sızıntı: henüz v2'ye geçmemiş (legacy) bir hesap "legacy" döner,
+   yani varlığı anlaşılır. Kaçınılmaz — sunucu o hesabın parolasını kontrol edebilmek için
+   istemciye "parolayı gönder" demek zorunda. Küme yalnız KÜÇÜLÜR: yeni kayıt hep v2 doğar ve
+   mevcut her hesap ilk girişinde v2'ye geçer. */
+api.post("/auth/prelogin", async (c) => {
+  if (rateLimited(`prelogin:${clientIp(c)}`, 20, 5 * 60_000)) return c.json({ error: "Çok fazla deneme, biraz sonra tekrar dene" }, 429);
+  const { email } = await c.req.json().catch(() => ({}));
+  const email2 = String(email ?? "").trim().toLowerCase();
+  if (!email2.includes("@")) return c.json({ error: "Geçerli e-posta gir" }, 400);
+  const u = await db.get<{ password_kdf: string; kdf_salt: string | null; kdf_params: string | null }>(
+    "SELECT password_kdf, kdf_salt, kdf_params FROM users WHERE email = ?", email2,
+  );
+  if (u?.password_kdf === "legacy") return c.json({ kdf: "legacy" });
+  if (u?.kdf_salt && u.kdf_params) return c.json({ kdf: "v2", salt: u.kdf_salt, params: JSON.parse(u.kdf_params) });
+  return c.json({ kdf: "v2", salt: await sahteSalt(email2), params: { alg: "PBKDF2-SHA256", iter: 600_000 } });
+});
+
 api.post("/auth/login", async (c) => {
   if (rateLimited(`login:${clientIp(c)}`, 10, 5 * 60_000)) return c.json({ error: "Çok fazla deneme, biraz sonra tekrar dene" }, 429);
-  const { email, password } = await c.req.json().catch(() => ({}));
-  if (!email || !password) return c.json({ error: "E-posta ve parola gerekli" }, 400);
-  const email2 = String(email).trim().toLowerCase();
+  const b = await c.req.json().catch(() => ({}));
+  const email2 = String(b.email ?? "").trim().toLowerCase();
+  const v2 = typeof b.auth_token === "string", legacy = typeof b.password === "string";
+  if (!email2 || (!v2 && !legacy)) return c.json({ error: "E-posta ve parola gerekli" }, 400);
   if (tooManyLoginFails(email2)) return c.json({ error: "Çok fazla başarısız deneme, biraz sonra tekrar dene" }, 429);
-  const user = await db.get<{ id: number; email: string; password_hash: string; email_verified: boolean }>(
-    "SELECT id, email, password_hash, email_verified FROM users WHERE email = ?", email2,
+  const user = await db.get<{ id: number; email: string; password_hash: string; email_verified: boolean; password_kdf: string; dek_wrapped_pw: string | null }>(
+    "SELECT id, email, password_hash, email_verified, password_kdf, dek_wrapped_pw FROM users WHERE email = ?", email2,
   );
-  const ok = await verifyPassword(String(password), user?.password_hash ?? DUMMY_HASH); // kullanıcı yoksa da scrypt ödenir
+  /* Yol ile hesabın türü EŞLEŞMEK ZORUNDA. v2 hesabın parolası sunucuya hiç gelmemeli (gelirse
+     reddedilir, kabul edilseydi eski bir istemci sıfır bilgi garantisini sessizce delerdi);
+     legacy hesap da token'la açılamaz (hash parolanın). Kullanıcı yoksa da scrypt ödenir. */
+  const gizli = v2 ? String(b.auth_token) : String(b.password);
+  const hashOk = await verifyPassword(gizli, user?.password_hash ?? DUMMY_HASH);
+  const ok = !!user && hashOk && user.password_kdf === (v2 ? "v2" : "legacy");
   if (!user || !ok) { recordLoginFail(email2); return c.json({ error: "E-posta veya parola hatalı" }, 401); }
   loginFails.delete(email2);
   // Aktivasyon kapısı (parola doğrulandıktan SONRA → enumerasyon sızmaz). Owner doğrulanmış geldiği için etkilenmez.
   if (!user.email_verified) return c.json({ error: "Hesabın henüz aktive edilmemiş. E-postana gönderilen bağlantıya tıkla." }, 403);
+
+  /* legacy → v2 YÜKSELTMESİ bu isteğin İÇİNDE ve bu bir güvenlik kararı: yükseltme fiilen bir
+     PAROLA DEĞİŞİMİDİR (yeni hash yazılır). Ayrı bir oturumlu uç olsaydı çalınmış bir oturum ona
+     kendi token'ını yazıp hesabı ele geçirebilirdi. Burada parola AYNI istekte az önce doğrulandı.
+     Malzeme eksik/bozuksa giriş yine başarılı, hesap legacy kalır ve bir sonraki girişte tekrar
+     denenir — kullanıcıyı kilitlemek, yükseltmeyi ertelemekten kötüdür. */
+  let yukseltildi = false;
+  let dekPaketi = user.dek_wrapped_pw;
+  if (user.password_kdf === "legacy") {
+    const m = e2eeMalzemeDogrula(b.upgrade);
+    if (typeof m !== "string") {
+      const r = await db.run(
+        `UPDATE users SET password_hash=?, password_kdf='v2', kdf_salt=?, kdf_params=?, dek_wrapped_pw=?, dek_wrapped_rk=?
+          WHERE id=? AND password_kdf='legacy'`,
+        await hashPassword(m.auth_token), m.kdf_salt, m.kdf_params, m.dek_wrapped_pw, m.dek_wrapped_rk, user.id,
+      );
+      yukseltildi = !!r.changes; dekPaketi = m.dek_wrapped_pw;
+      if (yukseltildi) console.log(`[audit] Hesap sıfır bilgi girişine geçti: ${user.email} (id:${user.id})`);
+    } else if (b.upgrade !== undefined) {
+      console.warn(`[auth] yükseltme reddedildi (${m}) — hesap legacy kaldı: (id:${user.id})`);
+    }
+  }
   const { token, expires } = await createSession(user.id);
   setSessionCookie(c, token, expires);
   console.log(`[audit] Kullanıcı giriş yaptı: ${user.email} (id:${user.id})`);
-  return c.json({ user: { id: user.id, email: user.email } });
+  return c.json({ user: { id: user.id, email: user.email }, yukseltildi, dek_wrapped_pw: dekPaketi ?? null });
 });
 
 api.post("/auth/logout", async (c) => {
@@ -204,11 +263,21 @@ api.post("/auth/forgot", async (c) => {
 /* Şifre sıfırla (token ile) — tüketir, parolayı günceller, tüm oturumları düşürür. */
 api.post("/auth/reset", async (c) => {
   if (rateLimited(`reset:${clientIp(c)}`, 10, 15 * 60_000)) return c.json({ error: "Çok fazla deneme, biraz sonra tekrar dene" }, 429);
-  const { token, password } = await c.req.json().catch(() => ({}));
-  if (!token || typeof password !== "string" || password.length < 8) return c.json({ error: "Parola en az 8 karakter olmalı" }, 400);
-  const userId = await consumeEmailToken(String(token), "reset");
+  const b = await c.req.json().catch(() => ({}));
+  if (!b.token) return c.json({ error: "Bağlantı geçersiz" }, 400);
+  if (typeof b.password === "string") return c.json({ error: "Uygulamanın yeni sürümü gerekli — sayfayı yenile" }, 400);
+  const m = e2eeMalzemeDogrula(b);
+  if (typeof m === "string") return c.json({ error: m }, 400);
+  const userId = await consumeEmailToken(String(b.token), "reset");
   if (!userId) return c.json({ error: "Bağlantı geçersiz veya süresi dolmuş" }, 400);
-  await db.run("UPDATE users SET password_hash = ? WHERE id = ?", await hashPassword(password), userId);
+  /* ⚠ AŞAMA 6'DA DEĞİŞMEK ZORUNDA. Sıfırlama şu an YENİ bir DEK yazıyor (istemci üretti) —
+     bu yalnız HİÇBİR VERİ ŞİFRELİ DEĞİLKEN güvenli. Şifreleme devreye girdiği gün bu uç ya
+     kurtarma koduyla eski DEK'i yeniden sarmalı ya da açık bir `wipe:true` ile tüm veriyi
+     silmeli; aksi hâlde sıfırlayan kullanıcı açılamayan bir veriyle kalır. (docs/E2EE.md §5) */
+  await db.run(
+    `UPDATE users SET password_hash=?, password_kdf='v2', kdf_salt=?, kdf_params=?, dek_wrapped_pw=?, dek_wrapped_rk=? WHERE id=?`,
+    await hashPassword(m.auth_token), m.kdf_salt, m.kdf_params, m.dek_wrapped_pw, m.dek_wrapped_rk, userId,
+  );
   await revokeUserSessions(userId); // güvenlik: sıfırlama sonrası eski oturumlar düşer
   console.log(`[audit] Şifre sıfırlandı: (id:${userId})`);
   return c.json({ ok: true });
@@ -1213,9 +1282,11 @@ api.get("/export", async (c) => {
 /* ---- KVKK: hesabı ve tüm verisini sil (parola onaylı; ON DELETE CASCADE ile tenant verisi + oturumlar) ---- */
 api.post("/account/delete", async (c) => {
   const uid = c.get("user").id;
-  const { password } = await c.req.json().catch(() => ({}));
-  const u = await db.get<{ password_hash: string }>("SELECT password_hash FROM users WHERE id=?", uid);
-  if (!u || !(await verifyPassword(password ?? "", u.password_hash))) return c.json({ error: "Parola hatalı" }, 401);
+  const { password, auth_token } = await c.req.json().catch(() => ({}));
+  const u = await db.get<{ password_hash: string; password_kdf: string }>("SELECT password_hash, password_kdf FROM users WHERE id=?", uid);
+  // v2 hesapta parola yerine auth_token doğrulanır (parola sunucuya gelmez); yol hesap türüyle eşleşmeli.
+  const gizli = u?.password_kdf === "v2" ? auth_token : password;
+  if (!u || typeof gizli !== "string" || !(await verifyPassword(gizli, u.password_hash))) return c.json({ error: "Parola hatalı" }, 401);
   await db.run("DELETE FROM users WHERE id=?", uid); // cascade: tüm veri + sessions + user_settings
   deleteCookie(c, SESSION_COOKIE, { path: "/" });
   console.log(`[audit] Hesap kalıcı olarak silindi (KVKK Delete): (id:${uid})`);

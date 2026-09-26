@@ -370,6 +370,23 @@ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS last_recon_balance double precisio
 -- (kilitlenmesin); ardından default'u false'a çevir → YENİ kayıtlar aktivasyon ister. İkisi de idempotent.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified boolean NOT NULL DEFAULT true;
 ALTER TABLE users ALTER COLUMN email_verified SET DEFAULT false;
+-- E2EE aşama 3b: sıfır bilgi girişi. password_kdf='legacy' → password_hash = scrypt(PAROLA)
+-- (eski yol); 'v2' → password_hash = scrypt(AUTH_TOKEN) ve parola sunucuya hiç gelmez.
+-- MEVCUT kullanıcılar legacy doğar ve ilk girişlerinde AYNI İSTEKTE sessizce v2'ye geçer.
+-- kdf_salt/kdf_params gizli değildir (girişte istemciye verilir). dek_wrapped_* sarılı
+-- veri anahtarıdır — sunucu açamaz, yalnız saklar.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_kdf text NOT NULL DEFAULT 'legacy';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS kdf_salt text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS kdf_params text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS dek_wrapped_pw text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS dek_wrapped_rk text;
+-- Sunucunun kendi sırları. AYRI tablo ve bu bilinçli: settings'e konamazdı, çünkü
+-- /api/all global ayarların HEPSİNİ her giriş yapmış istemciye gönderiyor (data.ts) —
+-- sır orada dursaydı her kullanıcı onu okurdu. Bu tablo hiçbir uçtan okunmaz.
+CREATE TABLE IF NOT EXISTS server_secrets (
+  key text PRIMARY KEY,
+  value text NOT NULL
+);
 -- e-posta token'ları: hem aktivasyon ('verify') hem şifre sıfırlama ('reset')
 CREATE TABLE IF NOT EXISTS email_tokens (
   token text PRIMARY KEY,

@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { api, ApiError, type SessionUser } from "../../api";
 import { T, css, themeCSS } from "../../theme";
+import { girisYap, yeniMalzeme, parolaSorunu, PAROLA_MIN } from "./e2ee";
 
 /* Faz 5.1 giriş/kayıt + Faz 6 şifre sıfırlama & hesap aktivasyonu.
    Auth kapısı App.tsx'te: oturum yoksa (veya URL'de reset/verify token'ı varsa) bu ekran gösterilir.
-   Kayıt yalnız ilk kullanıcıya (owner) açık; sonrası 403 döner. */
+   E2EE aşama 3b: bu ekran parolayla DOĞRUDAN istek atmaz — `./e2ee` üzerinden geçer, parola
+   orada türetilir ve tarayıcıdan çıkmaz. */
 export type UrlAuth = { kind: "reset" | "verify"; token: string } | null;
 type Mode = "login" | "register" | "forgot" | "reset";
 
@@ -45,12 +47,14 @@ export function Auth({ onAuthed, urlAuth }: {
     setErr(""); setInfo(""); setNotVerified(false); setBusy(true);
     try {
       if (mode === "login") {
-        const { user } = await api.login(email, password);
+        const user = await girisYap(email, password);
         onAuthed(user);
         return; // onAuthed yönlendirir; busy'yi bırakmaya gerek yok
       }
       if (mode === "register") {
-        const res = await api.register(email, password);
+        const sorun = parolaSorunu(password, email);
+        if (sorun) { setErr(sorun); setBusy(false); return; }
+        const res = await api.register(email, await yeniMalzeme(password));
         if (res.pending) {
           // Doğrulama zorunlu: oturum açılmadı, kullanıcı e-postasını doğrulamalı.
           setInfo("Doğrulama e-postası gönderildi. Gelen kutunu (ve spam klasörünü) kontrol edip bağlantıya tıkla, sonra giriş yap.");
@@ -64,7 +68,9 @@ export function Auth({ onAuthed, urlAuth }: {
         await api.forgot(email);
         setInfo("Bu e-posta kayıtlıysa sıfırlama bağlantısı gönderildi. Gelen kutunu (ve spam) kontrol et.");
       } else if (mode === "reset" && urlAuth) {
-        await api.reset(urlAuth.token, password);
+        const sorun = parolaSorunu(password, "");
+        if (sorun) { setErr(sorun); setBusy(false); return; }
+        await api.reset(urlAuth.token, await yeniMalzeme(password));
         setInfo("Şifren güncellendi. Yeni şifrenle giriş yapabilirsin.");
         setPassword(""); setMode("login"); cleanUrl();
       }
@@ -91,6 +97,11 @@ export function Auth({ onAuthed, urlAuth }: {
 
   const go = (m: Mode) => { setMode(m); setErr(""); setInfo(""); setNotVerified(false); };
   const cta = mode === "login" ? "Giriş yap" : mode === "register" ? "Kayıt ol" : mode === "forgot" ? "Sıfırlama bağlantısı gönder" : "Şifreyi güncelle";
+  /* Meşgul etiketi açık yazılır: anahtar türetme (600k PBKDF2) düşük donanımlı telefonda ~1 sn
+     sürebiliyor ve bu bilinçli bir maliyet — "…" donmuş gibi görünüyordu. */
+  const mesgul = mode === "login" ? "Giriş yapılıyor…" : mode === "register" ? "Hesap oluşturuluyor…" : mode === "reset" ? "Güncelleniyor…" : "…";
+  const yeniParola = mode === "register" || mode === "reset";
+  const canliSorun = yeniParola && password ? parolaSorunu(password, mode === "register" ? email : "") : null;
 
   return (
     /* boxSizing: min-height ve padding aynı kutuda — border-box olmadan yükseklik
@@ -122,7 +133,11 @@ export function Auth({ onAuthed, urlAuth }: {
               <input style={{ ...css.input, width: "100%" }} type="password"
                 autoComplete={mode === "login" ? "current-password" : "new-password"}
                 value={password} onChange={(e) => setPassword(e.target.value)}
-                placeholder={mode === "login" ? "••••••••" : "en az 8 karakter"} autoFocus={mode === "reset"} />
+                placeholder={mode === "login" ? "••••••••" : `en az ${PAROLA_MIN} karakter`} autoFocus={mode === "reset"} />
+              {/* Canlı ipucu yalnız YENİ parola belirlenirken; girişte gösterilmez (orada kural yok,
+                  eski hesapların parolası kısa olabilir ve giriş yapabilmeleri gerekiyor). */}
+              {/* gönderimde aynı sorun `err` olarak da basılıyordu — ikisi aynı anda görünmesin */}
+              {canliSorun && canliSorun !== err && <div style={{ fontSize: 12, color: T.mut3, marginTop: 5 }}>{canliSorun}</div>}
             </div>
           )}
           {err && <div style={{ fontSize: 13, color: T.neg }}>{err}</div>}
@@ -133,7 +148,7 @@ export function Auth({ onAuthed, urlAuth }: {
           )}
           {info && <div style={{ fontSize: 13, color: T.pos }}>{info}</div>}
           <button type="submit" disabled={busy} style={{ ...css.btn, width: "100%", padding: "11px 14px", opacity: busy ? 0.6 : 1 }}>
-            {busy ? "…" : cta}
+            {busy ? mesgul : cta}
           </button>
         </form>
 

@@ -322,6 +322,7 @@ export const ROUTE_TOOLS: RouteTool[] = [
    olmalı. Yeni bir uç eklendiğinde build "karar ver" diye durur. */
 export const SKIPPED: { route: string; reason: string }[] = [
   { route: "POST /auth/register", reason: "kimlik: oturum akışı asistanın işi değil" },
+  { route: "POST /auth/prelogin", reason: "kimlik: sıfır bilgi girişinin salt adımı (E2EE aşama 3b)" },
   { route: "POST /auth/login", reason: "kimlik" },
   { route: "POST /auth/logout", reason: "kimlik" },
   { route: "POST /auth/forgot", reason: "kimlik" },

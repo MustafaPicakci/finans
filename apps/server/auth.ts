@@ -1,4 +1,4 @@
-import { scrypt, randomBytes, timingSafeEqual, createHash } from "node:crypto";
+import { scrypt, randomBytes, timingSafeEqual, createHash, createHmac } from "node:crypto";
 import { promisify } from "node:util";
 import { db } from "./db.js";
 
@@ -110,4 +110,53 @@ export async function purgeStaleEmailTokens(): Promise<number> {
     "DELETE FROM email_tokens WHERE used = true OR expires_at <= ?", new Date().toISOString(),
   );
   return r.changes;
+}
+
+/* ————— SIFIR BİLGİ GİRİŞİ (E2EE aşama 3b) —————
+   Parola sunucuya GELMEZ. İstemci önce bu e-postanın salt'ını ister (`/auth/prelogin`),
+   paroladan KEK + auth_token türetir, yalnız auth_token'ı gönderir. Sunucu onu scrypt'leyip
+   saklar — yani sızan bir veritabanından elde edilen hash parolaya değil token'a götürür ve
+   token KEK'i vermez (bkz. packages/crypto/src/keys.ts). */
+
+let _sir: Buffer | null = null;
+/** Sunucunun kalıcı sırrı — ilk ihtiyaçta üretilir, `server_secrets`'te saklanır. */
+async function prelogin_sirri(): Promise<Buffer> {
+  if (_sir) return _sir;
+  await db.run("INSERT INTO server_secrets (key, value) VALUES ('prelogin', ?) ON CONFLICT (key) DO NOTHING", randomBytes(32).toString("hex"));
+  const r = await db.get<{ value: string }>("SELECT value FROM server_secrets WHERE key='prelogin'");
+  _sir = Buffer.from(r!.value, "hex");
+  return _sir;
+}
+
+/** Kayıtlı OLMAYAN e-posta için tutarlı sahte salt. Yoksa `/auth/prelogin` "bu e-posta kayıtlı
+    mı" sorusunu cevaplardı (salt dönüyor mu, dönmüyor mu). Gizli anahtarla türetilmek ZORUNDA:
+    düz SHA256(email) olsaydı saldırgan kendisi hesaplayıp karşılaştırır ve yine ayırt ederdi.
+    Aynı e-posta her seferinde aynı sahte salt'ı alır — yani tekrar sorarak da ayırt edilemez. */
+export async function sahteSalt(email: string): Promise<string> {
+  return createHmac("sha256", await prelogin_sirri()).update(`salt:${email}`).digest().subarray(0, 16).toString("base64url");
+}
+
+/** İstemcinin gönderdiği E2EE malzemesinin BİÇİM doğrulaması. Sunucu içeriği okuyamaz ve
+    okumamalı; yalnız "bu gerçekten bizim biçimimiz mi" diye bakar ki çöp yazılıp kullanıcı
+    bir sonraki girişte açılamayan bir anahtarla kalmasın. */
+const B64U = /^[A-Za-z0-9_-]+$/;
+const PAKET = /^v1:[A-Za-z0-9_-]{16}:[A-Za-z0-9_-]{40,}$/;
+export type E2eeMalzeme = { auth_token: string; kdf_salt: string; kdf_params: string; dek_wrapped_pw: string; dek_wrapped_rk: string | null };
+export function e2eeMalzemeDogrula(b: any): E2eeMalzeme | string {
+  if (!b || typeof b !== "object") return "şifreleme bilgileri eksik";
+  const { auth_token, kdf_salt, kdf_params, dek_wrapped_pw, dek_wrapped_rk } = b;
+  if (typeof auth_token !== "string" || auth_token.length !== 43 || !B64U.test(auth_token)) return "geçersiz auth_token";
+  if (typeof kdf_salt !== "string" || kdf_salt.length !== 22 || !B64U.test(kdf_salt)) return "geçersiz salt";
+  let p: any;
+  try { p = JSON.parse(String(kdf_params)); } catch { return "geçersiz KDF parametresi"; }
+  /* Alt sınır SUNUCUDA da zorlanır: istemci 1 iterasyonla kayıt olursa sızan veritabanındaki
+     sarılı DEK anında kırılırdı. Parolanın kendisini göremeyiz ama maliyetini görebiliriz. */
+  if (p?.alg !== "PBKDF2-SHA256" || !Number.isInteger(p?.iter) || p.iter < 600_000) return "KDF parametresi çok zayıf";
+  if (typeof dek_wrapped_pw !== "string" || !PAKET.test(dek_wrapped_pw)) return "geçersiz sarılı anahtar (pw)";
+  /* Kurtarma paketi aşama 3b'de İSTEĞE BAĞLI ve bu bilinçli: veri henüz şifreli değil, yani
+     kullanıcıya "bu kodu kaybedersen verin gider" demek bugün DOĞRU olmazdı — üstelik e-postayla
+     sıfırlama bu aşamada yeni bir DEK üretiyor, kaydettiği kod da geçersizleşirdi. Kod,
+     şifrelemenin gerçekten başladığı an (aşama 6, göç) gösterilir ve orada ZORUNLU olur. */
+  if (dek_wrapped_rk != null && (typeof dek_wrapped_rk !== "string" || !PAKET.test(dek_wrapped_rk))) return "geçersiz sarılı anahtar (rk)";
+  return { auth_token, kdf_salt, kdf_params: JSON.stringify({ alg: p.alg, iter: p.iter }), dek_wrapped_pw, dek_wrapped_rk: dek_wrapped_rk ?? null };
 }

@@ -11,6 +11,8 @@ async function j<T>(r: Response): Promise<T> {
   return r.json();
 }
 export type SessionUser = { id: number; email: string };
+/** Kayıt/sıfırlama/yükseltmede sunucuya giden sıfır bilgi malzemesi (bkz. features/auth/e2ee.ts) */
+export type E2eeMalzeme = { auth_token: string; kdf_salt: string; kdf_params: string; dek_wrapped_pw: string };
 /** Asistanın onay bekleyen tek işlemi: hangi araç, hangi argümanlar, kullanıcıya gösterilen özet */
 export type AiAction = { tool: string; args: Record<string, unknown>; summary: string };
 export type AiResult = { summary: string; ok: boolean; detail: string };
@@ -96,22 +98,32 @@ export const api = {
       .then((r) => j<{ conversationId: number | null; results: AiResult[] }>(r)),
   /* ---- auth (Faz 5.1) ---- */
   me: () => fetch("/api/auth/me").then((r) => j<{ user: SessionUser | null }>(r)),
-  login: (email: string, password: string) =>
-    fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) }).then((r) => j<{ user: SessionUser }>(r)),
-  register: (email: string, password: string) =>
-    fetch("/api/auth/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) }).then((r) => j<{ user?: SessionUser; pending?: boolean }>(r)),
+  /* ---- sıfır bilgi girişi (E2EE aşama 3b) ----
+     Bu uçları DOĞRUDAN çağırma — `features/auth/e2ee.ts` üzerinden geç. Parola yalnız orada
+     türetilir; ekranlardan buraya ham parola taşıyan ikinci bir yol olmamalı. */
+  prelogin: (email: string) =>
+    fetch("/api/auth/prelogin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) })
+      .then((r) => j<{ kdf: "legacy" } | { kdf: "v2"; salt: string; params: { alg: string; iter: number } }>(r)),
+  /** `password` yalnız legacy (henüz yükseltilmemiş) hesapta, ve o zaman `upgrade` ile birlikte gönderilir */
+  login: (email: string, kanit: { auth_token: string } | { password: string; upgrade: E2eeMalzeme }) =>
+    fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, ...kanit }) })
+      .then((r) => j<{ user: SessionUser; yukseltildi: boolean; dek_wrapped_pw: string | null }>(r)),
+  register: (email: string, malzeme: E2eeMalzeme) =>
+    fetch("/api/auth/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, ...malzeme }) })
+      .then((r) => j<{ user?: SessionUser; pending?: boolean }>(r)),
   logout: () => fetch("/api/auth/logout", { method: "POST" }).then(j),
   /* ---- şifre sıfırlama + aktivasyon (Faz 6) ---- */
   forgot: (email: string) =>
     fetch("/api/auth/forgot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) }).then(j),
-  reset: (token: string, password: string) =>
-    fetch("/api/auth/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, password }) }).then(j),
+  reset: (token: string, malzeme: E2eeMalzeme) =>
+    fetch("/api/auth/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, ...malzeme }) }).then(j),
   verify: (token: string) =>
     fetch("/api/auth/verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) }).then(j),
   resendVerify: (email: string) =>
     fetch("/api/auth/resend-verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) }).then(j),
   /* ---- KVKK (Faz 5.4) ---- */
   exportData: () => fetch("/api/export").then((r) => { if (!r.ok) throw new ApiError(r.status, "İndirilemedi"); return r.blob(); }),
-  deleteAccount: (password: string) =>
-    fetch("/api/account/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password }) }).then(j),
+  /** Kanıt hesap türüne göre `e2ee.parolaKaniti` ile üretilir (v2: auth_token, legacy: password). */
+  deleteAccount: (kanit: { password?: string; auth_token?: string }) =>
+    fetch("/api/account/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(kanit) }).then(j),
 };

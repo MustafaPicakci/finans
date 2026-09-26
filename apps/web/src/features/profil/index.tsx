@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { api, type AllData } from "../../api";
 import { T, css } from "../../theme";
+import { parolaKaniti } from "../auth/e2ee";
 
 /* ————— HESABIM (KULLANICI hesabı) —————
    Bu ekran "Hesaplar" sekmesinden AYRI ve bu bilinçli: orada "hesap" = banka/nakit/aracı
@@ -40,7 +41,8 @@ export function Profil({ user, data, reload, onDeleted }: {
   };
   const remove = async () => {
     setErr(""); setBusy(true);
-    try { await api.deleteAccount(pw); onDeleted(); }
+    // parola sunucuya gitmez: hesap türüne göre kanıt (v2: auth_token) burada türetilir
+    try { await api.deleteAccount(await parolaKaniti(user.email, pw)); onDeleted(); }
     catch { setErr("Parola hatalı"); setBusy(false); }
   };
 
