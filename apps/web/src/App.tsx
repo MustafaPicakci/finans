@@ -19,6 +19,7 @@ import { Portfoy } from "./features/portfoy";
 import { Kayitlar } from "./features/kayitlar";
 import { Asistan, clearChat } from "./features/asistan";
 import { anahtarYukle, anahtarSil } from "./yazim/anahtar";
+import { ZAYIF_PAROLA_KEY } from "./features/auth/e2ee";
 import { sifrelemeGocu } from "./yazim/goc";
 import { AddSheet, type AddState, type KalemPrefill, type TradePrefill } from "./AddSheet";
 
@@ -79,6 +80,11 @@ export default function App() {
      kalma oturum, gizli pencere) uygulama AÇILMAZ: anahtarsız oturum şifreli veriyi ne okur
      ne yazar. Oturum kapatılır ve parola bir kez daha sorulur. */
   const [girisNotu, setGirisNotu] = useState<string | undefined>(undefined);
+  /* Girişte parola bugünkü kurala uymuyorsa (Auth işaretler) sekmelerin üstünde bir satır.
+     Kapatılınca bu oturumda bir daha çıkmaz; Hesabım'daki parola kartı söylemeye devam eder.
+     Bayrak girişte (Auth) yazılır — App o sırada zaten kurulu olduğundan burada tutulan yalnız
+     "kapattı mı"dır, bayrağın kendisi her render'da okunur. */
+  const [zayifKapatildi, setZayifKapatildi] = useState(false);
   useEffect(() => {
     api.me().then(async ({ user }) => {
       if (user && !(await anahtarYukle(user.id))) {
@@ -573,6 +579,14 @@ export default function App() {
         </div>
 
         <div className="content-pad" style={{ flex: 1, padding: "26px 32px 56px", maxWidth: 1180, width: "100%", margin: "0 auto" }}>
+          {/* bayrak her render'da yeniden okunur: Hesabım'da parola değişince (bayrak silinir) uyarı da kalkar */}
+          {!zayifKapatildi && tab !== "profil" && (() => { try { return sessionStorage.getItem(ZAYIF_PAROLA_KEY) === "1"; } catch { return false; } })() && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", marginBottom: 12, borderRadius: 12, border: `1px solid ${T.warn}`, background: T.warnSoft, fontSize: 13 }}>
+              <span style={{ flex: 1, minWidth: 0 }}>Parolan bugünkü güvenlik kurallarına uymuyor. Verilerin parolanla korunduğu için değiştirmeni öneririz.</span>
+              <button style={{ ...css.ghost, padding: "6px 10px", whiteSpace: "nowrap" }} onClick={() => setTab("profil")}>Değiştir</button>
+              <button aria-label="Kapat" title="Kapat" style={{ ...css.del, fontSize: 14 }} onClick={() => setZayifKapatildi(true)}>✕</button>
+            </div>
+          )}
           <div key={tab} className="tab-grid" style={{ animation: "fadeUp .4s ease both", display: "grid", gap: 16 }}>
             {tab === "ozet" && <Ozet data={data} days={days} pos={pos} cash={cash} rates={rates} reload={reload} summary={summary} m={m} onGoAccounts={() => setTab("hesaplar")}
               onGoPortfolio={() => setTab("portfoy")}

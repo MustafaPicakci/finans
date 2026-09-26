@@ -1372,6 +1372,42 @@ api.post("/e2ee/tamam", async (c) => {
   return c.json({ ok: true });
 });
 
+/* ————— Parola değişimi (E2EE aşama 6) —————
+   Veri YENİDEN ŞİFRELENMEZ: DEK aynı kalır, yalnız yeni parolanın KEK'iyle yeniden sarılır
+   (anahtar zincirinin ucuz olduğu tek yer). İki adım, çünkü yeniden sarmayı tarayıcı yapar:
+   (1) sarılı paketi al, (2) yeni malzemeyi yaz. Paket OTURUMA değil ESKİ PAROLANIN KANITINA
+   verilir: çalınmış bir oturum onu alıp çevrimdışı parola denemesine başlayamasın. */
+const eskiParolaDogru = async (uid: number, token: unknown): Promise<boolean> => {
+  const u = await db.get<{ password_hash: string; password_kdf: string }>("SELECT password_hash, password_kdf FROM users WHERE id=?", uid);
+  return !!u && u.password_kdf === "v2" && typeof token === "string" && (await verifyPassword(token, u.password_hash));
+};
+api.post("/account/parola-paket", async (c) => {
+  const uid = c.get("user").id;
+  if (rateLimited(`parola:${uid}`, 10, 15 * 60_000)) return c.json({ error: "Çok fazla deneme, biraz sonra tekrar dene" }, 429);
+  const { auth_token } = await c.req.json().catch(() => ({}));
+  if (!(await eskiParolaDogru(uid, auth_token))) return c.json({ error: "Mevcut parola hatalı" }, 401);
+  const u = await db.get<{ p: string | null }>("SELECT dek_wrapped_pw AS p FROM users WHERE id=?", uid);
+  return c.json({ dek_wrapped_pw: u?.p ?? null });
+});
+api.post("/account/parola", async (c) => {
+  const uid = c.get("user").id;
+  if (rateLimited(`parola:${uid}`, 10, 15 * 60_000)) return c.json({ error: "Çok fazla deneme, biraz sonra tekrar dene" }, 429);
+  const b = await c.req.json().catch(() => ({}));
+  if (!(await eskiParolaDogru(uid, b.eski_auth_token))) return c.json({ error: "Mevcut parola hatalı" }, 401);
+  const m = e2eeMalzemeDogrula(b);
+  if (typeof m === "string") return c.json({ error: m }, 400);
+  // kurtarma paketi DEĞİŞMEZ (aynı DEK'i sarıyor, parolaya bağlı değil)
+  await db.run("UPDATE users SET password_hash=?, kdf_salt=?, kdf_params=?, dek_wrapped_pw=? WHERE id=?",
+    await hashPassword(m.auth_token), m.kdf_salt, m.kdf_params, m.dek_wrapped_pw, uid);
+  /* Diğer cihazların oturumları düşer (eski parolayı bilen biri oturum açmış olabilir — parola
+     değiştirmenin en yaygın sebebi bu); bu cihaz yeni bir oturumla devam eder. */
+  await revokeUserSessions(uid);
+  const { token, expires } = await createSession(uid);
+  setSessionCookie(c, token, expires);
+  console.log(`[audit] Parola değiştirildi: (id:${uid})`);
+  return c.json({ ok: true });
+});
+
 api.post("/account/delete", async (c) => {
   const uid = c.get("user").id;
   const { password, auth_token } = await c.req.json().catch(() => ({}));

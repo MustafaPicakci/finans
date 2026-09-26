@@ -222,6 +222,17 @@ const aiKonusmalar = [
   },
 ];
 
+/* E2EE aşama 6 — SIFIR BİLGİ GİRİŞİ. Uygulama artık cihazda veri anahtarı olmadan açılmıyor,
+   yani stub'ın da gerçek bir giriş sunması gerekiyor. Kripto KODU yok: aşağıdaki sabit salt ve
+   sarılı anahtar `Stub-Parola-2026` parolasıyla bir kez üretildi (packages/crypto ile) ve buraya
+   yazıldı. Tarayıcı parolayı türetip bu paketi GERÇEKTEN açar — yani giriş akışının kripto
+   tarafı stub'da da uçtan uca çalışır. Parola yanlışsa paket açılmaz, uygulama bunu söyler.
+   Oturum bir çerezdir; `mobil-cek.mjs` giriş ekranını görürse bu parolayla kendisi girer. */
+const STUB_SALT = "c3R1Yi1maWtzdHVyLTIwMg";
+export const STUB_PAROLA = "Stub-Parola-2026";
+const STUB_PAKET = "v1:PGcQve4JweliLcuH:ChWDtuqKDDa_r_fUuEq5Gv4f9Y8YHUHM6blOrCHrXpVnIb5O914XhmGpR6gEGkgp";
+const oturumVar = (req) => /(?:^|;\s*)stub_oturum=1/.test(req.headers.cookie ?? "");
+
 createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
   const json = (o, code = 200) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
@@ -229,8 +240,20 @@ createServer(async (req, res) => {
      stub oturumsuz davranır (`user: null`) → App kabuğu Auth ekranını render eder.
      Kullanım: CIKIS=1 node apps/web/scripts/mobil-stub.mjs */
   if (url.pathname === "/api/auth/me") {
-    return json({ user: process.env.CIKIS ? null : { id: 1, email: "demo@finans.local" } });
+    // `stubGiris`: mobil-cek'e "giriş ekranını gördüysen kendin gir" işareti (CIKIS modunda girmez)
+    return json({ user: !process.env.CIKIS && oturumVar(req) ? { id: 1, email: "demo@finans.local", e2ee: true } : null, stubGiris: !process.env.CIKIS });
   }
+  if (url.pathname === "/api/auth/prelogin") return json({ kdf: "v2", salt: STUB_SALT, params: { alg: "PBKDF2-SHA256", iter: 600000 } });
+  if (url.pathname === "/api/auth/login") {
+    if (process.env.CIKIS) return json({ error: "E-posta veya parola hatalı" }, 401);
+    res.writeHead(200, { "content-type": "application/json", "set-cookie": "stub_oturum=1; Path=/; HttpOnly; SameSite=Lax" });
+    return res.end(JSON.stringify({ user: { id: 1, email: "demo@finans.local" }, yukseltildi: false, dek_wrapped_pw: STUB_PAKET, kurtarma: true }));
+  }
+  if (url.pathname === "/api/auth/logout") {
+    res.writeHead(200, { "content-type": "application/json", "set-cookie": "stub_oturum=; Path=/; Max-Age=0" });
+    return res.end("{\"ok\":true}");
+  }
+  if (url.pathname === "/api/e2ee/bekleyen") return json({ tamam: true, satirlar: [] }); // stub verisi zarfsız: göçecek bir şey yok
   if (url.pathname === "/api/all") return json(all);
   /* Durum ucu gerçek sunucuyla AYNI kuralı uygular (`ai_enabled` yoksa AÇIK, "0" ise kapalı)
      ve `neden` döner — yoksa Hesabım'daki anahtarı kapatıp Asistan'a bakınca stub "AI_API_KEY
@@ -246,24 +269,23 @@ createServer(async (req, res) => {
      mesaj altındaki "geri al") hiç render edilmez. Bellekte küçük bir depo yeter: model
      yok, ağ yok, ne gönderilirse gönderilsin sabit iki adımlık bir plan döner. */
   if (url.pathname === "/api/ai/conversations" && req.method === "GET") {
-    return json({ conversations: aiKonusmalar.map(({ id, title, at, messages, undoable }) => ({ id, title, at, messages: messages.length, undoable })), more: false });
+    /* Zarflar AÇILMADAN saklanır ve olduğu gibi geri verilir (onları tarayıcı açar — gerçek
+       sunucunun yaptığı da tam olarak bu). Fikstür satırları düz: istemci zarfsız satırı geçirir. */
+    return json({ conversations: aiKonusmalar.map(({ id, title, enc, at, messages, undoable }) => ({ id, ...(enc ? { enc } : { title }), at, messages: messages.length, undoable })), more: false });
   }
   if (url.pathname.startsWith("/api/ai/conversations/")) {
     const id = Number(url.pathname.split("/").pop());
     const k = aiKonusmalar.find((x) => x.id === id);
     if (!k) return json({ error: "konuşma bulunamadı" }, 404);
     if (req.method === "DELETE") { aiKonusmalar.splice(aiKonusmalar.indexOf(k), 1); return json({ ok: true }); }
-    if (req.method === "PUT") { k.title = "Yeniden adlandırıldı"; return json({ ok: true, title: k.title }); }
-    return json({ id: k.id, title: k.title, messages: k.messages, truncated: false, plans: k.plans, pending: k.pending });
+    if (req.method === "PUT") { const b = await (async () => { let g = ""; for await (const x of req) g += x; return JSON.parse(g || "{}"); })(); k.enc = b.enc; delete k.title; return json({ ok: true }); }
+    return json({ id: k.id, ...(k.enc ? { enc: k.enc } : { title: k.title }), messages: k.messages, truncated: false, plans: k.plans, pending: k.pending });
   }
   /* E2EE aşama 4: ajan döngüsü TARAYICIDA koşuyor; sunucu yalnız röle + depo. Stub da bu
      sözleşmeyi taklit eder — eski /ai/chat taklidi kalsaydı arayüz onu hiç çağırmaz ve asistan
      sekmesi mobil denetimde kırık görünürdü. Röle kullanıcı mesajına bir YAZMA aracıyla,
      araç sonucuna düz metinle cevap verir: onay kartı böylece gerçekten istemcideki döngünün
      planından doğar (stub'ın elle kurduğu bir karttan değil). */
-  /* E2EE aşama 5d: asistan gövdeleri zarflı gelir (başlık, içerik, plan, özet). Stub içeride
-     düz tutar — okuma tarafında istemci zarfsız satırı olduğu gibi geçirir. */
-  const zarfIci = (enc) => (typeof enc === "string" && enc.startsWith("p1:") ? JSON.parse(enc.slice(3)) : {});
   const govdeOku = async () => { let g = ""; for await (const x of req) g += x; try { return JSON.parse(g || "{}"); } catch { return {}; } };
   if (url.pathname === "/api/ai/relay") {
     const b = await govdeOku();
@@ -277,15 +299,15 @@ createServer(async (req, res) => {
   if (url.pathname === "/api/ai/messages") {
     const b = await govdeOku();
     let k = aiKonusmalar.find((x) => x.id === Number(b.conversationId));
-    if (!k) { k = { id: 100 + aiKonusmalar.length, title: zarfIci(b.title_enc).title ?? "Yeni sohbet", at: aiSimdi(), undoable: 0, messages: [], plans: [], pending: null }; aiKonusmalar.unshift(k); }
-    k.messages.push({ id: ++aiMesajNo, role: b.role, content: zarfIci(b.enc).content, at: aiSimdi(), planId: b.planId ?? null });
+    if (!k) { k = { id: 100 + aiKonusmalar.length, enc: b.title_enc, at: aiSimdi(), undoable: 0, messages: [], plans: [], pending: null }; aiKonusmalar.unshift(k); }
+    k.messages.push({ id: ++aiMesajNo, role: b.role, enc: b.enc, at: aiSimdi(), planId: b.planId ?? null });
     return json({ conversationId: k.id });
   }
   if (url.pathname === "/api/ai/plans" && req.method === "POST") {
     const b = await govdeOku();
     const k = aiKonusmalar.find((x) => x.id === Number(b.conversationId));
     if (!k) return json({ error: "konuşma bulunamadı" }, 404);
-    k.pending = { planId: `stub-${aiMesajNo}`, at: aiSimdi(), actions: zarfIci(b.enc).actions };
+    k.pending = { planId: `stub-${aiMesajNo}`, at: aiSimdi(), enc: b.enc };
     return json({ planId: k.pending.planId });
   }
   const aiPlan = url.pathname.match(/^\/api\/ai\/plans\/([^/]+)\/(consume|actions|undone)$/);
@@ -294,12 +316,12 @@ createServer(async (req, res) => {
     const k = aiKonusmalar.find((x) => x.pending?.planId === planId || x.plans.some((p) => p.planId === planId));
     if (is === "consume") {
       if (!k?.pending || k.pending.planId !== planId) return json({ error: "Bu plan zaten uygulandı" }, 409);
-      const actions = k.pending.actions; k.pending = null;
-      return json({ conversationId: k.id, actions });
+      const { actions, enc } = k.pending; k.pending = null;
+      return json({ conversationId: k.id, ...(enc ? { enc } : { actions }) });
     }
     if (is === "actions" && req.method === "POST") {
       const b = await govdeOku();
-      if (k) { k.plans = [{ planId, at: aiSimdi(), total: b.items.length, undoable: b.items.length, summary: zarfIci(b.items[0].enc).summary }, ...k.plans]; k.undoable = b.items.length; }
+      if (k) { k.plans = [{ planId, at: aiSimdi(), total: b.items.length, undoable: b.items.length, enc: b.items[0].enc }, ...k.plans]; k.undoable = b.items.length; }
       return json({ ok: true });
     }
     if (is === "actions") return json({ actions: [] }); // stub'da geri alınacak gerçek kayıt yok

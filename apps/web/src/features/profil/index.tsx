@@ -1,7 +1,8 @@
 import React, { useState } from "react";
 import { api, type AllData } from "../../api";
 import { T, css } from "../../theme";
-import { parolaKaniti } from "../auth/e2ee";
+import { parolaKaniti, parolaDegistir, parolaSorunu, PAROLA_MIN, ZAYIF_PAROLA_KEY } from "../auth/e2ee";
+import { ApiError } from "../../api";
 
 /* ————— HESABIM (KULLANICI hesabı) —————
    Bu ekran "Hesaplar" sekmesinden AYRI ve bu bilinçli: orada "hesap" = banka/nakit/aracı
@@ -76,6 +77,8 @@ export function Profil({ user, data, reload, onDeleted }: {
       </label>
     </div>
 
+    <ParolaKarti email={user.email} />
+
     <div style={css.card}>
       <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Verilerini indir</div>
       <div style={{ fontSize: 12.5, color: T.mut, marginBottom: 12, lineHeight: 1.5 }}>
@@ -111,4 +114,59 @@ export function Profil({ user, data, reload, onDeleted }: {
         )}
     </div>
   </>);
+}
+
+/* ————— PAROLA (E2EE aşama 6) —————
+   Parola değişince veri yeniden şifrelenmez: aynı veri anahtarı yeni parolayla yeniden
+   sarılır (anında biter). Kurtarma kodu DEĞİŞMEZ — parolaya bağlı değil. Diğer cihazlardaki
+   oturumlar kapanır. Girişte kullanılan parola bugünkü kurala uymuyorsa kart bunu söyler
+   (sıfır bilgiden sonra zayıf parola daha pahalı: sızan bir veritabanındaki sarılı anahtar
+   çevrimdışı denenebilir). */
+function ParolaKarti({ email }: { email: string }) {
+  const [acik, setAcik] = useState(false);
+  const [eski, setEski] = useState("");
+  const [yeni, setYeni] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [ok, setOk] = useState("");
+  const [zayif, setZayif] = useState(() => { try { return sessionStorage.getItem(ZAYIF_PAROLA_KEY) === "1"; } catch { return false; } });
+  const sorun = yeni ? parolaSorunu(yeni, email) : null;
+  const kaydet = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!eski || !yeni || sorun) return;
+    setBusy(true); setErr(""); setOk("");
+    try {
+      await parolaDegistir(email, eski, yeni);
+      try { sessionStorage.removeItem(ZAYIF_PAROLA_KEY); } catch { /* yok say */ }
+      setZayif(false); setEski(""); setYeni(""); setAcik(false);
+      setOk("Parolan değişti. Diğer cihazlardaki oturumlar kapatıldı; kurtarma kodun aynı kaldı.");
+    } catch (e) { setErr(e instanceof ApiError ? e.message : "Değiştirilemedi, tekrar dene"); }
+    setBusy(false);
+  };
+  return (
+    <div style={{ ...css.card, ...(zayif ? { borderColor: T.warn ?? T.neg } : {}) }}>
+      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Parola</div>
+      <div style={{ fontSize: 12.5, color: T.mut, marginBottom: 12, lineHeight: 1.5 }}>
+        {zayif
+          ? <><b>Parolan bugünkü kurallara uymuyor</b> (en az {PAROLA_MIN} karakter, yaygın olmayan). Verilerin
+            parolanla korunduğu için güçlü bir parolaya geçmeni öneririz.</>
+          : <>Verilerin parolanla açılan bir anahtarla şifreli. Parolanı değiştirmek veriyi yeniden şifrelemez; kurtarma kodun aynı kalır.</>}
+      </div>
+      {ok && <div style={{ fontSize: 13, color: T.pos, marginBottom: 10 }}>{ok}</div>}
+      {!acik ? <button style={css.ghost} onClick={() => { setAcik(true); setOk(""); }}>Parolayı değiştir</button> : (
+        <form onSubmit={kaydet} style={{ display: "grid", gap: 10, maxWidth: 360 }}>
+          <input style={css.input} type="password" placeholder="mevcut parola" value={eski} onChange={(e) => setEski(e.target.value)} autoComplete="current-password" />
+          <div>
+            <input style={css.input} type="password" placeholder={`yeni parola (en az ${PAROLA_MIN} karakter)`} value={yeni} onChange={(e) => setYeni(e.target.value)} autoComplete="new-password" />
+            {sorun && <div style={{ fontSize: 12, color: T.mut3, marginTop: 5 }}>{sorun}</div>}
+          </div>
+          {err && <div style={{ fontSize: 13, color: T.neg }}>{err}</div>}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button style={{ ...css.btn, opacity: busy || !eski || !yeni || sorun ? 0.55 : 1 }} disabled={busy || !eski || !yeni || !!sorun}>{busy ? "Değiştiriliyor…" : "Parolayı değiştir"}</button>
+            <button type="button" style={css.ghost} onClick={() => { setAcik(false); setEski(""); setYeni(""); setErr(""); }}>Vazgeç</button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
 }

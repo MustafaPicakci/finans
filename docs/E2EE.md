@@ -1,6 +1,6 @@
 # Sıfır bilgi şifreleme — tasarım
 
-*Durum: tasarım onaylandı, uygulama `e2ee` branch'inde sürüyor. Aşama listesi ve dosya dosya iş planı ayrı tutulur; bu dosya **neden** sorusunu cevaplar.*
+*Durum: **uygulandı ve yerelde doğrulandı** (`e2ee` branch'i, aşama 0–6). Merge ve prod'a geçiş kullanıcı onayı bekliyor. Bu dosya **neden** sorusunu cevaplar; tasarımdan uygulamada sapılan yerler ilgili bölümde gerekçesiyle yazılı ("Uygulamada" notları).*
 
 Amaç tek cümle: **sunucuyu işleten kişi kullanıcının finansal verisini okuyamasın.** Bugün okuyabiliyor — `DATABASE_URL` elinde, satırlar düz metin. "Verin güvende" demek bu hâliyle bir söz, garanti değil.
 
@@ -40,6 +40,7 @@ Kaçınılmaz metadata; hiçbir şifreleme gizlemez ve gizlilik metninde yazıla
 - **Graf yapısı** — hangi harcama hangi kartta/hesapta, kaç kategorin var (FK'ler düz)
 - **Tuttuğun semboller** (kullanıcı kararı: `trades.symbol` şifrelenmiyor, bkz. §4.2)
 - Yazma zamanlaması ve sıklığı
+- Zarfın **kaba** boyu: 32 baytlık kovalara doldurulur, yani çok uzun bir not kısa bir addan ayırt edilir ama "Migros" ile "Migros Jet" edilmez
 
 Görmediği: **her tutar** (harcama, maaş, bakiye, adet, fiyat), **her ad/açıklama** (işyeri, kalem adı, not), kategori adları, K/Z.
 
@@ -65,23 +66,23 @@ Dört sonucu var ve üçü işi küçültüyor:
 3. **"Bu kolonu şifrelemeyi unuttum" hatası yapısal olarak imkânsızlaşır** — kolon şemada yoktur. Bakımı gereken bir "şifreli kolonlar listesi" yerine, tipte var olup kolonu olmayan her alan zarfa girmek zorundadır ve `tsc` bunu doğrular.
 4. **Bedeli**: zarfın içindeki bir alana sunucunun ileride ihtiyacı olursa imkânsız. İstenen şey bu, ama tek yönlü bir kapı.
 
-`num` codec'i değeri **8 baytlık float64** olarak kodlar → tüm tutarların ciphertext'i aynı boyda, uzunluk sızıntısı bedavaya kapanır (kolon zaten `double precision`, aynı 8 bayt, hassasiyet değişmez). Metinler 32 baytlık kovalara doldurulur.
+**Uygulamada**: zarf, satırın hassas alanlarının JSON'udur (`{"name":…,"amount":…}`) ve JSON sonuna boşluk eklenerek **32 baytlık kovalara** doldurulur — ayrı bir `num` codec'i yazılmadı, çünkü alanlar zaten tek blobda ve kova dolgusu hem ad hem tutar uzunluğunu birlikte örtüyor ("Migros" ile "Migros Jet Market", 450 ile 45.000 aynı boyda paket verir; testli). JSON.parse sondaki boşluğu yok saydığı için okuma tarafı hiçbir şey bilmez. Biçim: `v1:<iv>:<ct>`, AES-256-GCM, **AAD = `<tablo>:<user_id>`**. Aşama 5'te sunucunun ürettiği düz metin geçiş biçimi `p1:{json}` okunur ama artık yazılmaz.
 
-## 3. Önbellek: anahtar ciphertext'in KENDİSİ
+## 3. Önbellek: tasarlandı, ölçüldü, YAPILMADI
 
-"Çözülmüş `AllData`'yı sürüm anahtarıyla sakla" tasarımı **reddedildi**, çünkü "veri sunucuda değiştiyse ne olacak" sorusuna cevap veremiyor: sürüm damgası her tenant tabloya `updated_at` eklemeyi ve bir geçersizleştirme protokolü uydurmayı gerektirirdi — ve o protokoldeki bir hata **sessizce eski rakam gösterirdi.** Bir finans panelinde en kötü hata sınıfı bu, çünkü kullanıcı yanlış olduğunu anlamaz.
+Tasarım: çözülmüş satırları IndexedDB'de **ciphertext'in kendisi anahtar olacak şekilde** saklamak (`Map<enc, düz metin>`). Sürüm damgalı bir önbellek reddedilmişti, çünkü "veri sunucuda değiştiyse" sorusuna bir geçersizleştirme protokolüyle cevap vermek gerekirdi ve o protokoldeki bir hata **sessizce eski rakam gösterirdi**. Blob anahtarlı önbellekte bu sorun yapısal olarak yoktu: satır değişince yeni IV, yeni blob, ıska.
 
-Doğru anahtar blobun kendisi: **`enc` baytları aynıysa içindeki düz metin tanımı gereği aynıdır.** IndexedDB'de `Map<enc, düz metin>`; isabet varsa çözme atlanır, ıska varsa çözülür ve yazılır.
+**Uygulamada önbellek yapılmadı ve bu ölçüme dayalı bir karar.** Plan eşiği koymuştu: ilk açılışta çözme +300 ms'yi aşarsa önbellek/granülarite yeniden değerlendirilir. Ölçüm (kum havuzu, 8.000 şifreli satır — 4.000 işlem + 4.000 hareket, yıllarca yoğun kullanım):
 
-Kritik özellik: **önbellek "veri ne" sorusuna hiç karışmaz**, yalnız "bu blobu daha önce çözdüm mü" sorusuna cevap verir. Tazelik bugünkü mekanizmadan gelir — `/api/all` her mutasyondan sonra yeniden çekilir.
+| Ortam | `/api/all` çekme | çözme |
+|---|---|---|
+| Masaüstü | ~36 ms | ~48 ms |
+| CPU ×4 (orta telefon) | ~40 ms | ~215 ms |
+| CPU ×6 (zayıf telefon) | ~50 ms | ~300 ms |
 
-- Satır değişti → yeni IV → yeni blob → **ıska, mutlaka çözülür.** Eski değeri göstermek yapısal olarak imkânsız.
-- Cron bir satırı etkinleştirdi → değişen `pending` (düz kolon), `enc` aynı → isabet, ve düz metin zaten doğruydu.
-- **Geçersizleştirme protokolü yok, dolayısıyla protokol hatası da yok.**
+Çözme satır başına doğrusal (masaüstünde ~6 µs, ×4'te ~27 µs). Prod'daki gerçek hesap ~200 satır → masaüstünde ~1,5 ms, telefonda ~6 ms. Önbelleğin bedeli ise **cihazda düz metin** tutmaktı — planın kendisi bunu bir bedel olarak yazmıştı. Eşiğin altında kalan bir kazanç için o bedeli ödemek yanlış olurdu.
 
-Bir yanlış anlaşılmayı önlemek için: ciphertext'i önbellek anahtarı yapmak **determinist şifreleme değildir.** IV her yazımda rastgele; blob sunucunun zaten gördüğü bir veri ve yalnız yerel bir sözlük anahtarı — yeni hiçbir şey sızdırmıyor.
-
-Bedeli: **önbellek cihazda düz metin tutar.** DEK'i IndexedDB'de tutmakla aynı takas sınıfı — karşı taraf sunucu, cihaz değil; çıkışta ikisi de silinir.
+**Yeniden bakma ölçütü**: gerçek bir kullanıcının çözme süresi telefonda 300 ms'yi aşarsa. O gün ilk bakılacak yer blob anahtarlı önbellek (yukarıdaki tasarım hazır), ikincisi tablo başına toplu blob.
 
 ---
 
@@ -101,15 +102,13 @@ Sunucu bugün iki şey yapıyor: bakiyeyi oynatıyor (`applyEntry`, `UPDATE acco
 
 Sızan bilgi: hangi sembolleri tuttuğun. Kaç adet, kaça aldığın, K/Z — hiçbiri yok. Dürüst cümle: *"hangi sembolleri takip ettiğin sunucudan gizlenmiyor."*
 
-### 4.3 Cron sunucuda KALIYOR — hesaplayıcı değil, etkinleştirici
+### 4.3 Otomatik gerçekleştirme İSTEMCİYE taşındı
 
-`materializeDueRecurring` ve `materializeDueStatements` bugün tutar okuyup hesap yapıyor. Şifreliyken yapamaz — **ama hesaplamasına gerek yok.**
+Tasarım, cron'u sunucuda bir "etkinleştirici" olarak tutmayı öneriyordu: istemci gelecek occurrence'ları önceden şifreleyip `pending` yazar, cron günü gelince etkinleştirir. **Uygulamada bunun yerine gerçekleştirme uygulamanın açılışına taşındı** (kullanıcının "hangisi daha doğru?" sorusuna verilen cevap, aşama 2). Karar mantığı saf ve testli: [otomatik.ts](../packages/engine/src/otomatik.ts) (`bekleyenDuzenli`, `bekleyenEkstreler`); sürücüsü [App.tsx](../apps/web/src/App.tsx).
 
-İstemci, düzenli kalem oluşturulduğunda/değiştirildiğinde gelecek occurrence'ları **önceden hesaplayıp şifreleyerek** yazar (`pending=true`, `date` düz). Cron'un işi `WHERE pending AND date <= today` satırlarını etkinleştirmek: aritmetik yok, çözme yok.
+Sebep: önceden üretilmiş satırlar **bayatlar** (tutar değişir, kalem silinir, ekstreye yeni harcama düşer) ve bayatlığı yönetmek ikinci bir senkron protokolü demekti — tam da önbellek bölümünde reddedilen hata sınıfı. Takas açık: uygulamayı açmazsan kalem o gün deftere geçmez, **açtığın ilk gün** geçer. Kaydın tarihi occurrence tarihinden geldiği için geç yazılan kayıt, zamanında yazılanla birebir aynıdır; ekstre ödemesi vade gününün tarihiyle yazılır. Pencereler: düzenli kalem 45 gün, ekstre 10 gün.
 
-Böylece "uygulamayı açmazsan maaşın deftere geçmez" takası **düşüyor** — kullanıcının ikinci şartı korunuyor.
-
-Dürüst risk: önceden üretilmiş satırlar **bayatlayabilir** (tutar değişir, kalem silinir). Kural: istemci her açılışta 12 aylık ufku yeniden üretir ve etkinleşmemiş bayat satırları siler. Bu kırılgan çıkarsa yedek yol basit ve bilinen — istemci-açılışında gerçekleştirme.
+**Sıra kuralı (aşama 6'da bulunan gerileme)**: karta düşen otomatik bir düzenli kalem yazıldıysa ekstre listesi **taze veriden** yeniden kurulur. Açılıştaki anlık görüntüyle ödemek ekstreyi eksik öderdi ve "ödendi" işareti düştüğü için eksik bir daha kapanmazdı (ölçüldü: 300 + 75 ₺'lik ekstrede 300 ödendi). Eski sunucu cron'u iki adımı ayrı sorgularla yaptığı için bu sorun orada yoktu.
 
 ### 4.4 Asistan KALIYOR — bağlam istemcide, sağlayıcı çağrısı sunucuda
 
@@ -145,11 +144,19 @@ kurtarma kodu ──► RK ──sarar──► aynı DEK
 - **Parola tarayıcıdan çıkmaz ve bu zorunlu.** Aksi hâlde sunucudaki scrypt hash'i (bugün N=16384) şifrelemenin **arka kapısı** olurdu: veritabanını okuyan kişi — tam da tehdit modelindeki taraf — sözlük saldırısıyla parolayı bulur ve PBKDF2-600k'yı hiç çalıştırmadan DEK'i açardı. Yani 600.000 iterasyon, yanında 16.384'lük bir kapı dururken anlamsız olurdu.
 - `users.password_kdf` (`'legacy'|'v2'`) ile başarılı legacy girişten sonra sessiz yükseltme.
 
-### Parola sıfırlama artık veriyi kurtarmaz
+### Parola sıfırlama artık veriyi kendiliğinden kurtarmaz
 
 E-postayla gelen bir bağlantı DEK'i açamaz — açabilseydi sunucu da açabilirdi. Sonuç: **parolasını unutan ve kurtarma kodunu kaybeden kullanıcının verisi gider.**
 
-Kurtarma kodu bu yüzden zorunlu: kayıt akışının son adımında bir kez gösterilir, "kaydettim" onayı verilmeden geçilemez. Sıfırlama artık *"verini silerek yeni parola belirle"* der ve bunu açıkça der.
+**Kurtarma kodu zorunlu ve UYGULAMADAN ÖNCE gösterilir**: hesabın kurtarma paketi yoksa (yeni kayıt da, mevcut her kullanıcının ilk girişi de) uygulama açılmadan önce 160 bitlik kod gösterilir ([Kurtarma.tsx](../apps/web/src/features/auth/Kurtarma.tsx)). Kullanıcı son dört karakterini **yazarak** teyit eder — "kaydettim" kutusu okunmadan işaretlenir. Paket kaydedilmeden önce aynı kodla açılıp doğrulanır. Sıra: **önce paket sunucuya, sonra anahtar cihaza**; anahtar cihaza yazıldığı an uygulama şifreli yazmaya başlar, sekme arada kapanırsa akış bir sonraki girişte baştan başlar.
+
+Sıfırlama bağlantısı açılınca sunucu hesabın durumunu söyler (`/auth/reset-bilgi`). Veri şifreliyse iki **açık** yol vardır:
+- **Kurtarma koduyla**: tarayıcı eski DEK'i koddan açar, yeni parolayla yeniden sarar; veri ve kurtarma paketi aynen kalır. Kod yanlışsa sunucuya hiçbir şey gitmez.
+- **Kodum yok**: ayrı onay kutusuyla tüm veri silinir (kullanıcının satırları şema kataloğundan bulunur — sonradan eklenen tablo unutulamaz), hesap boş başlar, ilk girişte yeni kurtarma kodu.
+
+Yolsuz istek 409 döner; karar token **tüketilmeden** verilir, yani reddedilen deneme bağlantıyı yakmaz. Veri henüz şifreli değilse eski davranış sürer. E-postası ele geçmiş bir hesapta saldırgan kurtarma kodu olmadan veriyi **okuyamaz**, en fazla silebilir — şifrelemenin burada sağlayabileceği en iyi sonuç.
+
+**Parola değişimi** (Hesabım) veriyi yeniden şifrelemez: sarılı paket **oturuma değil eski parolanın kanıtına** verilir (çalınmış bir oturum onu alıp çevrimdışı deneme yapamasın), tarayıcı yeniden sarar, sunucu tek UPDATE'le yazar ve diğer cihazların oturumlarını kapatır. Kurtarma kodu değişmez.
 
 ### PWA'da anahtarın ömrü
 
@@ -169,45 +176,45 @@ Uygulama `crypto.subtle` ile, yani **tarayıcının kendi denetlenmiş kütüpha
 
 1. Tarayıcıya JS'i sunucu gönderiyor (§1). SRI işe yaramaz, HTML'i de aynı sunucu veriyor.
 2. Aktif kötü niyetli sunucuya karşı **bütünlük yok**: AAD (`tablo:user_id`) ciphertext'in başka kolona/kullanıcıya taşınmasını yakalar, **aynı kullanıcının iki satırının takasını ya da satır silme/geri sarmayı yakalamaz.**
-3. Cihazda düz metin var (DEK + önbellek). Bitwarden'ın kasa önbelleği de böyle.
+3. Cihazda anahtar var: DEK IndexedDB'de (dışa aktarılamaz CryptoKey; sayfadaki kod kullanabilir, baytlarını okuyamaz) ve açık sayfanın belleğinde çözülmüş veri. Çözülmüş veri **diske yazılmıyor** (önbellek yapılmadı, §3). Kilidi açık, çalınmış cihaza karşı koruma iddiası yok; çıkışta anahtar silinir.
 4. **Denetim yok.** Kişisel bir projenin kriptografisi bağımsız denetimden geçmiyor. Risk azaltmanın yolu zaten yapılan şey — standart primitifler, yayımlanmış bir tasarımı kopyalamak, kendi kripto kodunu minimumda tutmak. Ama "denetlendi" denemez.
 
 ### Bundan doğan yeni zorunluluk: parola politikası
 
-Sızan bir veritabanı `dek_wrapped_pw`'yi de sızdırır ve saldırgan **çevrimdışı** deneme yapabilir. 600k PBKDF2 bunu pahalı kılar ama zayıf parolayı kurtarmaz — yani **parola gücü şifrelemeden sonra öncesinden daha önemli.** Bugünkü kural asgari 8 karakter; asgari 12 + yaygın parola kontrolü + güç göstergesi gerekiyor.
+Sızan bir veritabanı `dek_wrapped_pw`'yi de sızdırır ve saldırgan **çevrimdışı** deneme yapabilir. 600k PBKDF2 bunu pahalı kılar ama zayıf parolayı kurtarmaz — yani **parola gücü şifrelemeden sonra öncesinden daha önemli.** **Uygulamada**: yeni parolada asgari 12 karakter, tek karakter tekrarı ve yaygın kalıp reddi, e-postanın parolada geçmemesi; kural canlı ipucu olarak yazılır ([e2ee.ts](../apps/web/src/features/auth/e2ee.ts) `parolaSorunu` — sunucu parolayı görmediği için kural YALNIZ istemcide uygulanabilir; sunucunun zorlayabildiği tek şey KDF maliyetinin alt sınırı). Mevcut hesapların parolası (eski kural 8 karakterdi) girişi engellemez, girişte kurala uymuyorsa uygulama sekmelerin üstünde ve Hesabım'da değiştirmeyi önerir. Ayrı bir güç göstergesi yok — kural metni aynı işi görüyor.
 
 ---
 
 ## 7. Şeffaf sınır ve derleme kapıları
 
-**Şifreleme/çözme [api.ts](../apps/web/src/api.ts)'in içinde**, çağrı yerleri bunu hiç görmez. Bugün her okuma iki fonksiyondan, her yazma `post/put/del` + on kadar metottan geçiyor — tek dosya, ~20 çağrı yeri, yani **kapsam inşa gereği tam.** Çağrı yeri başına şifreleme anahtar erişimini 12 özellik klasörüne yayar ve "yeni alan eklendi, şifrelenmedi" hatasını **sessiz ve kalıcı** kılar: düz metin veritabanına yazılır ve kimse fark etmez.
+**Uygulamada** sınır `api.ts` değil, onun kullandığı tek yazma boru hattı [yazim/](../apps/web/src/yazim/index.ts): `yaz()` = türetilen tutarları tamamla ([tutar.ts](../apps/web/src/yazim/tutar.ts)) → hassas alanları zarfla ([zarf.ts](../apps/web/src/yazim/zarf.ts)) → **mühürle** (şifrele) → gönder. Formlar, adlandırılmış uçlar, asistanın yazma araçları ve otomatik gerçekleştirme hep buradan geçer. Okuma tarafı: `veriAc` (`/api/all`, dışa aktarma) ve `zarfAc` (asistan uçları). Çağrı yerleri zarfı görmez; ekranlar `t.amount`, `c.name` okumaya devam eder.
 
-Rotalar tablo adlarıyla birebir olmadığı için (`cardtxs→card_txs`, `prices→user_prices`, `reconcile` gövdesi iki tabloya düşüyor) iki harita gerekiyor: `TABLE_FIELDS` ve `ROUTE_FIELDS` (çoğu türetilir, sekiz özel gövdeli rota elle).
+Yan etkili uçların gövdesi tablolarla birebir olmadığından (virman iki hareket, ekstre ödemesi bir kayıt + bir hareket…) `zarf.ts`'te rota başına işleyiciler var. İşleyiciler **senkron** kalır ve `Muhur` yer tutucusu bırakır; şifreleme gönderimden hemen önce tek geçişte yapılır — sunucudan taşınmış testli iş mantığını async'e çevirmek hiçbir şey kazandırmadan hata yüzeyi eklerdi. Anahtar yoksa boru hattı düz metne düşmez, 401 döner.
 
-**Kapılar** — `check-ai-routes.ts`'in kanıtlanmış deseniyle (kaynağı oku, çıkar, iki yönlü karşılaştır, gerekçesiz kalanda patla):
+**Kapılar** (`check-ai-routes.ts`'in deseni: kaynağı oku, çıkar, karşılaştır, gerekçesiz kalanda patla):
 
-1. **Şema kayması** — `db.ts` DDL'i ile harita karşılaştırılır; sınıflandırılmamış yeni kolon ya da artık var olmayan kolon için codec build'i durdurur. `PLAIN` listesinin **gerekçe alanı** vardır ("`source_id`: revertEntries bununla WHERE yapıyor") — cümle kodun içinde durur, dokümanda değil.
-2. **Tip kayması** — `satisfies FieldsOf<Transaction>`: engine tipine alan eklenip zarfa girmezse `tsc` patlar. Kapı 1 veritabanı şemasına, kapı 2 engine tiplerine karşı korur; ikisi farklı yönlerden kayar.
-3. **Sızıntı testi** — temsilî gövdeleri serileştirip hassas hiçbir değerin düz geçmediğini iddia eder. Tek test, tüm hata sınıfı.
-4. **Sunucu kriptoya link'lenmez** — `apps/server/**` içinde `@finans/crypto` (map dışı) import'u bulunursa build durur. Bir yorum değil, bir test.
+1. **Şema kayması** — [check-zarf-sema.ts](../apps/server/scripts/check-zarf-sema.ts): `db.ts` DDL'i ile [map.ts](../packages/crypto/src/map.ts) karşılaştırılır; zarflı bir kolonu geri ekleyen `ADD COLUMN`, sınıflandırılmamış yeni kolon ve artık var olmayan kolon build'i durdurur. Düz kalan her kolonun **gerekçesi** haritada yazılı.
+2. **Boru hattını atlayan yazma** — [check-yazim.mjs](../apps/web/scripts/check-yazim.mjs): `yazim/` dışında gövdeli `fetch` bulunursa (gerekçeli izin listesi hariç: auth, röle, fiyatlar) build durur.
+3. **Sızıntı testi** — [zarf.test.ts](../apps/web/src/yazim/zarf.test.ts): her rota için işaretli gövdeler; zarf alanları çıkarılınca hiçbir işaret görünmemeli, haritadaki her tablo en az bir rotada kapsanmalı. Ayrıca gerçek AES-GCM ile gidiş-dönüş, AAD reddi (başka tablo / başka kullanıcı), yanlış anahtar, rastgele IV, dolgu.
+4. **Sunucu kriptoya link'lenmez** — [check-no-crypto.ts](../apps/server/scripts/check-no-crypto.ts): `apps/server` yalnız `@finans/crypto/map`'i (saf veri) import edebilir.
+5. **Düz zarf kapısı** (çalışma anı): göçü biten kullanıcıdan gelen `p1:{` gövdesi sunucuda reddedilir — eski bir PWA paketi ya da kapıyı atlayan bir hata veriyi sessizce düz yazamaz.
 
-`packages/crypto` ayrı bir paket çünkü haritayı sunucudaki kapı okuyacak ve sunucu `apps/web`'den import edemez. **Engine'e girmez**: WebCrypto asenkron (engine senkron, 326 test yeniden yazılırdı), şifreleme taşıma kaygısıdır, ve `apps/server` engine'i import ettiği için "sunucu anahtarı göremez" garantisinin **yapısal** olması gerekiyor.
+`packages/crypto` ayrı bir paket çünkü haritayı sunucudaki kapı okuyor ve sunucu `apps/web`'den import edemez. **Engine'e girmez**: WebCrypto asenkron, ve `apps/server` engine'i import ettiği için "sunucu anahtarı göremez" garantisinin **yapısal** olması gerekiyor.
 
 ---
 
 ## 8. Göç
 
-Mevcut veri düz metin ve **canlıda gerçek kullanımda.** Omurga tek özellik: **`v1:` öneki değeri tarif eder** → göç yeniden çalıştırılabilir (zarflanmışı atlar), yarıda kalması ölümcül değil, geri alma simetrik.
+Mevcut veri düz metin ve **canlıda gerçek kullanımda.** Omurga tek özellik: **önek değeri tarif eder** (`p1:` düz zarf, `v1:` şifreli) → okuma iki biçimi yan yana açar, göç yeniden çalıştırılabilir, yarıda kalması ölümcül değil.
 
-**Ön koşul, ayrı sevk**: şema hazırlığı — hassas kolonlar kaldırılıp `enc` eklenir, onlara bağlı CHECK'ler düşer. **Hiçbir şey şifreli değil, uygulama tam çalışıyor, tersine çevrilebilir.** En riskli DDL'i ciphertext yokken yapmış olmak, göçü ikiye bölmenin en ucuz yolu.
+Göç iki kattır ve ikisi de deploy'da kendiliğinden işler:
 
-1. **Yedeği sunucu zorlar**: `GET /api/export` dönerken `users.last_export_at` yazar; `POST /api/e2ee/begin` bunun son 15 dakika içinde olmasını şart koşar (428). Onay kutusu değil, sunucunun kendi gözlemi.
-2. **Başla**: DEK üretilir, iki kez sarılır, **hiçbir veri yazılmadan önce** kalıcılaşır — kaybı tek onarılamaz hata.
-3. **Yazma kilidi**: `e2ee_started_at IS NOT NULL AND e2ee_migrated_at IS NULL` iken guard'dan sonraki middleware `/e2ee/*` dışı tüm POST/PUT/DELETE'e 409 döner. Bu, "ikinci cihaz yarı göçmüş hesaba düz metin yazar" senaryosunu **yapısal olarak imkânsız** kılıyor — plandaki en tehlikeli senaryo o.
-4. **Yaz**: tablo tablo, sunucu id ile opak `UPDATE` yapar, içeriği yorumlamaz. Kesintiden sonra kaldığı yerden devam eder.
-5. **Doğrula**: yeniden çek, çöz, anlık görüntüyle **alan alan** karşılaştır + türetilmiş değişmezler (net varlık, hesap başına bakiye, satır sayıları). `verifyMigration` saf fonksiyon — testlenebilir, ağdan bağımsız.
-6. **Bitir**: yalnız fark listesi boşsa damga atılır, kilit kalkar. **İptal** simetrik.
+1. **Sunucu (aşama 5, açılışta)** — [db.ts](../apps/server/db.ts) `zarfGoc()`: haritadaki her tablonun hassas kolonları `p1:` zarfına toplanıp düşürülür. Tablo başına tek işlem, yıkıcı değil (mevcut zarfa birleştirir, NULL gerçek değerin üzerine yazılmaz), şifreli satırda veri varken kolon düşürmeyi reddeder. Hiçbir şey şifreli değil — bu adımı **anahtar yokken** yapmak, en riskli DDL'i ciphertext'siz yapmak demekti.
+2. **Tarayıcı (aşama 6, her kullanıcının ilk girişinde)** — [goc.ts](../apps/web/src/yazim/goc.ts): kurtarma kodu kaydedildikten sonra düz zarflar çekilir, şifrelenir, **gönderilmeden önce geri çözülüp düz hâliyle karşılaştırılır**, sunucu yalnız hâlâ düz olan satırın üzerine yazar. Bitti kararını sunucu kendisi sayarak verir (`/e2ee/tamam`; kurtarma paketi yoksa reddeder), ardından o kullanıcıdan düz zarf kabul edilmez. Başarısız olursa uygulama yine açılır ve bunu söyler; kalan satırlar sonraki açılışta şifrelenir.
 
-Parola değişimi `auth_token` + `dek_wrapped_pw`'yi **tek tx'te** yazar — ayrı olsalardı arada bir çökme, açılamayan bir DEK'le yeni parola bırakırdı.
+**Tasarımdan sapmalar ve gerekçeleri:**
+- **Yazma kilidi YOK.** Tasarım, göç sürerken ikinci bir cihazın düz metin yazmasını engellemek için kilit öngörüyordu. Uygulamada o senaryo yapısal olarak oluşmuyor: aşama 6 kodu yalnız şifreli yazar, anahtarı olmayan oturum açılmaz (parola yeniden sorulur), sunucu da düz yazmayı hiç kabul etmeyen uçlara (aşama 5) sahip. Düz yazan bir istemci kalmadığı için kilit korunacak bir şey bulamazdı.
+- **Yedek zorunlu DEĞİL, önerilir.** Tasarım, göçten önce dışa aktarmayı sunucunun zorlamasını öngörüyordu. Uygulamada indirme kurtarma kodu ekranında tek tıkla sunuluyor ama şart koşulmuyor: indirilen JSON uygulamaya geri **yüklenemez**, yani zorunlu kılmak güvenlik hissi verip gerçek bir güvence vermezdi. Gerçek güvence satır başına çöz-karşılaştır doğrulaması ve sunucunun "düz satır kalmadı" sayımı.
+- **İptal akışı yok.** Göç kullanıcı başına ve birkaç yüz satırda saniyenin altında bitiyor; yarıda kalması zararsız (iki biçim yan yana okunur).
 
-**Prod öncesi el ile bir kez**: kopya veritabanında tam göç → doğrula → iptal → tekrar göç turu. Otomatikleştirilemeyen tek şey bu ve gerekli.
+**Prod kopyasında doğrulandı**: 1a'dan 6'ya zincir tek açılışta (sunucu katı) + legacy hesapla gerçek arayüzden giriş → v2 yükseltme → kurtarma kodu → tarayıcı göçü; 217 satır alan alan sıfır fark, türetilen bakiyeler eski kolonla birebir.

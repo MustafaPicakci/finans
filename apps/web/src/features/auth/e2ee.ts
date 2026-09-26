@@ -16,6 +16,8 @@ import { anahtarKur } from "../../yazim/anahtar";
    Sıfır bilgiden sonra sızan bir veritabanı sarılı anahtarı da sızdırır ve çevrimdışı
    deneme yapılabilir — yani parola gücü bu mimaride ÖNCEKİNDEN daha önemli. */
 export const PAROLA_MIN = 12;
+/** sessionStorage: girişte kullanılan parola bugünkü kurala uymuyordu (Hesabım bunu hatırlatır). */
+export const ZAYIF_PAROLA_KEY = "finans-zayif-parola";
 /* Uzunluk kuralı yaygın parolaların çoğunu zaten eler (sızıntı listelerinin büyük kısmı kısa);
    bu liste 12+ karakterde de sık görülen kalıpları yakalar. Tam bir sözlük değil, bilinçli. */
 const YAYGIN = [
@@ -117,6 +119,24 @@ export async function kurtarmaIleSifirla(token: string, kod: string, yeniParola:
   const geri = await dekAc(dek_wrapped_pw, kek, "pw");
   if (geri.some((x, i) => x !== dekHam[i])) throw new Error("yeni parola paketi doğrulanamadı");
   await api.reset(token, { auth_token: authToken, kdf_salt, kdf_params: JSON.stringify(VARSAYILAN_KDF), dek_wrapped_pw }, "kurtarma");
+}
+
+/** Parola değişimi: veri yeniden şifrelenmez, aynı DEK yeni parolanın KEK'iyle yeniden sarılır.
+    Yeni paket göndermeden önce yeni parolayla açılıp doğrulanır — yanlış sarılmış bir paket
+    bir sonraki girişte veriyi kilitlerdi. */
+export async function parolaDegistir(email: string, eski: string, yeni: string): Promise<void> {
+  const pre = await api.prelogin(email);
+  if (pre.kdf !== "v2") throw new ApiError(409, "Önce çıkış yapıp yeniden giriş yap");
+  const e = await parolaTuret(eski, pre.salt, pre.params as KdfParams);
+  const { dek_wrapped_pw } = await api.parolaPaketi(e.authToken);
+  if (!dek_wrapped_pw) throw new ApiError(409, "Hesabın şifreleme anahtarı bulunamadı");
+  const dekHam = await dekAc(dek_wrapped_pw, e.kek, "pw");
+  const kdf_salt = yeniSalt();
+  const n = await parolaTuret(yeni, kdf_salt, VARSAYILAN_KDF);
+  const paket = await dekSar(dekHam, n.kek, "pw");
+  const geri = await dekAc(paket, n.kek, "pw");
+  if (geri.some((x, i) => x !== dekHam[i])) throw new Error("yeni parola paketi doğrulanamadı");
+  await api.parolaYaz({ eski_auth_token: e.authToken, auth_token: n.authToken, kdf_salt, kdf_params: JSON.stringify(VARSAYILAN_KDF), dek_wrapped_pw: paket });
 }
 
 /** Parola onayı isteyen işlemler (hesap silme) için hesap türüne uygun kanıt. */

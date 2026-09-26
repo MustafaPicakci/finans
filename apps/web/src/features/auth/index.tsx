@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { api, ApiError, type SessionUser } from "../../api";
 import { T, css, themeCSS } from "../../theme";
 import type { Bayt } from "@finans/crypto";
-import { girisYap, yeniMalzeme, parolaSorunu, anahtariYerlestir, kurtarmaIleSifirla, PAROLA_MIN } from "./e2ee";
+import { girisYap, yeniMalzeme, parolaSorunu, anahtariYerlestir, kurtarmaIleSifirla, PAROLA_MIN, ZAYIF_PAROLA_KEY } from "./e2ee";
 import { KurtarmaAdimi } from "./Kurtarma";
 
 /* Faz 5.1 giriş/kayıt + Faz 6 şifre sıfırlama & hesap aktivasyonu.
@@ -70,6 +70,10 @@ export function Auth({ onAuthed, urlAuth, bilgi }: {
     try {
       if (mode === "login") {
         const g = await girisYap(email, password);
+        /* Parola bugünkü kurala uymuyorsa (eski hesaplar 8 karakterle açıldı) uygulama içinde
+           bir kez hatırlatılır. Girişi ENGELLEMEZ: kilitlemek, zayıf parolayı değiştirmekten
+           daha kötü bir sonuç. Parolanın kendisi değil yalnız "zayıf" bilgisi saklanır. */
+        try { if (parolaSorunu(password, email)) sessionStorage.setItem(ZAYIF_PAROLA_KEY, "1"); else sessionStorage.removeItem(ZAYIF_PAROLA_KEY); } catch { /* depo yoksa uyarı da yok */ }
         if (g.kurtarmaGerekli) { setKurtarma({ user: g.user, dekHam: g.dekHam, yeniKayit: false }); setBusy(false); return; }
         await anahtariYerlestir(g.user, g.dekHam);
         onAuthed(g.user);

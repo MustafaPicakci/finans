@@ -169,6 +169,9 @@ export const api = {
     const acik = await veriAc(await r.json(), aktifAnahtar());
     return new Blob([JSON.stringify(acik, null, 2)], { type: "application/json" });
   },
+  /* parola değişimi — yalnız features/auth/e2ee.ts `parolaDegistir` çağırır */
+  parolaPaketi: (auth_token: string) => yazJ<{ dek_wrapped_pw: string | null }>("POST", "/account/parola-paket", { auth_token }),
+  parolaYaz: (b: E2eeMalzeme & { eski_auth_token: string }) => yazJ("POST", "/account/parola", b),
   /** Kanıt hesap türüne göre `e2ee.parolaKaniti` ile üretilir (v2: auth_token, legacy: password). */
   deleteAccount: (kanit: { password?: string; auth_token?: string }) =>
     fetch("/api/account/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(kanit) }).then(j),

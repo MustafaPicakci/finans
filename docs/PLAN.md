@@ -1118,6 +1118,68 @@ eklendi — **iki hâliyle** (duyurulmuş + tahmini), yoksa `~` işaretinin yerl
 denetlenemezdi.
 
 
+
+## Faz 42 — Sıfır bilgi şifreleme (E2EE) ✅ yerelde doğrulandı, merge kullanıcı onayı bekliyor
+
+**Neden.** Uygulamayı denemesi istenen kişiler gerçek verilerini girmek istemedi. İlk teşhis
+("deneme zor, demo veri lazım") **reddedildi**: sorun gerçek kullanıcının verisinin güvende
+olduğunun garanti edilememesiydi — operatör `DATABASE_URL` ile her satırı düz okuyabiliyordu.
+Kullanıcının iki şartı: *"ben bile göremeyeyim"* ve *"her şey de client'a taşınmasın"*; asistan
+kalacak (varsayılan açık), semboller düz kalacak, önemli olan harcama/maaş/bakiye/adlar. Aktif
+kötü niyetli sunucu (kötü JS sunmak) 2026-09-25'te bilinçli olarak kapsam dışı bırakıldı. Tasarım
+ve gerekçeler: [E2EE.md](E2EE.md). Tüm iş `e2ee` branch'inde; kural: **her şey önce yerelde
+doğrulanır, merge yalnız kullanıcının son onayıyla.**
+
+**Aşamalar** (her biri ayrı commit):
+- **0** asistan kullanıcı başına kapatılabilir (`user_settings.ai_enabled`, varsayılan açık).
+- **1a** `accounts.balance` kalktı, bakiye defterden türer (`accountBalance`/`totalCash`); kolon
+  yalnız defter bakiyeyi kuruşu kuruşuna açıklıyorsa düşer. **1b / 5a** sunucudaki ikinci tutar
+  hesabı silindi (ekstre, `tradeBalanceDelta`, mevduat, gerçekleştirme, açılış) — tutarı tarayıcı
+  aynı engine fonksiyonlarıyla hesaplar (`yazim/tutar.ts`).
+- **2** otomatik gerçekleştirme sunucu cron'undan uygulama açılışına taşındı (`otomatik.ts`).
+  Plan "sunucuda etkinleştirici" diyordu; önceden üretilen satırların bayatlaması ikinci bir
+  senkron protokolü gerektireceği için bu yol seçildi (kullanıcıya soruldu).
+- **3** `packages/crypto` (WebCrypto, npm kripto paketi yok, altın vektörlü testler) ve sıfır bilgi
+  girişi: parola tarayıcıdan çıkmaz, sunucuya `auth_token` gider; legacy hesaplar ilk girişte
+  aynı istekte v2'ye geçer. Yeni parola kuralı 12+ karakter.
+- **4** asistanın beyni `packages/asistan`'a, döngüsü tarayıcıya taşındı; sunucu = röle + depo +
+  atomik kilit; `/ai/chat|execute|undo` ve iç istek yolu silindi.
+- **5b–5d** satır zarfı (`enc`) — 18 tablo; sunucu açılışta kolonları `p1:` düz zarfa toplayıp
+  düşürür (şema kapısı, sızıntı testi, yazma boru hattı kapısı).
+- **6a** gerçek şifreleme (AES-GCM, AAD `tablo:user_id`, 32 bayt dolgu), cihazda anahtar,
+  zorunlu kurtarma kodu, tarayıcıda `p1→v1` göçü, göç sonrası düz zarf reddi. **6b** şifremi
+  unuttum: kurtarma koduyla ya da açık onayla veri silinerek. **6c** parola değiştirme, zayıf
+  parola hatırlatması, performans ölçümü, stub'ın sıfır bilgi girişi, belgeler.
+
+**Tasarımdan sapmalar** (gerekçeleri E2EE.md'de): önbellek yapılmadı (ölçüldü: 8.000 satırda
+çözme masaüstü ~50 ms, CPU×4 ~215 ms; eşik 300 ms — cihazda düz metin bedeline değmedi), göç
+yazma kilidi yok (düz yazan istemci kalmadı), göç öncesi yedek önerilir ama zorunlu değil
+(indirilen JSON geri yüklenemiyor — zorunluluk güvence değil his verirdi), `num` codec'i yerine
+JSON + kova dolgusu.
+
+**Yol üstünde bulunan hatalar**: (1) otomatik gerçekleştirme karta düşen kalemi yazmadan önceki
+anlık görüntüyle ekstre ödüyordu — ekstre eksik ödenip "ödendi" işaretleniyordu (300+75'te 300;
+aşama 5a'da girmişti, 5c'de düzeltildi); (2) `POST /ai/plans` kimliksiz istekte boş bir sohbet
+açıp 404 dönüyordu; (3) kategori `UNIQUE` kısıtını her açılışta yeniden ekleyen blok, ad zarfa
+taşınınca sunucuyu çökertecekti (kolon kontrolüyle korundu).
+
+**Doğrulama**: `pnpm build` temiz (kapılar: ai-routes, no-crypto, zarf-şema, yazım), 502 test
+(engine 352, crypto 27, asistan 32, web 84, server 7). Kum havuzu (`finans_e2ee`, kullanıcının
+`finans` veritabanına dokunulmadı) üzerinde gerçek arayüzden: tüm defter yazma/düzenleme/silme
+yolları bakiye kontrolüyle, asistan (gerçek model) alım/ekstre/virman/mutabakat/geri al, kurtarma
+adımı, göç, anahtarsız oturum, çıkış, kayıt, üç sıfırlama yolu, parola değişimi. **Prod kopyası**
+(`finans_prod` şablonundan) üzerinde deploy zincirinin tamamı: sunucu açılışında 1a→5d tek
+seferde (217 satır sıfır fark, bakiyeler eski kolonla birebir, ikinci açılış boş), ardından
+legacy hesapla gerçek arayüzden giriş → v2 yükseltme → kurtarma kodu → tarayıcı göçü, çözülen veri
+göç öncesiyle alan alan **sıfır fark**.
+
+**Deploy'da ne olur (kullanıcı için)**: sunucu ilk açılışta şemayı kendisi dönüştürür (veri kaybı
+yok, iki kez çalışması zararsız). Her kullanıcı bir sonraki girişinde bir kez kurtarma kodunu
+görür ve kaydeder; verisi o an tarayıcıda şifrelenir (birkaç yüz satır, saniyenin altında).
+Açık oturumlar bir kez parola ister (cihazda anahtar yok). Kurtarma kodunu kaybedip parolasını
+unutan kullanıcının verisi kurtarılamaz — bu, "biz bile okuyamayız"ın doğrudan sonucu.
+
+
 ## Doğrulama
 
 - **Faz 0**: ✅ `pnpm build` temiz; 46 engine vitest testi yeşil; gerçek `data/finans.db` ile prod sunucu smoke test edildi (API verisi + derlenmiş arayüz doğrulandı).
