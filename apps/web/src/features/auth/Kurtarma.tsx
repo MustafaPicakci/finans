@@ -99,7 +99,8 @@ export function KurtarmaAdimi({ user, dekHam, yeniKayit, onBitti }: {
       }}>
         {/* Tireler METNİN parçası: seçip kopyalayan da indirilen dosyadaki biçimi alır
             (girişte tire ve boşluk yok sayılır, yani biçim kodu bozmaz). */}
-        {hazir ? hazir.kod : "…"}
+        {/* İki yarı ayrı satır içi blok: dar ekranda 4+4 grup kırılır (tek metin 5+3 kırılıyordu) */}
+        {hazir ? <><span style={{ display: "inline-block" }}>{hazir.kod.slice(0, 20)}</span><span style={{ display: "inline-block" }}>{hazir.kod.slice(20)}</span></> : "…"}
       </div>
 
       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>

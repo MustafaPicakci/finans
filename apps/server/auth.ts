@@ -91,6 +91,18 @@ export async function createEmailToken(userId: number, kind: EmailTokenKind, ttl
 }
 
 /** Token'ı doğrular ve TÜKETİR (tek kullanımlık); geçerliyse user_id, değilse null döner. */
+/** Token'ı TÜKETMEDEN doğrular. Şifre sıfırlamada iki iş için: bağlantı açılınca hesabın
+    durumunu göstermek (şifreli mi, kurtarma kodu var mı) ve reddedilen bir denemenin
+    (ör. kurtarma kodu gerekiyordu) bağlantıyı yakmaması. */
+export async function peekEmailToken(token: string, kind: EmailTokenKind): Promise<number | null> {
+  if (!token) return null;
+  const row = await db.get<{ user_id: number; expires_at: string; used: boolean }>(
+    "SELECT user_id, expires_at, used FROM email_tokens WHERE token = ? AND kind = ?", hashToken(token), kind,
+  );
+  if (!row || row.used || row.expires_at <= new Date().toISOString()) return null;
+  return row.user_id;
+}
+
 export async function consumeEmailToken(token: string, kind: EmailTokenKind): Promise<number | null> {
   if (!token) return null;
   const th = hashToken(token);

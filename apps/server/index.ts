@@ -10,7 +10,7 @@ import { db, initDb, nowLocal, todayLocal, zarfGecerli, TENANT_TABLES, GLOBAL_SE
 import { loadAllData } from "./data.js";
 import { refreshAll, backfillPriceHistory, refreshCorporateActions, refreshCompanyEvents } from "./prices.js";
 import { refreshBenchmarks, autoBackfill } from "./benchmarks.js";
-import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, purgeStaleEmailTokens, SESSION_COOKIE, type SessionUser , sahteSalt, e2eeMalzemeDogrula, PAKET } from "./auth.js";
+import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, peekEmailToken, purgeStaleEmailTokens, SESSION_COOKIE, type SessionUser , sahteSalt, e2eeMalzemeDogrula, PAKET } from "./auth.js";
 import { ZARF, ZARF_DUZ, type ZarfliTablo } from "@finans/crypto/map";
 import { sendMail, resetEmail, verifyEmail, mailConfigured, verifyMailConfig, mailFromWarning } from "./mail.js";
 import { mountAi } from "./ai/index.js";
@@ -264,26 +264,78 @@ api.post("/auth/forgot", async (c) => {
   return c.json({ ok: true });
 });
 
-/* Şifre sıfırla (token ile) — tüketir, parolayı günceller, tüm oturumları düşürür. */
+/* ————— Şifre sıfırlama ve şifreli veri (E2EE aşama 6) —————
+   Sunucu parolayı bilmediği gibi veri anahtarını da bilmiyor: yeni parolayla YENİ bir anahtar
+   yazmak, şifreli veriyi sessizce okunamaz hâle getirirdi. Bu yüzden veri şifreliyse
+   sıfırlamanın yalnız iki yolu var ve ikisi de AÇIKÇA seçilir:
+     mod "kurtarma" — tarayıcı kurtarma koduyla ESKİ anahtarı açar ve yeni parolayla yeniden
+                      sarar; veri aynen kalır, kurtarma paketi değişmez.
+     mod "sil"      — kodu olmayan kullanıcı: tüm veri silinir, hesap boş başlar.
+   Veri şifreli değilse (göç öncesi hesap) eski davranış sürer: yeni anahtar yazılır.
+   E-posta erişimi olan biri kurtarma kodu olmadan VERİYİ OKUYAMAZ — en fazla silebilir; bu,
+   e-postası ele geçmiş bir hesap için şifrelemenin sağlayabileceği en iyi sonuç. */
+async function sifreliVeriVar(uid: number): Promise<boolean> {
+  const u = await db.get<{ m: boolean }>("SELECT e2ee_migrated_at IS NOT NULL AS m FROM users WHERE id=?", uid);
+  if (u?.m) return true;
+  for (const t of Object.keys(ZARF))
+    if (await db.get(`SELECT 1 FROM ${t} WHERE user_id=? AND enc LIKE 'v1:%' LIMIT 1`, uid)) return true;
+  return false;
+}
+
+/* Bağlantı açılınca: hesabın durumu. Kurtarma paketi token sahibine verilir — 160 bitlik
+   kodla sarılı olduğundan kodu bilmeyene bir şey söylemez; kodu bilen de onu tarayıcıda açar. */
+api.post("/auth/reset-bilgi", async (c) => {
+  if (rateLimited(`reset:${clientIp(c)}`, 10, 15 * 60_000)) return c.json({ error: "Çok fazla deneme, biraz sonra tekrar dene" }, 429);
+  const { token } = await c.req.json().catch(() => ({}));
+  const uid = await peekEmailToken(String(token ?? ""), "reset");
+  if (!uid) return c.json({ error: "Bağlantı geçersiz veya süresi dolmuş" }, 400);
+  const u = await db.get<{ rk: string | null }>("SELECT dek_wrapped_rk AS rk FROM users WHERE id=?", uid);
+  return c.json({ sifreli: await sifreliVeriVar(uid), kurtarma_paketi: u?.rk ?? null });
+});
+
+/** Kullanıcının SAHİP OLDUĞU her satır — şema kataloğundan: sonradan eklenen bir kiracı
+    tablosu da kendiliğinden kapsanır ("verimi sil" dendiğinde bir tablo unutulamasın). */
+async function kullaniciTablolari(): Promise<string[]> {
+  const rows = await db.all<{ t: string }>(
+    `SELECT table_name AS t FROM information_schema.columns
+      WHERE table_schema='public' AND column_name='user_id' AND table_name NOT IN ('users','sessions','email_tokens')`);
+  return rows.map((r) => r.t);
+}
+
 api.post("/auth/reset", async (c) => {
   if (rateLimited(`reset:${clientIp(c)}`, 10, 15 * 60_000)) return c.json({ error: "Çok fazla deneme, biraz sonra tekrar dene" }, 429);
   const b = await c.req.json().catch(() => ({}));
   if (!b.token) return c.json({ error: "Bağlantı geçersiz" }, 400);
   if (typeof b.password === "string") return c.json({ error: "Uygulamanın yeni sürümü gerekli — sayfayı yenile" }, 400);
+  const mod = b.mod === "kurtarma" || b.mod === "sil" ? b.mod : null;
   const m = e2eeMalzemeDogrula(b);
   if (typeof m === "string") return c.json({ error: m }, 400);
+  /* Karar token TÜKETİLMEDEN verilir: reddedilen deneme bağlantıyı yakmasın, kullanıcı aynı
+     bağlantıyla doğru yolu seçebilsin. */
+  const peek = await peekEmailToken(String(b.token), "reset");
+  if (!peek) return c.json({ error: "Bağlantı geçersiz veya süresi dolmuş" }, 400);
+  const sifreli = await sifreliVeriVar(peek);
+  if (sifreli && !mod) return c.json({ error: "Verin şifreli: kurtarma kodunla sıfırla ya da veriyi silmeyi onayla", kurtarmaGerekli: true }, 409);
+  if (mod === "kurtarma" && !(await db.get("SELECT 1 FROM users WHERE id=? AND dek_wrapped_rk IS NOT NULL", peek)))
+    return c.json({ error: "Bu hesapta kurtarma kodu yok" }, 409);
   const userId = await consumeEmailToken(String(b.token), "reset");
   if (!userId) return c.json({ error: "Bağlantı geçersiz veya süresi dolmuş" }, 400);
-  /* ⚠ AŞAMA 6'DA DEĞİŞMEK ZORUNDA. Sıfırlama şu an YENİ bir DEK yazıyor (istemci üretti) —
-     bu yalnız HİÇBİR VERİ ŞİFRELİ DEĞİLKEN güvenli. Şifreleme devreye girdiği gün bu uç ya
-     kurtarma koduyla eski DEK'i yeniden sarmalı ya da açık bir `wipe:true` ile tüm veriyi
-     silmeli; aksi hâlde sıfırlayan kullanıcı açılamayan bir veriyle kalır. (docs/E2EE.md §5) */
-  await db.run(
-    `UPDATE users SET password_hash=?, password_kdf='v2', kdf_salt=?, kdf_params=?, dek_wrapped_pw=?, dek_wrapped_rk=? WHERE id=?`,
-    await hashPassword(m.auth_token), m.kdf_salt, m.kdf_params, m.dek_wrapped_pw, m.dek_wrapped_rk, userId,
-  );
+  const hash = await hashPassword(m.auth_token);
+  await db.tx(async (t) => {
+    if (mod === "kurtarma") {
+      // aynı DEK, yeni parola: kurtarma paketi (aynı DEK'i saran) DEĞİŞMEZ, veri durur
+      await t.run(`UPDATE users SET password_hash=?, password_kdf='v2', kdf_salt=?, kdf_params=?, dek_wrapped_pw=? WHERE id=?`,
+        hash, m.kdf_salt, m.kdf_params, m.dek_wrapped_pw, userId);
+      return;
+    }
+    if (mod === "sil") for (const tablo of await kullaniciTablolari()) await t.run(`DELETE FROM ${tablo} WHERE user_id=?`, userId);
+    /* Yeni DEK: eski kurtarma paketi eski anahtarı sarıyor, artık geçersiz → silinir; ilk
+       girişte kurtarma kodu adımı yeniden çıkar. Göç işareti de sıfırlanır (veri yok ya da düz). */
+    await t.run(`UPDATE users SET password_hash=?, password_kdf='v2', kdf_salt=?, kdf_params=?, dek_wrapped_pw=?, dek_wrapped_rk=NULL, e2ee_migrated_at=NULL WHERE id=?`,
+      hash, m.kdf_salt, m.kdf_params, m.dek_wrapped_pw, userId);
+  });
   await revokeUserSessions(userId); // güvenlik: sıfırlama sonrası eski oturumlar düşer
-  console.log(`[audit] Şifre sıfırlandı: (id:${userId})`);
+  console.log(`[audit] Şifre sıfırlandı (${mod ?? "şifresiz veri"}): (id:${userId})`);
   return c.json({ ok: true });
 });
 

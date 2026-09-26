@@ -100,6 +100,25 @@ export async function kurtarmaHazirla(dekHam: Bayt): Promise<{ kod: string; pake
   return { kod, paket };
 }
 
+/** Kurtarma koduyla parola sıfırlama: ESKİ veri anahtarı koddan açılır, yeni parolayla
+    yeniden sarılır — veri yerinde kalır. Kod yanlışsa sunucuya HİÇBİR ŞEY gitmez (paket
+    tarayıcıda açılamaz), yani yanlış bir denemenin bağlantıyı yakması ya da hesabı bozması
+    imkânsız. Yeni sarım da göndermeden önce yeni parolayla açılıp doğrulanır. */
+export async function kurtarmaIleSifirla(token: string, kod: string, yeniParola: string, paket: string): Promise<void> {
+  let dekHam: Bayt;
+  try { dekHam = await dekAc(paket, await kurtarmaSarici(kod), "rk"); }
+  catch (e) {
+    const m = (e as Error).message;
+    throw new ApiError(400, /kurtarma kodu/.test(m) ? m.charAt(0).toUpperCase() + m.slice(1) : "Kurtarma kodu bu hesaba ait değil ya da yanlış yazılmış");
+  }
+  const kdf_salt = yeniSalt();
+  const { kek, authToken } = await parolaTuret(yeniParola, kdf_salt, VARSAYILAN_KDF);
+  const dek_wrapped_pw = await dekSar(dekHam, kek, "pw");
+  const geri = await dekAc(dek_wrapped_pw, kek, "pw");
+  if (geri.some((x, i) => x !== dekHam[i])) throw new Error("yeni parola paketi doğrulanamadı");
+  await api.reset(token, { auth_token: authToken, kdf_salt, kdf_params: JSON.stringify(VARSAYILAN_KDF), dek_wrapped_pw }, "kurtarma");
+}
+
 /** Parola onayı isteyen işlemler (hesap silme) için hesap türüne uygun kanıt. */
 export async function parolaKaniti(email: string, parola: string): Promise<{ password?: string; auth_token?: string }> {
   const pre = await api.prelogin(email);

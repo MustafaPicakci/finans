@@ -323,6 +323,7 @@ export const ROUTE_TOOLS: RouteTool[] = [
 export const SKIPPED: { route: string; reason: string }[] = [
   { route: "POST /auth/register", reason: "kimlik: oturum akışı asistanın işi değil" },
   { route: "POST /auth/prelogin", reason: "kimlik: sıfır bilgi girişinin salt adımı (E2EE aşama 3b)" },
+  { route: "POST /auth/reset-bilgi", reason: "kimlik: e-postadaki sıfırlama bağlantısının durumu (E2EE aşama 6)" },
   { route: "POST /e2ee/kurtarma", reason: "anahtar yönetimi: kurtarma kodu yalnız kullanıcıya GÖSTERİLEREK kurulur — bir modelin kararı olamaz (E2EE aşama 6)" },
   { route: "PUT /e2ee/satirlar", reason: "şifreleme göçü: tarayıcının kendi bakım işi, kayıt anlamı yok (E2EE aşama 6)" },
   { route: "POST /e2ee/tamam", reason: "şifreleme göçü: bitiş işareti, sunucu kendisi sayar (E2EE aşama 6)" },

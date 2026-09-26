@@ -149,8 +149,12 @@ export const api = {
   /* ---- şifre sıfırlama + aktivasyon (Faz 6) ---- */
   forgot: (email: string) =>
     fetch("/api/auth/forgot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) }).then(j),
-  reset: (token: string, malzeme: E2eeMalzeme) =>
-    fetch("/api/auth/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, ...malzeme }) }).then(j),
+  /** `mod`: veri şifreliyse ZORUNLU — "kurtarma" (aynı anahtar, yeni parola) ya da "sil" (veri gider). */
+  reset: (token: string, malzeme: E2eeMalzeme, mod?: "kurtarma" | "sil") =>
+    fetch("/api/auth/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, ...malzeme, mod }) }).then(j),
+  resetBilgi: (token: string) =>
+    fetch("/api/auth/reset-bilgi", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) })
+      .then((r) => j<{ sifreli: boolean; kurtarma_paketi: string | null }>(r)),
   verify: (token: string) =>
     fetch("/api/auth/verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) }).then(j),
   resendVerify: (email: string) =>

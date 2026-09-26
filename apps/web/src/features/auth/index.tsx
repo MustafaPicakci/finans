@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { api, ApiError, type SessionUser } from "../../api";
 import { T, css, themeCSS } from "../../theme";
 import type { Bayt } from "@finans/crypto";
-import { girisYap, yeniMalzeme, parolaSorunu, anahtariYerlestir, PAROLA_MIN } from "./e2ee";
+import { girisYap, yeniMalzeme, parolaSorunu, anahtariYerlestir, kurtarmaIleSifirla, PAROLA_MIN } from "./e2ee";
 import { KurtarmaAdimi } from "./Kurtarma";
 
 /* Faz 5.1 giriş/kayıt + Faz 6 şifre sıfırlama & hesap aktivasyonu.
@@ -36,6 +36,22 @@ export function Auth({ onAuthed, urlAuth, bilgi }: {
   const [notVerified, setNotVerified] = useState(false); // login 403 → aktive edilmemiş: yeniden gönder butonu göster
   /* Giriş başarılı ama hesabın kurtarma paketi yok → uygulamadan ÖNCE kurtarma kodu adımı */
   const [kurtarma, setKurtarma] = useState<{ user: SessionUser; dekHam: Bayt; yeniKayit: boolean } | null>(null);
+
+  /* Şifre sıfırlama bağlantısı: hesabın verisi şifreliyse yeni parola TEK BAŞINA yetmez
+     (veri anahtarı parolayla sarılı; yeni parola yeni anahtar demek). Bağlantı açılınca
+     durum sorulur ve iki açık yol sunulur: kurtarma koduyla (veri korunur) ya da veriyi
+     silerek. Varsayılan kurtarma kodudur — silme yolu ayrı bir onay kutusu ister. */
+  const [resetBilgi, setResetBilgi] = useState<{ sifreli: boolean; kurtarma_paketi: string | null } | null>(null);
+  const [resetYol, setResetYol] = useState<"kod" | "sil">("kod");
+  const [kod, setKod] = useState("");
+  const [silOnay, setSilOnay] = useState(false);
+  useEffect(() => {
+    if (urlAuth?.kind !== "reset") return;
+    api.resetBilgi(urlAuth.token)
+      .then((b) => { setResetBilgi(b); if (b.sifreli && !b.kurtarma_paketi) setResetYol("sil"); })
+      .catch((e) => setErr(e instanceof ApiError ? e.message : "Bağlantı doğrulanamadı"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* Aktivasyon token'ı varsa mount'ta otomatik doğrula, sonra giriş moduna dön. */
   useEffect(() => {
@@ -80,9 +96,19 @@ export function Auth({ onAuthed, urlAuth, bilgi }: {
       } else if (mode === "reset" && urlAuth) {
         const sorun = parolaSorunu(password, "");
         if (sorun) { setErr(sorun); setBusy(false); return; }
-        await api.reset(urlAuth.token, (await yeniMalzeme(password)).govde);
-        setInfo("Şifren güncellendi. Yeni şifrenle giriş yapabilirsin.");
-        setPassword(""); setMode("login"); cleanUrl();
+        if (!resetBilgi) { setBusy(false); return; }
+        if (resetBilgi.sifreli && resetYol === "kod") {
+          await kurtarmaIleSifirla(urlAuth.token, kod, password, resetBilgi.kurtarma_paketi!);
+          setInfo("Şifren güncellendi, verilerin korundu. Yeni şifrenle giriş yapabilirsin.");
+        } else if (resetBilgi.sifreli) {
+          if (!silOnay) { setErr("Devam etmek için verilerinin silineceğini onayla"); setBusy(false); return; }
+          await api.reset(urlAuth.token, (await yeniMalzeme(password)).govde, "sil");
+          setInfo("Şifren güncellendi ve verilerin silindi. Giriş yapınca hesabın boş açılacak.");
+        } else {
+          await api.reset(urlAuth.token, (await yeniMalzeme(password)).govde);
+          setInfo("Şifren güncellendi. Yeni şifrenle giriş yapabilirsin.");
+        }
+        setPassword(""); setKod(""); setMode("login"); cleanUrl();
       }
       setBusy(false);
     } catch (e) {
@@ -138,13 +164,47 @@ export function Auth({ onAuthed, urlAuth, bilgi }: {
                 value={email} onChange={(e) => setEmail(e.target.value)} placeholder="ornek@eposta.com" autoFocus />
             </div>
           )}
+          {mode === "reset" && resetBilgi?.sifreli && (
+            <div style={{ display: "grid", gap: 10 }}>
+              <div style={{ fontSize: 13, color: T.mut, lineHeight: 1.55 }}>
+                Verilerin şifreli ve yalnız senin anahtarınla açılıyor. Yeni parolayla verine ulaşmak için
+                kurtarma kodun gerekiyor.
+              </div>
+              {resetBilgi.kurtarma_paketi && (
+                <div style={{ display: "flex", gap: 6 }}>
+                  {([["kod", "Kurtarma kodum var"], ["sil", "Kodum yok"]] as const).map(([k, ad]) => (
+                    <button key={k} type="button" onClick={() => { setResetYol(k); setErr(""); }}
+                      style={{ ...css.ghost, flex: 1, padding: "8px 10px", ...(resetYol === k ? { background: T.panel, color: T.acc, borderColor: T.acc, fontWeight: 640 } : {}) }}>
+                      {ad}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {resetYol === "kod" ? (
+                <div>
+                  <div style={css.label}>Kurtarma kodu</div>
+                  <input style={{ ...css.input, width: "100%", fontFamily: T.mono, textTransform: "uppercase" }} value={kod}
+                    onChange={(e) => setKod(e.target.value)} placeholder="XXXX-XXXX-XXXX-XXXX-…" autoComplete="off" autoCapitalize="characters" autoFocus />
+                </div>
+              ) : (
+                <div style={{ fontSize: 13, lineHeight: 1.55, padding: 12, borderRadius: 10, border: `1px solid ${T.neg}`, color: T.text }}>
+                  Kurtarma kodun olmadan verilerin <b>açılamaz</b> — biz de açamayız. Yeni parola belirlersen
+                  hesabın kalır ama tüm kayıtların (hesaplar, işlemler, portföy, asistan sohbetleri) <b>kalıcı olarak silinir</b>.
+                  <label style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 10, cursor: "pointer" }}>
+                    <input type="checkbox" checked={silOnay} onChange={(e) => setSilOnay(e.target.checked)} style={{ marginTop: 3 }} />
+                    <span>Verilerimin kalıcı olarak silineceğini anlıyorum</span>
+                  </label>
+                </div>
+              )}
+            </div>
+          )}
           {mode !== "forgot" && (
             <div>
               <div style={css.label}>{mode === "reset" ? "Yeni parola" : "Parola"}</div>
               <input style={{ ...css.input, width: "100%" }} type="password"
                 autoComplete={mode === "login" ? "current-password" : "new-password"}
                 value={password} onChange={(e) => setPassword(e.target.value)}
-                placeholder={mode === "login" ? "••••••••" : `en az ${PAROLA_MIN} karakter`} autoFocus={mode === "reset"} />
+                placeholder={mode === "login" ? "••••••••" : `en az ${PAROLA_MIN} karakter`} autoFocus={mode === "reset" && !resetBilgi?.sifreli} />
               {/* Canlı ipucu yalnız YENİ parola belirlenirken; girişte gösterilmez (orada kural yok,
                   eski hesapların parolası kısa olabilir ve giriş yapabilmeleri gerekiyor). */}
               {/* gönderimde aynı sorun `err` olarak da basılıyordu — ikisi aynı anda görünmesin */}
@@ -158,9 +218,17 @@ export function Auth({ onAuthed, urlAuth, bilgi }: {
             </div>
           )}
           {info && <div style={{ fontSize: 13, color: T.pos }}>{info}</div>}
-          <button type="submit" disabled={busy} style={{ ...css.btn, width: "100%", padding: "11px 14px", opacity: busy ? 0.6 : 1 }}>
-            {busy ? mesgul : cta}
-          </button>
+          {(() => {
+            const silYolu = mode === "reset" && resetBilgi?.sifreli && resetYol === "sil";
+            const bekliyor = mode === "reset" && !resetBilgi; // bağlantının durumu henüz bilinmiyor
+            const kapali = busy || bekliyor || (silYolu && !silOnay);
+            return (
+              <button type="submit" disabled={kapali}
+                style={{ ...css.btn, width: "100%", padding: "11px 14px", opacity: kapali ? 0.6 : 1, ...(silYolu ? { background: T.neg } : {}) }}>
+                {busy ? mesgul : silYolu ? "Verilerimi silerek şifreyi güncelle" : cta}
+              </button>
+            );
+          })()}
         </form>
 
         <div style={{ fontSize: 13, color: T.mut, marginTop: 14, textAlign: "center", lineHeight: 1.9 }}>
