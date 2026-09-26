@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch index.ts",
     "start": "cross-env NODE_ENV=production tsx index.ts",
-    "build": "tsx scripts/check-ai-routes.ts && tsc --noEmit",
+    "build": "tsx scripts/check-ai-routes.ts && tsx scripts/check-no-crypto.ts && tsc --noEmit",
     "test": "vitest run",
     "migrate": "cross-env NODE_OPTIONS=--experimental-sqlite tsx scripts/migrate-sqlite-to-pg.mjs",
     "gmail-token": "node scripts/gmail-token.mjs"
