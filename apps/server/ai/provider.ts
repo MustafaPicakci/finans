@@ -24,29 +24,11 @@
    araç çağırmak. Araç çağıramayan bir model buraya takılırsa sohbet eder ama
    hiçbir kayıt oluşturamaz — bu yüzden model seçerken function calling şart. */
 
-export type JsonSchema = {
-  type: "object";
-  properties: Record<string, { type: string; description?: string; enum?: string[]; items?: unknown }>;
-  required?: string[];
-};
-export type ToolDef = { name: string; description: string; parameters: JsonSchema };
-/** `signature`: sağlayıcıya özgü, ajanın yorumlamadığı opak veri (Gemini 3.x'in
-    `thoughtSignature`'ı). Sonraki turda AYNEN geri gönderilmezse düşünen modeller
-    çok turlu araç çağrısını reddeder — bu yüzden ToolCall ile birlikte taşınır. */
-export type ToolCall = { id: string; name: string; args: Record<string, unknown>; signature?: string };
-/** Sağlayıcıdan bağımsız konuşma kaydı — ajan döngüsü yalnız bunu üretir/tüketir. */
-export type ChatMessage =
-  | { role: "user"; content: string }
-  | { role: "assistant"; content: string; toolCalls?: ToolCall[] }
-  | { role: "tool"; callId: string; name: string; result: unknown };
-export type ChatResult = { text: string; toolCalls: ToolCall[] };
-export type ChatRequest = { system: string; messages: ChatMessage[]; tools: ToolDef[] };
-
-export interface AiProvider {
-  /** Arayüzde "hangi model konuşuyor" bilgisi için (örn. "gemini/gemini-2.5-flash") */
-  readonly label: string;
-  chat(req: ChatRequest): Promise<ChatResult>;
-}
+/* Konuşma tipleri ve `AiProvider` arayüzü `@finans/asistan`'da (E2EE aşama 4): ajan döngüsü
+   oraya taşındı ve tarayıcıda da koşacak. Buradaki dosya yalnız GERÇEK uygulamayı taşır —
+   API anahtarları tarayıcıya inmemeli, sağlayıcı çağrısı sunucuda kalır. */
+import type { JsonSchema, ToolDef, ToolCall, ChatMessage, ChatResult, ChatRequest, AiProvider } from "@finans/asistan";
+export type { JsonSchema, ToolDef, ToolCall, ChatMessage, ChatResult, ChatRequest, AiProvider };
 
 const TIMEOUT_MS = 60_000; // yanıtsız sağlayıcıda istek sonsuza dek asılı kalmasın (mail.ts'teki aynı ders)
 

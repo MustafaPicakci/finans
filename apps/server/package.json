@@ -12,6 +12,7 @@
     "gmail-token": "node scripts/gmail-token.mjs"
   },
   "dependencies": {
+    "@finans/asistan": "workspace:*",
     "@finans/engine": "workspace:*",
     "@hono/node-server": "^1.13.7",
     "dotenv": "^17.4.2",

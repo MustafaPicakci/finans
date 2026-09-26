@@ -14,7 +14,7 @@
    bağlıdır, yani yeni/değişen bir uç asistana tanıtılmadan CI'dan geçemez.
    Prompt'a elle yazılmış bir API dokümanı güncel kalmazdı; bu kalır. */
 
-import type { JsonSchema } from "./provider.js";
+import type { JsonSchema } from "./types.js";
 
 export type ArgVals = Record<string, unknown>;
 /** Onay kartında gösterilecek insan-okur özet için ad çözücüler (id → ad) */
