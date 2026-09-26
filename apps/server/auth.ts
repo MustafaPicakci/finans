@@ -30,7 +30,8 @@ export const SESSION_COOKIE = "finans_session";
 
 const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
 
-export type SessionUser = { id: number; email: string };
+/** `e2ee`: kullanıcının verisi tamamen şifreli (göç bitti) — düz zarf kapısı buna bakar. */
+export type SessionUser = { id: number; email: string; e2ee: boolean };
 
 export async function createSession(userId: number): Promise<{ token: string; expires: Date }> {
   const token = randomBytes(32).toString("hex");
@@ -46,8 +47,8 @@ export async function createSession(userId: number): Promise<{ token: string; ex
 /** Geçerli (süresi dolmamış) oturumun kullanıcısını döner; yoksa null. Süresi dolmuşsa temizler. */
 export async function getSessionUser(token: string | undefined): Promise<SessionUser | null> {
   if (!token) return null;
-  const row = await db.get<{ id: number; email: string; expires_at: string }>(
-    "SELECT u.id, u.email, s.expires_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?",
+  const row = await db.get<{ id: number; email: string; expires_at: string; e2ee: boolean }>(
+    "SELECT u.id, u.email, s.expires_at, u.e2ee_migrated_at IS NOT NULL AS e2ee FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?",
     hashToken(token),
   );
   if (!row) return null;
@@ -55,7 +56,7 @@ export async function getSessionUser(token: string | undefined): Promise<Session
     await deleteSession(token);
     return null;
   }
-  return { id: row.id, email: row.email };
+  return { id: row.id, email: row.email, e2ee: !!row.e2ee };
 }
 
 export async function deleteSession(token: string | undefined): Promise<void> {
@@ -140,7 +141,7 @@ export async function sahteSalt(email: string): Promise<string> {
     okumamalı; yalnız "bu gerçekten bizim biçimimiz mi" diye bakar ki çöp yazılıp kullanıcı
     bir sonraki girişte açılamayan bir anahtarla kalmasın. */
 const B64U = /^[A-Za-z0-9_-]+$/;
-const PAKET = /^v1:[A-Za-z0-9_-]{16}:[A-Za-z0-9_-]{40,}$/;
+export const PAKET = /^v1:[A-Za-z0-9_-]{16}:[A-Za-z0-9_-]{40,}$/;
 export type E2eeMalzeme = { auth_token: string; kdf_salt: string; kdf_params: string; dek_wrapped_pw: string; dek_wrapped_rk: string | null };
 export function e2eeMalzemeDogrula(b: any): E2eeMalzeme | string {
   if (!b || typeof b !== "object") return "şifreleme bilgileri eksik";

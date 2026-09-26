@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { api, ApiError, type SessionUser } from "../../api";
 import { T, css, themeCSS } from "../../theme";
-import { girisYap, yeniMalzeme, parolaSorunu, PAROLA_MIN } from "./e2ee";
+import type { Bayt } from "@finans/crypto";
+import { girisYap, yeniMalzeme, parolaSorunu, anahtariYerlestir, PAROLA_MIN } from "./e2ee";
+import { KurtarmaAdimi } from "./Kurtarma";
 
 /* Faz 5.1 giriş/kayıt + Faz 6 şifre sıfırlama & hesap aktivasyonu.
    Auth kapısı App.tsx'te: oturum yoksa (veya URL'de reset/verify token'ı varsa) bu ekran gösterilir.
@@ -19,17 +21,21 @@ const SUBTITLE: Record<Mode, string> = {
 
 const cleanUrl = () => window.history.replaceState(null, "", window.location.pathname);
 
-export function Auth({ onAuthed, urlAuth }: {
+export function Auth({ onAuthed, urlAuth, bilgi }: {
   onAuthed: (u: SessionUser) => void;
   urlAuth?: UrlAuth;
+  /** Giriş ekranının neden açıldığı (ör. bu cihazda veri anahtarı yok) */
+  bilgi?: string;
 }) {
   const [mode, setMode] = useState<Mode>(urlAuth?.kind === "reset" ? "reset" : "login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const [info, setInfo] = useState("");
+  const [info, setInfo] = useState(bilgi ?? "");
   const [notVerified, setNotVerified] = useState(false); // login 403 → aktive edilmemiş: yeniden gönder butonu göster
+  /* Giriş başarılı ama hesabın kurtarma paketi yok → uygulamadan ÖNCE kurtarma kodu adımı */
+  const [kurtarma, setKurtarma] = useState<{ user: SessionUser; dekHam: Bayt; yeniKayit: boolean } | null>(null);
 
   /* Aktivasyon token'ı varsa mount'ta otomatik doğrula, sonra giriş moduna dön. */
   useEffect(() => {
@@ -47,20 +53,24 @@ export function Auth({ onAuthed, urlAuth }: {
     setErr(""); setInfo(""); setNotVerified(false); setBusy(true);
     try {
       if (mode === "login") {
-        const user = await girisYap(email, password);
-        onAuthed(user);
+        const g = await girisYap(email, password);
+        if (g.kurtarmaGerekli) { setKurtarma({ user: g.user, dekHam: g.dekHam, yeniKayit: false }); setBusy(false); return; }
+        await anahtariYerlestir(g.user, g.dekHam);
+        onAuthed(g.user);
         return; // onAuthed yönlendirir; busy'yi bırakmaya gerek yok
       }
       if (mode === "register") {
         const sorun = parolaSorunu(password, email);
         if (sorun) { setErr(sorun); setBusy(false); return; }
-        const res = await api.register(email, await yeniMalzeme(password));
+        const m = await yeniMalzeme(password);
+        const res = await api.register(email, m.govde);
         if (res.pending) {
           // Doğrulama zorunlu: oturum açılmadı, kullanıcı e-postasını doğrulamalı.
           setInfo("Doğrulama e-postası gönderildi. Gelen kutunu (ve spam klasörünü) kontrol edip bağlantıya tıkla, sonra giriş yap.");
           setPassword(""); setMode("login"); setBusy(false);
         } else if (res.user) {
-          onAuthed(res.user); // owner (ilk kullanıcı): otomatik giriş
+          // owner (ilk kullanıcı): otomatik giriş — kurtarma kodu adımı yine ŞART
+          setKurtarma({ user: res.user, dekHam: m.dekHam, yeniKayit: true }); setBusy(false);
         }
         return;
       }
@@ -70,7 +80,7 @@ export function Auth({ onAuthed, urlAuth }: {
       } else if (mode === "reset" && urlAuth) {
         const sorun = parolaSorunu(password, "");
         if (sorun) { setErr(sorun); setBusy(false); return; }
-        await api.reset(urlAuth.token, await yeniMalzeme(password));
+        await api.reset(urlAuth.token, (await yeniMalzeme(password)).govde);
         setInfo("Şifren güncellendi. Yeni şifrenle giriş yapabilirsin.");
         setPassword(""); setMode("login"); cleanUrl();
       }
@@ -112,6 +122,7 @@ export function Auth({ onAuthed, urlAuth }: {
       {/* Kart ve tanıtım TEK grid çocuğu: ayrı çocuk olsalar grid iki satıra bölünür ve
           aralarında ekran boyuna göre değişen bir boşluk açılırdı. */}
       <div style={{ width: "100%", maxWidth: 380 }}>
+      {kurtarma ? <KurtarmaAdimi {...kurtarma} onBitti={onAuthed} /> : (
       <div style={{ ...css.card, width: "100%" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 9, fontWeight: 680, fontSize: 18, letterSpacing: "-0.02em", marginBottom: 4 }}>
           <span style={{ width: 30, height: 30, borderRadius: 9, background: T.acc, color: T.accInk, display: "grid", placeItems: "center", fontSize: 16, fontWeight: 800, fontFamily: T.mono }}>₺</span>
@@ -164,8 +175,9 @@ export function Auth({ onAuthed, urlAuth }: {
           {(mode === "forgot" || mode === "reset") && (<button onClick={() => go("login")} style={linkBtn}>← Girişe dön</button>)}
         </div>
       </div>
+      )}
 
-      <Tanitim />
+      {!kurtarma && <Tanitim />}
       </div>
     </div>
   );

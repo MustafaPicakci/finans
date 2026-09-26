@@ -10,7 +10,8 @@ import { db, initDb, nowLocal, todayLocal, zarfGecerli, TENANT_TABLES, GLOBAL_SE
 import { loadAllData } from "./data.js";
 import { refreshAll, backfillPriceHistory, refreshCorporateActions, refreshCompanyEvents } from "./prices.js";
 import { refreshBenchmarks, autoBackfill } from "./benchmarks.js";
-import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, purgeStaleEmailTokens, SESSION_COOKIE, type SessionUser , sahteSalt, e2eeMalzemeDogrula } from "./auth.js";
+import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, purgeStaleEmailTokens, SESSION_COOKIE, type SessionUser , sahteSalt, e2eeMalzemeDogrula, PAKET } from "./auth.js";
+import { ZARF, ZARF_DUZ, type ZarfliTablo } from "@finans/crypto/map";
 import { sendMail, resetEmail, verifyEmail, mailConfigured, verifyMailConfig, mailFromWarning } from "./mail.js";
 import { mountAi } from "./ai/index.js";
 import { getProvider } from "./ai/provider.js";
@@ -184,8 +185,8 @@ api.post("/auth/login", async (c) => {
   const v2 = typeof b.auth_token === "string", legacy = typeof b.password === "string";
   if (!email2 || (!v2 && !legacy)) return c.json({ error: "E-posta ve parola gerekli" }, 400);
   if (tooManyLoginFails(email2)) return c.json({ error: "Çok fazla başarısız deneme, biraz sonra tekrar dene" }, 429);
-  const user = await db.get<{ id: number; email: string; password_hash: string; email_verified: boolean; password_kdf: string; dek_wrapped_pw: string | null }>(
-    "SELECT id, email, password_hash, email_verified, password_kdf, dek_wrapped_pw FROM users WHERE email = ?", email2,
+  const user = await db.get<{ id: number; email: string; password_hash: string; email_verified: boolean; password_kdf: string; dek_wrapped_pw: string | null; kurtarma: boolean }>(
+    "SELECT id, email, password_hash, email_verified, password_kdf, dek_wrapped_pw, dek_wrapped_rk IS NOT NULL AS kurtarma FROM users WHERE email = ?", email2,
   );
   /* Yol ile hesabın türü EŞLEŞMEK ZORUNDA. v2 hesabın parolası sunucuya hiç gelmemeli (gelirse
      reddedilir, kabul edilseydi eski bir istemci sıfır bilgi garantisini sessizce delerdi);
@@ -222,7 +223,10 @@ api.post("/auth/login", async (c) => {
   const { token, expires } = await createSession(user.id);
   setSessionCookie(c, token, expires);
   console.log(`[audit] Kullanıcı giriş yaptı: ${user.email} (id:${user.id})`);
-  return c.json({ user: { id: user.id, email: user.email }, yukseltildi, dek_wrapped_pw: dekPaketi ?? null });
+  /* `kurtarma`: DEK'in kurtarma koduyla sarılı kopyası var mı. Yoksa istemci uygulamayı
+     açmadan ÖNCE kodu gösterip kaydettirir (aşama 6) — veri şifreli hâle geldiği an
+     parola tek anahtar olmamalı. */
+  return c.json({ user: { id: user.id, email: user.email }, yukseltildi, dek_wrapped_pw: dekPaketi ?? null, kurtarma: !!user.kurtarma });
 });
 
 api.post("/auth/logout", async (c) => {
@@ -337,6 +341,20 @@ api.use("*", async (c, next) => {
   const user = await getSessionUser(getCookie(c, SESSION_COOKIE));
   if (!user) return c.json({ error: "Giriş gerekli" }, 401);
   c.set("user", user);
+  await next();
+});
+
+/* DÜZ ZARF KAPISI (E2EE aşama 6). Göçü bitmiş bir kullanıcıdan `p1:` (düz metin zarf)
+   kabul edilmez: tarayıcı artık yalnız şifreli yazar, düz zarf gelmesi ya eski bir PWA
+   paketi ya da boru hattını atlayan bir hata demektir — ikisinde de veriyi SESSİZCE düz
+   yazmak, şifrelemenin tüm iddiasını geri alırdı. Tek tek uçlara serpiştirmek yerine
+   burada, gövdenin METNİNDE aranır: hangi alanda gelirse gelsin yakalanır. */
+api.use("*", async (c, next) => {
+  const m = c.req.method;
+  if (m !== "GET" && m !== "HEAD" && c.get("user").e2ee) {
+    const govde = await c.req.text().catch(() => "");
+    if (govde.includes(`"${ZARF_DUZ}{`)) return c.json({ error: "Şifrelenmemiş veri reddedildi — uygulamayı yenile" }, 400);
+  }
   await next();
 });
 
@@ -1226,6 +1244,82 @@ api.get("/export", async (c) => {
 });
 
 /* ---- KVKK: hesabı ve tüm verisini sil (parola onaylı; ON DELETE CASCADE ile tenant verisi + oturumlar) ---- */
+/* ================= E2EE aşama 6: tarayıcıda şifreleme göçü =================
+   Aşama 5'in göçü veriyi SUNUCUDA düz metin zarflara (`p1:`) topladı; şifreli zarfa (`v1:`)
+   çevirmeyi sunucu YAPAMAZ — anahtar yok. Kullanıcı giriş yapınca tarayıcı düz zarfları
+   çeker, şifreler, geri yazar; hepsi bitince `tamam` der ve düz zarf kapısı kapanır.
+   Uçların hiçbiri içerik görmez: sunucu yalnız "hangi satır hâlâ düz" sorusunu cevaplar ve
+   şifreli paketi yerine koyar. */
+const GOC_TABLOLARI = Object.keys(ZARF) as ZarfliTablo[];
+const gocAnahtari = (t: ZarfliTablo): string[] =>
+  t === "recurring_amounts" ? ["recurring_id", "from_month"] : t === "ai_plans" ? ["plan_id"] : ["id"];
+const GOC_SAYFA = 400;
+
+/* Kurtarma paketi YALNIZ YOKSA yazılır. Değiştirmek (kodu yenilemek) oturumu çalınmış
+   birinin gerçek kodu geçersiz kılmasına izin verirdi — o ayrı, parola onaylı bir akış olur. */
+api.post("/e2ee/kurtarma", async (c) => {
+  const uid = c.get("user").id;
+  const { dek_wrapped_rk } = await c.req.json().catch(() => ({}));
+  if (typeof dek_wrapped_rk !== "string" || !PAKET.test(dek_wrapped_rk)) return c.json({ error: "geçersiz kurtarma paketi" }, 400);
+  const r = await db.run("UPDATE users SET dek_wrapped_rk=? WHERE id=? AND dek_wrapped_rk IS NULL", dek_wrapped_rk, uid);
+  if (!r.changes) return c.json({ error: "kurtarma kodu zaten kayıtlı" }, 409);
+  console.log(`[audit] Kurtarma kodu kaydedildi: (id:${uid})`);
+  return c.json({ ok: true });
+});
+
+api.get("/e2ee/bekleyen", async (c) => {
+  const uid = c.get("user").id;
+  const satirlar: { tablo: ZarfliTablo; anahtar: Record<string, unknown>; enc: string }[] = [];
+  for (const t of GOC_TABLOLARI) {
+    if (satirlar.length >= GOC_SAYFA) break;
+    const k = gocAnahtari(t);
+    const rows = await db.all<Record<string, unknown>>(
+      `SELECT ${k.join(", ")}, enc FROM ${t} WHERE user_id=? AND enc LIKE 'p1:%' LIMIT ?`, uid, GOC_SAYFA - satirlar.length);
+    for (const r of rows) satirlar.push({ tablo: t, anahtar: Object.fromEntries(k.map((x) => [x, r[x]])), enc: String(r.enc) });
+  }
+  return c.json({ tamam: c.get("user").e2ee, satirlar });
+});
+
+/* Şifreli paketi yerine koyar. Koşul `enc LIKE 'p1:%'`: arada aynı satır (başka sekmeden)
+   zaten şifreli yazıldıysa ÜZERİNE YAZILMAZ — o yazım daha yenidir. */
+api.put("/e2ee/satirlar", async (c) => {
+  const uid = c.get("user").id;
+  const b = await c.req.json().catch(() => null);
+  const satirlar = b?.satirlar;
+  if (!Array.isArray(satirlar) || !satirlar.length || satirlar.length > GOC_SAYFA) return c.json({ error: "geçersiz istek" }, 400);
+  for (const x of satirlar) {
+    if (!GOC_TABLOLARI.includes(x?.tablo)) return c.json({ error: "bilinmeyen tablo" }, 400);
+    if (typeof x.enc !== "string" || !x.enc.startsWith("v1:") || !zarfGecerli(x.enc, 64_000)) return c.json({ error: "şifreli zarf gerekli" }, 400);
+    if (!x.anahtar || typeof x.anahtar !== "object" || gocAnahtari(x.tablo).some((k) => x.anahtar[k] == null)) return c.json({ error: "satır anahtarı eksik" }, 400);
+  }
+  let guncellenen = 0;
+  await db.tx(async (t) => {
+    for (const x of satirlar as { tablo: ZarfliTablo; anahtar: Record<string, unknown>; enc: string }[]) {
+      const k = gocAnahtari(x.tablo);
+      const r = await t.run(
+        `UPDATE ${x.tablo} SET enc=? WHERE user_id=? AND enc LIKE 'p1:%' AND ${k.map((c) => `${c}=?`).join(" AND ")}`,
+        x.enc, uid, ...k.map((c) => x.anahtar[c]));
+      guncellenen += r.changes;
+    }
+  });
+  return c.json({ guncellenen });
+});
+
+/* Göç bitti. Sunucu İSTEMCİYE GÜVENMEZ: düz zarf gerçekten kalmadığını kendisi sayar.
+   Kurtarma paketi yoksa da bitmez — şifreli veri tek anahtara (parolaya) bağlı kalmamalı. */
+api.post("/e2ee/tamam", async (c) => {
+  const uid = c.get("user").id;
+  const u = await db.get<{ rk: boolean }>("SELECT dek_wrapped_rk IS NOT NULL AS rk FROM users WHERE id=?", uid);
+  if (!u?.rk) return c.json({ error: "önce kurtarma kodu kaydedilmeli" }, 409);
+  let kalan = 0;
+  for (const t of GOC_TABLOLARI)
+    kalan += (await db.get<{ n: number }>(`SELECT count(*)::int AS n FROM ${t} WHERE user_id=? AND enc LIKE 'p1:%'`, uid))!.n;
+  if (kalan) return c.json({ error: `${kalan} satır hâlâ şifrelenmemiş`, kalan }, 409);
+  await db.run("UPDATE users SET e2ee_migrated_at=? WHERE id=? AND e2ee_migrated_at IS NULL", nowLocal(), uid);
+  console.log(`[audit] Veri tamamen şifreli (göç bitti): (id:${uid})`);
+  return c.json({ ok: true });
+});
+
 api.post("/account/delete", async (c) => {
   const uid = c.get("user").id;
   const { password, auth_token } = await c.req.json().catch(() => ({}));

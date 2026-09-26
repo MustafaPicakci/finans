@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { zarfla, zarfAc, veriAc, planIslemleri } from "./zarf";
+import { zarfla as zarflaHam, zarfAc, veriAc, planIslemleri, muhurle, muhurleDuz, Muhur, zarfAad } from "./zarf";
+import { dekAnahtari, yeniDek } from "@finans/crypto";
 import { ZARF } from "@finans/crypto/map";
 import type { AllData } from "@finans/engine";
 
@@ -12,7 +13,10 @@ const bos = (over: Partial<AllData> = {}): AllData => ({
   prices: [], price_history: [], categories: [], transactions: [], deposits: [], recurring_realized: [],
   statement_payments: [], settings: {}, recurring_amounts: [], account_entries: [], transfers: [], ...over,
 });
-const zarfIci = (enc: unknown) => zarfAc({ enc }) as Record<string, unknown>;
+/* Akış testleri biçimden bağımsızdır: mühürler düz `p1` zarfına çevrilip incelenir. Gerçek
+   şifreleme (v1) aşağıda ayrı test ediliyor. */
+const zarfla = (...a: Parameters<typeof zarflaHam>) => muhurleDuz(zarflaHam(...a));
+const zarfIci = (enc: unknown): Record<string, unknown> => JSON.parse(String(enc).slice(3));
 
 /* SIZINTI TESTİ — rota başına. Gövdedeki her hassas değer ayırt edilebilir bir işaret
    taşır (GIZLI_… / 987654.x). Çıktıdan zarf alanları (`enc`, `*_enc`) ÇIKARILINCA geriye
@@ -148,25 +152,73 @@ describe("yönlendirme", () => {
 });
 
 describe("okuma", () => {
-  it("zarfı açar, alanları satıra yerleştirir, enc'i kaldırır", () => {
-    expect(zarfAc({ id: 1, kind: "expense", enc: 'p1:{"name":"Market"}' })).toEqual({ id: 1, kind: "expense", name: "Market" });
+  it("zarfı açar, alanları satıra yerleştirir, enc'i kaldırır", async () => {
+    expect(await zarfAc({ id: 1, kind: "expense", enc: 'p1:{"name":"Market"}' }, "categories", null)).toEqual({ id: 1, kind: "expense", name: "Market" });
   });
-  it("zarfsız satır (göç öncesi sunucu, eski PWA önbelleği) olduğu gibi döner", () => {
-    expect(zarfAc({ id: 1, name: "Market" })).toEqual({ id: 1, name: "Market" });
+  it("zarfsız satır (stub, eski PWA önbelleği) olduğu gibi döner", async () => {
+    expect(await zarfAc({ id: 1, name: "Market" }, "categories", null)).toEqual({ id: 1, name: "Market" });
   });
-  it("tanınmayan biçim SESSİZCE yutulmaz", () => {
-    expect(() => zarfAc({ enc: "x9:abc" })).toThrow(/tanınmayan/);
+  it("tanınmayan biçim SESSİZCE yutulmaz", async () => {
+    await expect(zarfAc({ enc: "x9:abc" }, "categories", null)).rejects.toThrow(/tanınmayan/);
   });
-  it("sunucunun artık yapamadığı AD SIRALAMASINI kurar (Türkçe)", () => {
-    const d = veriAc(bos({ categories: [
+  it("sunucunun artık yapamadığı AD SIRALAMASINI kurar (Türkçe)", async () => {
+    const d = await veriAc(bos({ categories: [
       { id: 1, kind: "expense", enc: 'p1:{"name":"Ulaşım"}' }, { id: 2, kind: "expense", enc: 'p1:{"name":"Çay"}' },
       { id: 3, kind: "expense", enc: 'p1:{"name":"Aidat"}' },
-    ] as any }));
+    ] as any }), null);
     expect(d.categories.map((c) => c.name)).toEqual(["Aidat", "Çay", "Ulaşım"]);
   });
-  it("gidiş-dönüş: zarflanan satır okunduğunda aynı alanları verir", () => {
-    const out = zarfla("POST", "/oneoffs", { date: "2026-12-01", name: "Vergi", amount: -8400.25 }, bos());
-    expect(zarfAc({ id: 1, ...out })).toEqual({ id: 1, date: "2026-12-01", name: "Vergi", amount: -8400.25 });
+});
+
+/* ŞİFRELEME (aşama 6). Gerçek WebCrypto, gerçek AES-GCM. */
+describe("şifreli zarf (v1)", () => {
+  const anahtar = async (userId = 7) => ({ userId, dek: await dekAnahtari(yeniDek()) });
+  it("gidiş-dönüş: şifrelenen satır okunduğunda aynı alanları verir", async () => {
+    const a = await anahtar();
+    const out: any = await muhurle(zarflaHam("POST", "/oneoffs", { date: "2026-12-01", name: "Vergi", amount: -8400.25 }, bos()), a);
+    expect(out.enc).toMatch(/^v1:/);
+    expect(JSON.stringify(out)).not.toMatch(/Vergi|8400/);
+    expect(await zarfAc({ id: 1, ...out }, "oneoffs", a)).toEqual({ id: 1, date: "2026-12-01", name: "Vergi", amount: -8400.25 });
+  });
+  it("tüm mühürler şifrelenir — iç içe diziler dahil (toplu içe aktarma, günlük satırları)", async () => {
+    const a = await anahtar();
+    const ham = zarflaHam("POST", "/transactions/bulk", { rows: [{ date: "2026-01-01", name: "A", amount: -1, account_id: 1 }, { date: "2026-01-02", name: "B", amount: -2 }] }, veri);
+    const out = await muhurle(ham, a);
+    const metin = JSON.stringify(out);
+    expect(metin).not.toMatch(/"p1:/);
+    expect((metin.match(/"v1:/g) ?? []).length).toBe((metin.match(/_?enc"/g) ?? []).length);
+    expect(JSON.stringify(out, (_, v) => (v instanceof Muhur ? "MUHUR" : v))).not.toContain("MUHUR");
+  });
+  it("AAD: başka tabloya ya da başka kullanıcıya taşınan zarf AÇILMAZ", async () => {
+    const a = await anahtar(7);
+    const { enc } = (await muhurle(zarflaHam("POST", "/categories", { name: "Maaş", kind: "income" }, bos()), a)) as any;
+    expect(await zarfAc({ enc }, "categories", a)).toEqual({ name: "Maaş" });
+    await expect(zarfAc({ enc }, "portfolios", a)).rejects.toThrow();
+    await expect(zarfAc({ enc }, "categories", { ...a, userId: 8 })).rejects.toThrow();
+    expect(zarfAad("categories", 7)).toBe("categories:7");
+  });
+  it("yanlış anahtar ya da anahtarsız okuma sessizce geçmez", async () => {
+    const a = await anahtar(), b = await anahtar();
+    const { enc } = (await muhurle(zarflaHam("POST", "/categories", { name: "X", kind: "income" }, bos()), a)) as any;
+    await expect(zarfAc({ enc }, "categories", b)).rejects.toThrow();
+    await expect(zarfAc({ enc }, "categories", null)).rejects.toThrow(/anahtar/);
+  });
+  it("aynı içerik iki kez şifrelenince iki FARKLI paket çıkar (IV rastgele)", async () => {
+    const a = await anahtar();
+    const [x, y] = await Promise.all([1, 2].map(() => muhurle(zarflaHam("POST", "/categories", { name: "X", kind: "income" }, bos()), a))) as any[];
+    expect(x.enc).not.toBe(y.enc);
+  });
+  it("uzunluk dolgusu: kovaya sığan farklı uzunluktaki adlar AYNI boyda paket verir", async () => {
+    const a = await anahtar();
+    const boy = async (name: string) => ((await muhurle(zarflaHam("POST", "/categories", { name, kind: "income" }, bos()), a)) as any).enc.length;
+    expect(await boy("A")).toBe(await boy("Market Alışverişi"));
+    expect(await boy("x".repeat(200))).toBeGreaterThan(await boy("A"));
+  });
+  it("karışık veri: p1 ve v1 satırları aynı listede açılır (göç yarıdayken)", async () => {
+    const a = await anahtar();
+    const { enc } = (await muhurle(zarflaHam("POST", "/categories", { name: "Şifreli", kind: "income" }, bos()), a)) as any;
+    const d = await veriAc(bos({ categories: [{ id: 1, kind: "income", enc }, { id: 2, kind: "income", enc: 'p1:{"name":"Düz"}' }] as any }), a);
+    expect(d.categories.map((c) => c.name)).toEqual(["Düz", "Şifreli"]);
   });
 });
 

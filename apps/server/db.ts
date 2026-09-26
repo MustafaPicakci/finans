@@ -390,6 +390,9 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS kdf_salt text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS kdf_params text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS dek_wrapped_pw text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS dek_wrapped_rk text;
+-- E2EE aşama 6: bu kullanıcının TÜM zarfları şifreli (v1) — tarayıcı göçü bitirdi. Doluyken
+-- sunucu bu kullanıcıdan düz metin zarf (p1) KABUL ETMEZ (index.ts, guard'tan sonraki kapı).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS e2ee_migrated_at text;
 -- Sunucunun kendi sırları. AYRI tablo ve bu bilinçli: settings'e konamazdı, çünkü
 -- /api/all global ayarların HEPSİNİ her giriş yapmış istemciye gönderiyor (data.ts) —
 -- sır orada dursaydı her kullanıcı onu okurdu. Bu tablo hiçbir uçtan okunmaz.

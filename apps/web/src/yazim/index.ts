@@ -3,16 +3,19 @@
    ----------------------------------------------------------------------------
    Formlar (`api.post/put`), adlandırılmış uçlar (`payStatement`, `realizeRecurring`…) ve
    asistanın yazma araçları (`features/asistan/istemci.ts`) bu fonksiyondan geçer.
-   Tek kapı olmasının sebebi şifreleme: aşama 6'da gövdenin hassas alanları burada
-   zarflanacak — kapıyı atlayan her yol şifrelemeyi de atlardı ve bu SESSİZ olurdu
-   (düz metin veritabanına yazılır, kimse fark etmez).
+   Tek kapı olmasının sebebi şifreleme: gövdenin hassas alanları burada zarflanıp
+   şifrelenir — kapıyı atlayan her yol şifrelemeyi de atlardı ve bu SESSİZ olurdu
+   (düz metin veritabanına yazılır, kimse fark etmez). Derleme kapısı:
+   scripts/check-yazim.mjs.
 
-   Boru hattı: türetilen tutarları tamamla (tutar.ts) → hassas alanları zarfla (zarf.ts) → gönder.
+   Boru hattı: türetilen tutarları tamamla (tutar.ts) → hassas alanları zarfla (zarf.ts)
+   → mühürle, yani şifrele (aktif veri anahtarıyla) → gönder.
    Sıra önemli: tutar zarflamadan ÖNCE hesaplanır (zarfın içine girecek değer odur). */
 
 import type { AllData } from "@finans/engine";
 import { tutarTamamla } from "./tutar";
-import { zarfla, ZarfHatasi } from "./zarf";
+import { zarfla, muhurle, muhurVar, ZarfHatasi } from "./zarf";
+import { aktifAnahtar } from "./anahtar";
 
 /** Son `/api/all` yanıtı — türetilen tutarlar bu veriden hesaplanır. `api.all()` günceller. */
 let sonVeri: AllData | null = null;
@@ -30,6 +33,13 @@ export async function yaz(method: string, path: string, body?: unknown): Promise
   } catch (e) {
     if (e instanceof ZarfHatasi) return { status: 400, data: { error: e.message } };
     throw e;
+  }
+  /* Şifrelenecek bir şey varsa anahtar ŞART. Anahtarsız bir oturum (App bunu açılışta
+     engeller) düz metne geri DÜŞMEZ — 401 döner ve kullanıcı yeniden girişe yönlenir. */
+  if (muhurVar(govde)) {
+    const a = aktifAnahtar();
+    if (!a) return { status: 401, data: { error: "Veri anahtarı bu cihazda yok — tekrar giriş yap" } };
+    govde = await muhurle(govde, a);
   }
   const r = await fetch(`/api${path}`, {
     method,

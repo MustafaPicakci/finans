@@ -1,5 +1,5 @@
 /* ============================================================================
-   Zarf codec'i — hassas kolonlar tek bir `enc` alanında (E2EE aşama 5)
+   Zarf codec'i — hassas kolonlar tek bir `enc` alanında (E2EE aşama 5–6)
    ----------------------------------------------------------------------------
    OKUMA: `/api/all` satırları `enc` taşır; burada açılıp alanlar satıra geri yerleştirilir.
    Uygulamanın geri kalanı `t.amount`, `c.name` görmeye DEVAM EDER — zarf yalnız bu
@@ -9,42 +9,115 @@
    değişiyor) zarf BÜTÜN olarak yeniden kurulur: sunucu şifreli bir zarfın içine alan
    ekleyemez, yani eksik alanlar mevcut satırdan tamamlanır.
 
-   Biçim şimdilik `p1:` — DÜZ METİN zarf. Tesisat şifrelemeden ÖNCE uçtan uca çalışsın ve
-   psql ile okunabilsin diye. Aşama 6'da `zarfla`/`zarfAc` AES-GCM (`v1:`) kullanacak;
-   çağıranlar değişmez. */
+   İKİ BİÇİM (önek kendini tarif eder, her satır ayrı ayrı okunur):
+     p1:{json}          düz metin zarf — aşama 5'in göçü sunucuda bunu üretti; OKUNUR ama
+                        artık YAZILMAZ. Girişte tarayıcı bunları v1'e çevirir (goc.ts).
+     v1:<iv>:<ct>       AES-256-GCM, DEK ile. AAD = `<tablo>:<user_id>`: sunucu bir zarfı
+                        başka bir tabloya ya da başka bir kullanıcının satırına taşırsa
+                        çözme BAŞARISIZ olur. (Aynı kullanıcının iki satırının takasını
+                        yakalamaz — bilinen ve kabul edilmiş sınır, docs/E2EE.md.)
+
+   İşleyiciler (OZEL/AI) SENKRONDUR ve `Muhur` yer tutucusu bırakır; asıl şifreleme
+   `muhurle`de, gönderimden hemen önce ve tek geçişte yapılır. Sebep: WebCrypto asenkron,
+   işleyiciler ise sunucudan taşınmış ve testli iş mantığı — hepsini async'e çevirmek
+   hiçbir şey kazandırmadan her birine hata yüzeyi eklerdi. */
 
 import { ZARF, SIRA, ZARF_DUZ, type ZarfliTablo } from "@finans/crypto/map";
+import { sar, ac, sifreliMi } from "@finans/crypto";
 import type { AllData } from "@finans/engine";
+import type { Anahtar } from "./anahtar";
 
 type Satir = Record<string, unknown>;
 
-/** `tablo`: aşama 6'da zarfın AAD'si olacak (şifreli zarf başka bir tabloya taşınırsa açılmasın). */
-function zarfKur(_tablo: ZarfliTablo, alanlar: Satir): string {
-  return ZARF_DUZ + JSON.stringify(alanlar);
+/** Şifrelenmeyi bekleyen zarf. `yaz()` gönderimden önce `muhurle` ile gerçek zarfa çevirir. */
+export class Muhur {
+  constructor(readonly tablo: ZarfliTablo, readonly alanlar: Satir) {}
+}
+function zarfKur(tablo: ZarfliTablo, alanlar: Satir): Muhur {
+  return new Muhur(tablo, alanlar);
 }
 
-/** Bir satırın zarfını açar ve alanları satıra yerleştirir. Zarfsız satır (göç öncesi
-    sunucu, eski PWA önbelleği) olduğu gibi döner. Bilinmeyen biçim SESSİZCE yutulmaz. */
-export function zarfAc(satir: Satir): Satir {
-  const enc = satir.enc;
-  if (typeof enc !== "string") return satir;
-  const { enc: _, ...kalan } = satir;
-  if (enc.startsWith(ZARF_DUZ)) return { ...kalan, ...JSON.parse(enc.slice(ZARF_DUZ.length)) };
+export const zarfAad = (tablo: ZarfliTablo, userId: number) => `${tablo}:${userId}`;
+
+/* Uzunluk sızıntısı: şifreli metnin boyu düz metnin boyunu söyler ("Migros" ile
+   "Migros Jet Market Ataşehir" ayırt edilir, 450 ile 45.000 da). JSON sonuna boşluk
+   eklenerek 32 baytlık kovalara yuvarlanır — JSON.parse sondaki boşluğu yok sayar,
+   yani okuma tarafında hiçbir şey değişmez. */
+const KOVA = 32;
+const yazici = new TextEncoder(), okuyucu = new TextDecoder();
+function doldur(json: string): Uint8Array<ArrayBuffer> {
+  const b = yazici.encode(json);
+  const hedef = Math.ceil((b.length + 1) / KOVA) * KOVA;
+  const out = new Uint8Array(hedef).fill(0x20);
+  out.set(b);
+  return out;
+}
+
+/** Nesnedeki her `Muhur`ü `f`'in ürettiği zarfla değiştirir (diziler ve iç içe nesneler dahil). */
+function degistir(o: unknown, f: (m: Muhur) => string): unknown {
+  if (o instanceof Muhur) return f(o);
+  if (Array.isArray(o)) return o.map((x) => degistir(x, f));
+  if (o && typeof o === "object") return Object.fromEntries(Object.entries(o).map(([k, v]) => [k, degistir(v, f)]));
+  return o;
+}
+function muhurler(o: unknown, out: Muhur[] = []): Muhur[] {
+  if (o instanceof Muhur) out.push(o);
+  else if (Array.isArray(o)) o.forEach((x) => muhurler(x, out));
+  else if (o && typeof o === "object") Object.values(o).forEach((v) => muhurler(v, out));
+  return out;
+}
+
+export const muhurVar = (o: unknown): boolean => muhurler(o).length > 0;
+
+/** Tek zarf şifreleme — yazma yolu (`muhurle`) ve göç (`goc.ts`) AYNI fonksiyonu kullanır. */
+export const zarfSifrele = (tablo: ZarfliTablo, alanlar: Satir, a: Anahtar): Promise<string> =>
+  sar(a.dek, doldur(JSON.stringify(alanlar)), zarfAad(tablo, a.userId));
+
+/** Gönderimden önce: tüm mühürleri şifreler (paralel). */
+export async function muhurle(o: unknown, a: Anahtar): Promise<unknown> {
+  const hepsi = muhurler(o);
+  if (!hepsi.length) return o;
+  const paket = new Map<Muhur, string>();
+  await Promise.all(hepsi.map(async (m) => paket.set(m, await zarfSifrele(m.tablo, m.alanlar, a))));
+  return degistir(o, (m) => paket.get(m)!);
+}
+
+/** YALNIZ TEST: mühürleri düz metin `p1` zarfına çevirir (akış testleri biçimden bağımsız). */
+export const muhurleDuz = (o: unknown): any => degistir(o, (m) => ZARF_DUZ + JSON.stringify(m.alanlar));
+
+/** Tek bir zarfın içini açar. */
+export async function zarfIci(enc: string, tablo: ZarfliTablo, a: Anahtar | null): Promise<Satir> {
+  if (enc.startsWith(ZARF_DUZ)) return JSON.parse(enc.slice(ZARF_DUZ.length));
+  if (sifreliMi(enc)) {
+    if (!a) throw new Error("şifreli veri var ama veri anahtarı yok — yeniden giriş gerekli");
+    return JSON.parse(okuyucu.decode(await ac(a.dek, enc, zarfAad(tablo, a.userId))));
+  }
   throw new Error(`tanınmayan zarf biçimi: ${enc.slice(0, 4)}`);
 }
 
-/** `/api/all` yanıtındaki tüm zarflı tabloları açar ve sunucunun artık yapamadığı sıralamayı kurar. */
-export function veriAc(d: AllData): AllData {
+/** Bir satırın zarfını açar ve alanları satıra yerleştirir. Zarfsız satır (göç öncesi
+    sunucu, stub) olduğu gibi döner. Bilinmeyen biçim ya da açılamayan zarf SESSİZCE
+    yutulmaz — yanlış rakam göstermek, hiç göstermemekten kötüdür. */
+export async function zarfAc(satir: Satir, tablo: ZarfliTablo, a: Anahtar | null): Promise<Satir> {
+  const enc = satir.enc;
+  if (typeof enc !== "string") return satir;
+  const { enc: _, ...kalan } = satir;
+  return { ...kalan, ...(await zarfIci(enc, tablo, a)) };
+}
+
+/** `/api/all` (ve dışa aktarma) yanıtındaki tüm zarflı tabloları açar ve sunucunun artık
+    yapamadığı sıralamayı kurar. */
+export async function veriAc<D extends object>(d: D, a: Anahtar | null): Promise<D> {
   const out: any = { ...d };
-  for (const tablo of Object.keys(ZARF) as ZarfliTablo[]) {
+  await Promise.all((Object.keys(ZARF) as ZarfliTablo[]).map(async (tablo) => {
     const satirlar = (d as any)[tablo];
-    if (!Array.isArray(satirlar)) continue;
-    let acik = satirlar.map(zarfAc);
+    if (!Array.isArray(satirlar)) return;
+    let acik = await Promise.all(satirlar.map((r: Satir) => zarfAc(r, tablo, a)));
     const alan = SIRA[tablo];
-    if (alan) acik = [...acik].sort((a, b) => String(a[alan] ?? "").localeCompare(String(b[alan] ?? ""), "tr"));
+    if (alan) acik = [...acik].sort((x, y) => String(x[alan] ?? "").localeCompare(String(y[alan] ?? ""), "tr"));
     out[tablo] = acik;
-  }
-  return out as AllData;
+  }));
+  return out;
 }
 
 /** Yol → zarflı tablo, JENERİK rotalar için (tek tablo, yan etkisiz ya da yan etkisi hassas olmayan). */
@@ -81,7 +154,7 @@ function ayir(tablo: ZarfliTablo, body: Satir, data: AllData | null, id?: number
    hassas (bakiye, işyeri adı) — artık istemci kurar, sunucu yalnız yazar. NOTLAR sunucunun
    ürettiklerinin BİREBİR aynısı (hesap hareketleri ekranı onları gösteriyor). Tutar 0 ise
    hareket yazılmaz (sunucudaki "0 tutar defteri kirletmez" kuralı). */
-const hareket = (amount: number, note: string): string | undefined =>
+const hareket = (amount: number, note: string): Muhur | undefined =>
   amount ? zarfKur("account_entries", { amount, note }) : undefined;
 const hesapAdi = (data: AllData | null, id: unknown) =>
   (data?.accounts.find((a) => a.id === Number(id)) as any)?.name ?? "";

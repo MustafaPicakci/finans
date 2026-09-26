@@ -2,6 +2,8 @@ import type { AllData } from "@finans/engine";
 import type { UserContext, ChatMessage, ChatResult } from "@finans/asistan";
 import { yaz, veriAyarla } from "./yazim";
 import { veriAc, zarfAc, planIslemleri, baslikTemizle } from "./yazim/zarf";
+import { aktifAnahtar } from "./yazim/anahtar";
+import type { ZarfliTablo } from "@finans/crypto/map";
 
 export type { Account, Recurring, RecurringAmount, Loan, OneOff, AssetType, Currency, Trade, Portfolio, Card, CardTx, Price, AllData } from "@finans/engine";
 
@@ -13,7 +15,8 @@ async function j<T>(r: Response): Promise<T> {
   if (!r.ok) throw new ApiError(r.status, ((await r.json().catch(() => ({}))) as any).error || r.statusText);
   return r.json();
 }
-export type SessionUser = { id: number; email: string };
+/** `e2ee`: /auth/me'den gelir — veri tamamen şifreli mi (göç bitti mi). Giriş yanıtında yoktur. */
+export type SessionUser = { id: number; email: string; e2ee?: boolean };
 /** Kayıt/sıfırlama/yükseltmede sunucuya giden sıfır bilgi malzemesi (bkz. features/auth/e2ee.ts) */
 export type E2eeMalzeme = { auth_token: string; kdf_salt: string; kdf_params: string; dek_wrapped_pw: string };
 /** Asistanın onay bekleyen tek işlemi: hangi araç, hangi argümanlar, kullanıcıya gösterilen özet */
@@ -43,7 +46,7 @@ async function yazJ<T = any>(method: string, path: string, body?: unknown): Prom
 export const api = {
   /* Zarflar BURADA açılır — uygulamanın geri kalanı düz alanları görür. `sonVeri` de AÇIK
      hâli tutar: türetilen tutarlar ve kısmi güncellemede zarfın yeniden kurulması onu okur. */
-  all: () => fetch("/api/all").then((r) => j<AllData>(r)).then((d) => { const a = veriAc(d); veriAyarla(a); return a; }),
+  all: () => fetch("/api/all").then((r) => j<AllData>(r)).then(async (d) => { const a = await veriAc(d, aktifAnahtar()); veriAyarla(a); return a; }),
   post: (route: string, body: unknown) => yazJ("POST", `/${route}`, body),
   put: (route: string, body: unknown) => yazJ("PUT", `/${route}`, body),
   del: (route: string, id: number) => fetch(`/api/${route}/${id}`, { method: "DELETE" }).then(j),
@@ -82,14 +85,16 @@ export const api = {
   aiKonusmalar: (imlec?: { at: string; id: number }) =>
     fetch(`/api/ai/conversations${imlec ? `?beforeAt=${encodeURIComponent(imlec.at)}&beforeId=${imlec.id}` : ""}`)
       .then((r) => j<{ conversations: AiKonusma[]; more: boolean }>(r))
-      .then((d) => ({ ...d, conversations: d.conversations.map((k) => zarfAc(k) as AiKonusma) })),
+      .then(async (d) => ({ ...d, conversations: await Promise.all(d.conversations.map((k) => zarfAc(k, "ai_conversations", aktifAnahtar()))) as AiKonusma[] })),
   /* Zarflar burada açılır (aşama 5d): başlık, mesajlar, plan özetleri, bekleyen plan. */
-  aiSohbet: (id: number) => fetch(`/api/ai/conversations/${id}`).then((r) => j<any>(r)).then((d): AiSohbet => {
-    const bekleyen = d.pending ? zarfAc(d.pending) : null;
+  aiSohbet: (id: number) => fetch(`/api/ai/conversations/${id}`).then((r) => j<any>(r)).then(async (d): Promise<AiSohbet> => {
+    const a = aktifAnahtar();
+    const bekleyen = d.pending ? await zarfAc(d.pending, "ai_plans", a) : null;
     return {
-      ...(zarfAc(d) as any),
-      messages: d.messages.map(zarfAc),
-      plans: d.plans.map(zarfAc),
+      ...(await zarfAc(d, "ai_conversations", a) as any),
+      messages: await Promise.all(d.messages.map((m: any) => zarfAc(m, "ai_messages", a))),
+      // plan satırının zarfı planın İLK günlük satırıdır (ai_actions)
+      plans: await Promise.all(d.plans.map((p: any) => zarfAc(p, "ai_actions", a))),
       pending: bekleyen ? { ...(bekleyen as any), actions: planIslemleri(bekleyen.actions) } : null,
     };
   }),
@@ -111,13 +116,20 @@ export const api = {
   aiPlanTuket: (planId: string) =>
     fetch(`/api/ai/plans/${encodeURIComponent(planId)}/consume`, { method: "POST" })
       .then((r) => j<{ conversationId: number | null; enc: string }>(r))
-      .then((d) => ({ conversationId: d.conversationId, actions: planIslemleri(zarfAc(d).actions) as AiAction[] })),
+      .then(async (d) => ({ conversationId: d.conversationId, actions: planIslemleri((await zarfAc(d, "ai_plans", aktifAnahtar())).actions) as AiAction[] })),
   aiGunlukYaz: (planId: string, items: { tool: string; summary: string; undo_method: string; undo_path: string }[]) => yazJ("POST", `/ai/plans/${encodeURIComponent(planId)}/actions`, { items }),
   aiGunlukOku: (planId: string) =>
     fetch(`/api/ai/plans/${encodeURIComponent(planId)}/actions`)
       .then((r) => j<{ actions: any[] }>(r))
-      .then((d) => ({ actions: d.actions.map(zarfAc) as { id: number; summary: string; undo_method: string; undo_path: string; conversation_id: number | null }[] })),
+      .then(async (d) => ({ actions: await Promise.all(d.actions.map((x) => zarfAc(x, "ai_actions", aktifAnahtar()))) as { id: number; summary: string; undo_method: string; undo_path: string; conversation_id: number | null }[] })),
   aiGeriAlindi: (planId: string, ids: number[]) => yazJ("POST", `/ai/plans/${encodeURIComponent(planId)}/undone`, { ids }),
+  /* ---- şifreleme göçü (E2EE aşama 6) — yalnız features/auth/goc.ts ve e2ee.ts çağırır ---- */
+  e2eeKurtarma: (dek_wrapped_rk: string) => yazJ("POST", "/e2ee/kurtarma", { dek_wrapped_rk }),
+  e2eeBekleyen: () => fetch("/api/e2ee/bekleyen")
+    .then((r) => j<{ tamam: boolean; satirlar: { tablo: ZarfliTablo; anahtar: Record<string, unknown>; enc: string }[] }>(r)),
+  e2eeSatirlar: (satirlar: { tablo: ZarfliTablo; anahtar: Record<string, unknown>; enc: string }[]) =>
+    yazJ<{ guncellenen: number }>("PUT", "/e2ee/satirlar", { satirlar }),
+  e2eeTamam: () => yazJ("POST", "/e2ee/tamam", {}),
   /* ---- auth (Faz 5.1) ---- */
   me: () => fetch("/api/auth/me").then((r) => j<{ user: SessionUser | null }>(r)),
   /* ---- sıfır bilgi girişi (E2EE aşama 3b) ----
@@ -129,7 +141,7 @@ export const api = {
   /** `password` yalnız legacy (henüz yükseltilmemiş) hesapta, ve o zaman `upgrade` ile birlikte gönderilir */
   login: (email: string, kanit: { auth_token: string } | { password: string; upgrade: E2eeMalzeme }) =>
     fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, ...kanit }) })
-      .then((r) => j<{ user: SessionUser; yukseltildi: boolean; dek_wrapped_pw: string | null }>(r)),
+      .then((r) => j<{ user: SessionUser; yukseltildi: boolean; dek_wrapped_pw: string | null; kurtarma: boolean }>(r)),
   register: (email: string, malzeme: E2eeMalzeme) =>
     fetch("/api/auth/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, ...malzeme }) })
       .then((r) => j<{ user?: SessionUser; pending?: boolean }>(r)),
@@ -150,7 +162,7 @@ export const api = {
   exportData: async () => {
     const r = await fetch("/api/export");
     if (!r.ok) throw new ApiError(r.status, "İndirilemedi");
-    const acik = veriAc(await r.json());
+    const acik = await veriAc(await r.json(), aktifAnahtar());
     return new Blob([JSON.stringify(acik, null, 2)], { type: "application/json" });
   },
   /** Kanıt hesap türüne göre `e2ee.parolaKaniti` ile üretilir (v2: auth_token, legacy: password). */

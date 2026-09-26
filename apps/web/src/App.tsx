@@ -18,6 +18,8 @@ import { Kartlar } from "./features/kart";
 import { Portfoy } from "./features/portfoy";
 import { Kayitlar } from "./features/kayitlar";
 import { Asistan, clearChat } from "./features/asistan";
+import { anahtarYukle, anahtarSil } from "./yazim/anahtar";
+import { sifrelemeGocu } from "./yazim/goc";
 import { AddSheet, type AddState, type KalemPrefill, type TradePrefill } from "./AddSheet";
 
 /* ————— ana uygulama ————— */
@@ -53,17 +55,47 @@ export default function App() {
   });
 
   const reload = useCallback(() => api.all().then(setData).catch((e) => {
-    if (e instanceof ApiError && e.status === 401) { setUser(null); setData(null); } // oturum düştü → giriş ekranı
+    if (e instanceof ApiError && e.status === 401) { anahtarSil(); setUser(null); setData(null); } // oturum düştü → giriş ekranı
     else setErr(String(e));
   }), []);
-  useEffect(() => {
-    api.me().then(({ user }) => { setUser(user); if (user) reload(); }).catch((e) => setErr(String(e)));
+
+  /* E2EE aşama 6 — oturum açıldıktan sonra, veriyi göstermeden önce: düz zarf kaldıysa
+     (aşama 5'ten gelen veri) tarayıcıda şifrele. Birkaç yüz satır bir-iki saniye sürer.
+     Başarısız olursa uygulama YİNE açılır: okuma yolu düz ve şifreli zarfı yan yana okur,
+     kalan satırlar bir sonraki açılışta şifrelenir — ama hata SESSİZ geçmez, gösterilir. */
+  const [goc, setGoc] = useState<string | null>(null);
+  const [gocHata, setGocHata] = useState<string | null>(null);
+  const oturumuBaslat = useCallback(async (u: SessionUser) => {
+    if (!u.e2ee) {
+      setGoc("Verilerin şifreleniyor…");
+      try { await sifrelemeGocu((n) => setGoc(`Verilerin şifreleniyor… ${n} kayıt`)); }
+      catch (e) { console.error("[e2ee] şifreleme göçü:", e); setGocHata(String((e as Error).message ?? e)); }
+      setGoc(null);
+    }
+    await reload();
   }, [reload]);
+
+  /* Oturum var ama bu cihazda veri anahtarı yoksa (IndexedDB temizlenmiş, aşama 6 öncesinden
+     kalma oturum, gizli pencere) uygulama AÇILMAZ: anahtarsız oturum şifreli veriyi ne okur
+     ne yazar. Oturum kapatılır ve parola bir kez daha sorulur. */
+  const [girisNotu, setGirisNotu] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    api.me().then(async ({ user }) => {
+      if (user && !(await anahtarYukle(user.id))) {
+        await api.logout().catch(() => {});
+        setGirisNotu("Güvenliğin için bu cihazda bir kez daha giriş yapman gerekiyor.");
+        setUser(null);
+        return;
+      }
+      setUser(user);
+      if (user) oturumuBaslat(user);
+    }).catch((e) => setErr(String(e)));
+  }, [oturumuBaslat]);
   /* Sohbetler Faz 34'ten beri sunucuda ve kullanıcıya scope'lu, yani çıkışta SİLİNMEZ
      (başka cihazdan devam edilebilsin diye). Temizlenen yalnız bu cihazın "en son şu
      sohbetteydim" işaretçisi + Faz 22-33'ün artık okunmayan localStorage sohbeti —
      ortak cihazda sonraki kullanıcı öncekinin konuşmasının açıldığını görmesin. */
-  const logout = useCallback(async () => { await api.logout().catch(() => {}); clearChat(); setUser(null); setData(null); }, []);
+  const logout = useCallback(async () => { await api.logout().catch(() => {}); await anahtarSil(); clearChat(); setUser(null); setData(null); }, []);
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try { await api.refreshPrices(); await reload(); } catch { /* best-effort */ } finally { setRefreshing(false); }
@@ -190,9 +222,19 @@ export default function App() {
 
   if (err) return <Center>API'ye ulaşılamadı: {err}. Sunucu çalışıyor mu? (npm run dev)</Center>;
   // E-posta bağlantısıyla gelen reset/verify token'ı: oturum yüklenmesini beklemeden Auth ekranını göster
-  if (urlAuth) return <Auth urlAuth={urlAuth} onAuthed={(u) => { setUser(u); setErr(""); setUrlAuth(null); reload(); }} />;
+  if (urlAuth) return <Auth urlAuth={urlAuth} onAuthed={(u) => { setUser(u); setErr(""); setUrlAuth(null); oturumuBaslat(u); }} />;
   if (user === undefined) return <Center>Yükleniyor…</Center>;
-  if (user === null) return <Auth onAuthed={(u) => { setUser(u); setErr(""); reload(); }} />;
+  if (user === null) return <Auth bilgi={girisNotu} onAuthed={(u) => { setUser(u); setErr(""); setGirisNotu(undefined); oturumuBaslat(u); }} />;
+  if (goc) return <Center>{goc}</Center>;
+  if (gocHata) return (
+    <Center>
+      <div style={{ maxWidth: 360, textAlign: "center", lineHeight: 1.6 }}>
+        Verilerinin bir kısmı şifrelenemedi ({gocHata}). Uygulama çalışmaya devam eder;
+        kalan kayıtlar bir sonraki açılışta yeniden denenir.
+        <div style={{ marginTop: 12 }}><button style={css.btn} onClick={() => setGocHata(null)}>Devam et</button></div>
+      </div>
+    </Center>
+  );
   if (!data) return <Center>Yükleniyor…</Center>;
 
   // TRY canonical; görüntü para birimi saf sunum katmanı — nihai TRY rakamını çevirir
@@ -537,7 +579,7 @@ export default function App() {
               onSellFund={(p: TradePrefill) => setAdd({ kind: "trade", tradePrefill: p })}
               onKurumsalOlay={(p: TradePrefill) => setAdd({ kind: "trade", tradePrefill: p })} />}
             {tab === "hesaplar" && <Hesaplar data={data} reload={reload} />}
-            {tab === "profil" && <Profil user={user} data={data} reload={reload} onDeleted={() => { setUser(null); setData(null); }} />}
+            {tab === "profil" && <Profil user={user} data={data} reload={reload} onDeleted={() => { anahtarSil(); setUser(null); setData(null); }} />}
             {tab === "tanimlar" && <Tanimlar data={data} reload={reload} />}
             {tab === "nakit" && <Nakit days={days} data={data} />}
             {tab === "plan" && <Plan data={data} reload={reload} onRealize={(p) => openAdd("kalem", p)} />}
