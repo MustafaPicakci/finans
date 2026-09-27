@@ -33,7 +33,7 @@
 <div class="wrap">
   <div class="brand">₺ finans</div>
   <h1>Gizlilik Politikası</h1>
-  <p class="lead">Son güncelleme: 30 Ağustos 2026</p>
+  <p class="lead">Son güncelleme: 27 Eylül 2026</p>
 
   <p>Finans, kişisel finans takibi için yapılmış bir web uygulamasıdır. Bu sayfa, uygulamanın
   hangi verileri topladığını, bunları nerede sakladığını, kimlerle paylaştığını ve bu veriler
@@ -43,8 +43,10 @@
   <table>
     <tr><th>Veri</th><th>Neden</th></tr>
     <tr><td>E-posta adresin</td><td>Hesabının kimliği; giriş, hesap aktivasyonu ve şifre sıfırlama için</td></tr>
-    <tr><td>Parolan</td><td>Yalnızca <strong>scrypt</strong> ile geri döndürülemez biçimde özetlenmiş (hash) hâlde saklanır. Parolanın kendisi hiçbir zaman kaydedilmez.</td></tr>
-    <tr><td>Girdiğin finansal kayıtlar</td><td>Uygulamanın işlevi: hesaplar ve bakiyeler, gelir/gider işlemleri, kredi kartı harcamaları, krediler, mevduatlar, düzenli gelir-giderler, hesaplar arası virmanlar, portföy işlemleri</td></tr>
+    <tr><td>Parolan</td><td><strong>Sunucuya hiç gönderilmez.</strong> Tarayıcın parolandan iki ayrı anahtar türetir: biri giriş için sunucuya gider (sunucu onu da yalnız <strong>scrypt</strong> özeti olarak saklar), diğeri verini şifreleyen anahtarı açar ve cihazından çıkmaz.</td></tr>
+    <tr><td>Girdiğin finansal kayıtlar</td><td>Uygulamanın işlevi: hesaplar ve bakiyeler, gelir/gider işlemleri, kredi kartı harcamaları, krediler, mevduatlar, düzenli gelir-giderler, hesaplar arası virmanlar, portföy işlemleri. Tutarlar ve adlar <strong>şifreli</strong> saklanır — bkz. madde 3.</td></tr>
+    <tr><td>Asistan sohbetlerin</td><td>Yalnız Asistan sekmesini kullanırsan: yazdığın mesajlar ve asistanın yanıtları, başka cihazdan devam edebilmen için <strong>şifreli</strong> saklanır.</td></tr>
+    <tr><td>Sarılı anahtar paketleri</td><td>Veri anahtarının, parolanla ve kurtarma kodunla şifrelenmiş iki kopyası. Parolan ya da kurtarma kodun olmadan açılamazlar; sunucu onları yalnız saklar.</td></tr>
     <tr><td>Oturum kaydı</td><td>Giriş yaptığında sunucuda tutulan oturum jetonu (30 gün geçerli, çıkış yapınca iptal edilir)</td></tr>
   </table>
 
@@ -57,24 +59,58 @@
 
   <h2>2. Çerezler</h2>
   <p>Yalnızca <strong>oturum çerezi</strong> kullanılır — giriş yapmış olduğunu hatırlamak için.
-  Reklam veya izleme çerezi yoktur. Ayrıca bazı görüntü tercihleri (tema, seçili para birimi,
-  asistan sohbeti) yalnızca <strong>kendi tarayıcının belleğinde</strong> (localStorage) tutulur;
-  sunucuya gönderilmez. Asistan sohbeti çıkış yaptığında tarayıcından silinir.</p>
+  Reklam veya izleme çerezi yoktur. Bazı görüntü tercihleri (tema, seçili para birimi) yalnızca
+  <strong>kendi tarayıcının belleğinde</strong> (localStorage) tutulur, sunucuya gönderilmez.</p>
+  <p>Verini açan <strong>şifreleme anahtarı</strong> da tarayıcında (IndexedDB) durur; böylece
+  uygulamayı her açışında parola sorulmaz. Anahtar dışa aktarılamaz biçimde saklanır ve
+  <strong>çıkış yaptığında silinir</strong>. Ortak kullanılan bir cihazda işin bitince çıkış yap.</p>
 
-  <h2>3. Verinin saklandığı yer</h2>
+  <h2>3. Verinin saklandığı yer ve şifreleme</h2>
   <p>Veriler PostgreSQL veri tabanında, uygulamanın barındırıldığı bulut sağlayıcısında saklanır.
   Aktarım HTTPS ile şifrelenir. Her kullanıcının verisi veri tabanı düzeyinde kendi hesabına
   bağlıdır; bir kullanıcı başka bir kullanıcının kayıtlarını göremez.</p>
+  <p>Kayıtlarının hassas kısmı <strong>sunucuya gönderilmeden önce tarayıcında şifrelenir</strong>
+  (AES-256-GCM) ve veri tabanında yalnız şifreli hâlde durur. Anahtar yalnız sende, yani
+  <strong>uygulamayı işleten kişi veri tabanında duran kayıtlarını okuyamaz</strong> — yedekler
+  ve veri tabanının kendisi dahil.</p>
+  <p><strong>Şifreli saklananlar</strong> (sunucu okuyamaz):</p>
+  <ul>
+    <li>Tüm tutarlar: harcama, gelir, maaş, bakiye, kart limiti, adet, alış fiyatı, anapara, faiz oranı</li>
+    <li>Tüm adlar ve notlar: işyeri, hesap, kart, kategori, düzenli kalem ve portföy adları</li>
+    <li>Asistan sohbetlerin ve asistanın hazırladığı işlem planları</li>
+  </ul>
+  <p><strong>Şifresiz kalanlar</strong> (uygulamanın çalışması için gerekli):</p>
+  <ul>
+    <li>E-posta adresin ve kayıt olduğun tarih</li>
+    <li>Kayıtların <strong>tarihleri</strong> ve <strong>sayıları</strong></li>
+    <li>Hangi kaydın hangi hesaba/karta bağlı olduğu (ör. "bir harcama bu karta ait")</li>
+    <li>Kayıt <strong>türleri</strong> (gelir/gider, alış/satış, hesap türü, asistanın uyguladığı işlemin türü), kart kesim ve son ödeme günleri, düzenli kalemlerin ödeme günü</li>
+    <li>Portföyündeki <strong>varlık sembolleri</strong> (ör. THYAO) ve elle girdiğin güncel fiyatlar — piyasa fiyatını çekebilmek için. Kaç adet tuttuğun ve maliyetin şifrelidir.</li>
+    <li>Uygulama ayarların ("nakit say" işaretli fon sembolleri, asistanın açık/kapalı olması gibi)</li>
+  </ul>
+  <p>Yani sunucu <em>"12 Eylül'de bu kartta bir harcama var"</em> bilgisini görebilir,
+  <em>"Migros'a 450 TL"</em> bilgisini göremez.</p>
+  <div class="box">
+    <strong>Kurtarma kodu.</strong> İlk girişinde sana bir kez bir <strong>kurtarma kodu</strong>
+    gösterilir. Parolanı unutursan verine ulaşmanın <strong>tek yolu</strong> bu koddur; biz de
+    verini açamayız. Kodun yoksa şifre sıfırlama yalnız <strong>verini silerek</strong> yeni bir
+    parola belirlemene izin verir. Kodu güvenli bir yerde sakla.
+  </div>
+  <p><strong>Dürüst sınır:</strong> uygulamanın kodu da bu sunucudan tarayıcına gelir. Şifreleme,
+  kayıtlı verinin okunmasını engeller; sunucunun ele geçirilip tarayıcına değiştirilmiş kod
+  gönderilmesine karşı ise web uygulamalarında tam bir koruma yoktur (Proton ve Bitwarden'ın web
+  sürümlerinde de aynı sınır geçerlidir). Böyle bir durum, ancak o andan sonra giriş yapanları
+  etkileyebilir; daha önce kaydedilmiş veriler ve yedekler şifreli kalır.</p>
 
   <h2>4. Üçüncü taraflarla paylaşım</h2>
   <p>Kişisel verilerin satılmaz, kiralanmaz, pazarlama amacıyla paylaşılmaz. Yalnızca uygulamanın
   çalışması için gereken şu servislere, gereken en az veri gider:</p>
   <table>
     <tr><th>Servis</th><th>Giden veri</th></tr>
-    <tr><td>Bulut barındırma ve veri tabanı</td><td>Uygulamanın tüm verisi (barındırma sağlayıcısı olarak)</td></tr>
+    <tr><td>Bulut barındırma ve veri tabanı</td><td>Uygulamanın tüm verisi, barındırma sağlayıcısı olarak — finansal kayıtların ve sohbetlerin <strong>şifreli</strong> hâliyle (madde 3)</td></tr>
     <tr><td>E-posta sağlayıcısı</td><td>E-posta adresin ve gönderilen mesajın içeriği — yalnız aktivasyon ve şifre sıfırlama postaları için</td></tr>
     <tr><td>Fiyat sağlayıcıları</td><td>Yalnızca <strong>varlık sembolleri</strong> (ör. THYAO, BTC). Kim olduğun, kaç adet tuttuğun veya bakiyen gönderilmez.</td></tr>
-    <tr><td>Yapay zekâ sağlayıcısı <em>(yalnız Asistan sekmesini kullanırsan)</em></td><td>Yazdığın mesaj ve tanım kayıtların (hesap/kart/kategori/portföy adları, tutulan semboller). Sorduğun soruya göre ilgili işlem kayıtların da gönderilebilir. Asistanı hiç kullanmazsan bu servise hiçbir veri gitmez.</td></tr>
+    <tr><td>Yapay zekâ sağlayıcısı <em>(yalnız Asistan sekmesini kullanırsan)</em></td><td>Yazdığın mesaj ve tanım kayıtların (hesap/kart/kategori/portföy adları, hesap bakiyeleri, tutulan semboller). Sorduğun soruya göre ilgili işlem kayıtların ya da hesaplanmış özetler de gönderilebilir. Model şifreli veriyle çalışamadığı için bu bilgiler sağlayıcıya <strong>şifresiz</strong> gider; tarayıcından sunucumuz üzerinden aktarılır, sunucu bunları <strong>saklamaz ve kaydetmez</strong>. Asistanı hiç kullanmazsan ya da <strong>Hesabım</strong>'dan kapatırsan bu servise hiçbir veri gitmez.</td></tr>
   </table>
   <p>Ayrıca yasal bir yükümlülük doğduğunda (mahkeme kararı vb.) veri paylaşılabilir.</p>
 
@@ -93,22 +129,29 @@
   <p>Verilerin, sen hesabını silene kadar saklanır. Hesabını sildiğinde tüm kayıtların
   veri tabanından kalıcı olarak kaldırılır; bu işlem geri alınamaz. Oturumlar 30 gün sonra
   kendiliğinden geçersiz olur. E-posta doğrulama ve şifre sıfırlama bağlantıları sırasıyla
-  24 saat ve 1 saat sonra geçersizleşir.</p>
+  24 saat ve 1 saat sonra geçersizleşir. Parolanı ve kurtarma kodunu birlikte kaybedip şifre
+  sıfırlamada verini silmeyi seçersen kayıtların o anda kalıcı olarak silinir.</p>
 
   <h2>7. Haklarının uygulamadaki karşılığı</h2>
   <p>KVKK kapsamındaki haklarını uygulama içinden, kimseye başvurmadan kullanabilirsin.
   <strong>Hesabım</strong> sayfasında:</p>
   <ul>
-    <li><strong>Verilerimi indir</strong> — tüm kayıtlarını makine okunur biçimde dışa aktarır (erişim ve taşınabilirlik hakkı).</li>
+    <li><strong>Verilerimi indir</strong> — tüm kayıtlarını makine okunur biçimde dışa aktarır (erişim ve taşınabilirlik hakkı). Şifre çözme tarayıcında yapılır, dosya okunur hâlde iner.</li>
+    <li><strong>Parola</strong> — parolanı değiştirebilirsin; diğer cihazlardaki oturumların kapatılır.</li>
     <li><strong>Hesabımı sil</strong> — parola onayıyla hesabını ve bağlı tüm verini kalıcı olarak siler (silme hakkı).</li>
     <li>Her kaydı uygulama içinden düzeltebilir veya silebilirsin (düzeltme hakkı).</li>
   </ul>
 
   <h2>8. Güvenlik</h2>
-  <p>Parolalar scrypt ile özetlenir, karşılaştırma sabit zamanlıdır. Tüm veri uçları oturum
+  <p>Finansal kayıtların uçtan uca şifrelenir (madde 3): şifreleme tarayıcının kendi kriptografi
+  kütüphanesiyle (Web Crypto) yapılır; kullanılan yöntemler yaygın kabul gören standartlardır
+  (AES-256-GCM, PBKDF2-SHA256 600.000 tekrar, HKDF). Parolan sunucuya gönderilmez; sunucuya giden
+  giriş anahtarı da scrypt ile özetlenir, karşılaştırma sabit zamanlıdır. Tüm veri uçları oturum
   denetiminin arkasındadır. Giriş denemeleri ve API istekleri hız sınırlamasına tabidir.
-  Bağlantı HTTPS ile şifrelenir; güvenlik başlıkları ve içerik güvenliği politikası uygulanır.
-  Yine de hiçbir sistem mutlak güvenlik sunamaz; hassas verilerini girerken bunu göz önünde bulundur.</p>
+  Bağlantı HTTPS ile şifrelenir; güvenlik başlıkları ve içerik güvenliği politikası uygulanır.</p>
+  <p>Verin parolanla korunduğu için <strong>güçlü ve başka yerde kullanmadığın bir parola</strong>
+  seç. Bu kişisel bir projedir ve şifreleme bağımsız bir güvenlik denetiminden geçmemiştir;
+  hiçbir sistem mutlak güvenlik sunamaz.</p>
 
   <h2>9. Çocuklar</h2>
   <p>Uygulama 18 yaşından küçüklere yönelik değildir ve bilerek onlardan veri toplamaz.</p>

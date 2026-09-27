@@ -1189,6 +1189,8 @@ seferde (217 satır sıfır fark, bakiyeler eski kolonla birebir, ikinci açıl�
 legacy hesapla gerçek arayüzden giriş → v2 yükseltme → kurtarma kodu → tarayıcı göçü, çözülen veri
 göç öncesiyle alan alan **sıfır fark**.
 
+**Aynı dalda iki ek (kullanıcı isteği)**: gizlilik sayfası şifrelemeye göre yeniden yazıldı (neyin şifreli neyin şifresiz kaldığı, kurtarma kodu, parolanın sunucuya gitmemesi, asistan verisinin yolu ve kapatılabilmesi, dürüst sınır cümlesi; ayrıca Faz 34'ten beri yanlış olan "asistan sohbeti tarayıcıda tutulur" ifadesi düzeltildi). Asistan onay kartının üstüne "kaydedildi" yazıyordu — prompt + araç sonucu düzeltildi, üstüne plan varken tamamlanmış gibi konuşan yanıtı nötrleyen deterministik emniyet (gerçek modelle dört akışta da artık "hazırladım, onaylarsan kaydedeceğim").
+
 **Deploy'da ne olur (kullanıcı için)**: sunucu ilk açılışta şemayı kendisi dönüştürür (veri kaybı
 yok, iki kez çalışması zararsız). Her kullanıcı bir sonraki girişinde bir kez kurtarma kodunu
 görür ve kaydeder; verisi o an tarayıcıda şifrelenir (birkaç yüz satır, saniyenin altında).
