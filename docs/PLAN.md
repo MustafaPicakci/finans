@@ -398,6 +398,22 @@ Doğrulama: `pnpm build` temiz. Yerelde ölçüldü — `/api/ping` 200 `{"ok":t
 Manual Deploy edilene dek eski süreç `/health`'i yoklamaya devam eder, yani kotayı rahatlatan an
 deploy anıdır.
 
+**Faz 41.6 — cron `*/30` + kullanıcıya dürüst hata ekranı.** Faz 41.5'in "zorunda kalırsak"
+dediği an geldi (2026-09-27): kota bitti, Render log'unda her istek `code: '53000'`
+(insufficient_resources) ile 32 ms'de reddediliyordu — Neon compute'u hiç açmıyordu. 41.5'in
+deploy'u tek başına yetmezdi (≈240 > 191.9), `runScheduledJobs` `*/15` → `*/30` (≈120).
+
+Kesinti bir arayüz kusurunu da gösterdi: ekran **"API'ye ulaşılamadı: Error: Sunucu hatası.
+Sunucu çalışıyor mu? (npm run dev)"** yazıyordu — kullanıcıya geliştirici talimatı, ham
+`Error:` öneki ve hiçbir yol göstermeyen bir metin. İki yarısı var: sunucu DB'ye ULAŞILAMAYAN
+hataları (SQLSTATE sınıfı 53/08/57P + `ECONNREFUSED`/`ETIMEDOUT`/… + `pg`'nin "Connection
+terminated") artık 500 değil **503** olarak ayırıyor — bu kod hatası değil geçici kesinti, ve
+ayrım yalnız sunucuda yapılabilir (istemci SQLSTATE görmez, görmemeli). İstemci hatayı üç
+cinse indiriyor: 503 → "verin güvende, biraz sonra dene", diğer 5xx → "sunucuda bir sorun
+oluştu", `fetch`'in kendisi patladıysa → "bağlantını kontrol et"; hepsinde **Tekrar dene**
+düğmesi (eskiden tek çare sayfayı yenilemekti). `npm run dev` ipucu yalnız localhost'ta kalıyor
+— orada hâlâ doğru ipucu o.
+
 ---
 
 ## Doğrulama
@@ -1213,10 +1229,8 @@ Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Faz 0–4
 4. **Makro takvimin yıllık bakımı** (Faz 37): TCMB 2027'nin yalnız ilk yarısını duyurdu, Fed 2027'nin
    tamamını. İkisi yeni takvimi açıklayınca [makro.ts](../packages/engine/src/makro.ts) güncellenmeli —
    ekran son 90 güne girince kendisi uyarır.
-5. **Neon compute kotası** (Faz 41.5): keepalive düzeltildi ama 15 dk'lık `runScheduledJobs`
-   hâlâ ≈240 compute-saat/ay harcıyor, ücretsiz kota 191.9. Kesinti olursa (belirtisi:
-   `/api/health` 503, veri kaybı YOK, ayın 1'inde döner) ilk hamle tek satır: `*/15` → `*/30`.
-   Kullanıcı kararıyla erteli — kendiliğinden gündeme getirilmez.
+5. **Neon compute kotası** — Faz 41.6'da kapandı (cron `*/30`, ≈120 compute-saat/ay, kota 191.9).
+   Yeniden sıkışırsa bakılacak yer: DB'ye dokunan yeni bir periyodik iş eklenmiş mi.
 
 **Kapsam dışı — kullanıcı kararıyla kapanmış işler.** Burada durmalarının sebebi unutulmaları
 değil, aksine: bir daha gündeme getirilmesinler diye yazılılar. Kullanıcı kendisi açmadıkça

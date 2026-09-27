@@ -83,7 +83,7 @@ Yol **açıkça** seçilir: `MAIL_PROVIDER` = `smtp` (varsayılan) · `gmail` ·
 
 ## Canlı fiyat kaynakları ve dürüst kısıtlar
 
-Fiyatlar 15 dakikada bir otomatik ve "Fiyatları Yenile" butonuyla manuel tazelenir. Kaynaklar resmî API değildir; **best-effort** çalışır ve her sembolün fiyatını arayüzden elle de girebilirsin (elle girilen fiyat `manual` olarak işaretlenir, bir sonraki otomatik tazelemede güncellenir).
+Fiyatlar 30 dakikada bir otomatik ve "Fiyatları Yenile" butonuyla manuel tazelenir. Kaynaklar resmî API değildir; **best-effort** çalışır ve her sembolün fiyatını arayüzden elle de girebilirsin (elle girilen fiyat `manual` olarak işaretlenir, bir sonraki otomatik tazelemede güncellenir).
 
 | Tür    | Sembol örneği           | Kaynak                                  |
 |--------|-------------------------|-----------------------------------------|

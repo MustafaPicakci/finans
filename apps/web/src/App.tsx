@@ -26,7 +26,7 @@ import { AddSheet, type AddState, type KalemPrefill, type TradePrefill } from ".
 /* ————— ana uygulama ————— */
 export default function App() {
   const [data, setData] = useState<Awaited<ReturnType<typeof api.all>> | null>(null);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useState<unknown>(null);
   /* Sekme adres çubuğundan gelir (route.ts): yenileme aynı ekranda kalsın, geri tuşu
      çalışsın, açık ekranın linki paylaşılabilsin. */
   const [tab, setTab] = useTabRoute();
@@ -57,7 +57,7 @@ export default function App() {
 
   const reload = useCallback(() => api.all().then(setData).catch((e) => {
     if (e instanceof ApiError && e.status === 401) { anahtarSil(); setUser(null); setData(null); } // oturum düştü → giriş ekranı
-    else setErr(String(e));
+    else setErr(e);
   }), []);
 
   /* E2EE aşama 6 — oturum açıldıktan sonra, veriyi göstermeden önce: düz zarf kaldıysa
@@ -85,7 +85,7 @@ export default function App() {
      Bayrak girişte (Auth) yazılır — App o sırada zaten kurulu olduğundan burada tutulan yalnız
      "kapattı mı"dır, bayrağın kendisi her render'da okunur. */
   const [zayifKapatildi, setZayifKapatildi] = useState(false);
-  useEffect(() => {
+  const boot = useCallback(() => {
     api.me().then(async ({ user }) => {
       if (user && !(await anahtarYukle(user.id))) {
         await api.logout().catch(() => {});
@@ -95,8 +95,10 @@ export default function App() {
       }
       setUser(user);
       if (user) oturumuBaslat(user);
-    }).catch((e) => setErr(String(e)));
+    }).catch(setErr);
   }, [oturumuBaslat]);
+  useEffect(boot, [boot]);
+  const retry = useCallback(() => { setErr(null); setUser(undefined); setData(null); boot(); }, [boot]);
   /* Sohbetler Faz 34'ten beri sunucuda ve kullanıcıya scope'lu, yani çıkışta SİLİNMEZ
      (başka cihazdan devam edilebilsin diye). Temizlenen yalnız bu cihazın "en son şu
      sohbetteydim" işaretçisi + Faz 22-33'ün artık okunmayan localStorage sohbeti —
@@ -226,11 +228,11 @@ export default function App() {
     return data.loans.reduce((s, l) => s + l.amount * loanRemaining(l, t), 0);
   }, [data]);
 
-  if (err) return <Center>API'ye ulaşılamadı: {err}. Sunucu çalışıyor mu? (npm run dev)</Center>;
+  if (err) return <HataEkrani err={err} onRetry={retry} />;
   // E-posta bağlantısıyla gelen reset/verify token'ı: oturum yüklenmesini beklemeden Auth ekranını göster
-  if (urlAuth) return <Auth urlAuth={urlAuth} onAuthed={(u) => { setUser(u); setErr(""); setUrlAuth(null); oturumuBaslat(u); }} />;
+  if (urlAuth) return <Auth urlAuth={urlAuth} onAuthed={(u) => { setUser(u); setErr(null); setUrlAuth(null); oturumuBaslat(u); }} />;
   if (user === undefined) return <Center>Yükleniyor…</Center>;
-  if (user === null) return <Auth bilgi={girisNotu} onAuthed={(u) => { setUser(u); setErr(""); setGirisNotu(undefined); oturumuBaslat(u); }} />;
+  if (user === null) return <Auth bilgi={girisNotu} onAuthed={(u) => { setUser(u); setErr(null); setGirisNotu(undefined); oturumuBaslat(u); }} />;
   if (goc) return <Center>{goc}</Center>;
   if (gocHata) return (
     <Center>
@@ -627,5 +629,34 @@ export default function App() {
         ))}
       </nav>
     </div>
+  );
+}
+
+/* Açılışta ya da yeniden yüklemede API cevap vermediğinde tüm uygulamanın yerini alan ekran.
+   Eskiden ham hatayı ve bir geliştirici talimatını basıyordu ("Error: Sunucu hatası. Sunucu
+   çalışıyor mu? (npm run dev)") — prod'da kullanıcıya hiçbir şey söylemeyen bir metin (Faz 41.6,
+   Neon kotası bitince görüldü). Hata üç cinse indirilir çünkü kullanıcının yapabileceği şey
+   cinse göre değişir; 503'ü sunucu yalnız DB'ye ULAŞILAMADIĞINDA döner (bkz. index.ts onError). */
+function HataEkrani({ err, onRetry }: { err: unknown; onRetry: () => void }) {
+  /* `fetch` ağ hatasında TypeError fırlatır; E2EE'de yükleme şifre çözmede de patlayabilir —
+     o ağ sorunu değildir, "bağlantını kontrol et" demek yanlış yere yönlendirirdi. */
+  const status = err instanceof ApiError ? err.status : 0;
+  const ag = !status && err instanceof TypeError;
+  const [baslik, metin] =
+    status === 503 ? ["Hizmete şu an ulaşılamıyor", "Veritabanı geçici olarak yanıt vermiyor. Verilerin güvende — birkaç dakika sonra tekrar dene."]
+    : status >= 500 ? ["Bir sorun oluştu", "Sunucu isteği tamamlayamadı. Verilerin güvende — biraz sonra tekrar dene."]
+    : ag ? ["Sunucuya ulaşılamadı", "İnternet bağlantını kontrol edip tekrar dene."]
+    : ["Bir sorun oluştu", "Veriler yüklenemedi. Tekrar deneyebilirsin."];
+  const yerel = ["localhost", "127.0.0.1"].includes(window.location.hostname);
+  return (
+    <Center>
+      <style>{themeCSS}</style>{/* erken dönüş: kabuğun <style>'ı henüz render edilmedi (Auth'taki gibi) */}
+      <div style={{ maxWidth: 360, display: "grid", gap: 12, justifyItems: "center" }}>
+        <div style={{ color: T.text, fontSize: 18, fontWeight: 640 }}>{baslik}</div>
+        <div style={{ fontSize: 14, lineHeight: 1.5 }}>{metin}</div>
+        {yerel && <div style={{ fontSize: 12, fontFamily: T.mono }}>{String(err)} — API sunucusu çalışıyor mu? (pnpm dev)</div>}
+        <button style={css.btn} onClick={onRetry}>Tekrar dene</button>
+      </div>
+    </Center>
   );
 }
