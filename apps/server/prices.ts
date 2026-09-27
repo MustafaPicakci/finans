@@ -307,10 +307,10 @@ export async function refreshAll(): Promise<RefreshResult[]> {
   const heldFon = held.filter((h) => h.asset_type === "FON");
   const neededCodes = new Set(heldFon.map((h) => h.symbol));
   const alreadySucceededToday = lastFetch === today;
-  /* Boş/başarısız deneme tefas_last_fetch'i işaretlemez → aksi halde cron her 15 dk yeniden
+  /* Boş/başarısız deneme tefas_last_fetch'i işaretlemez → aksi halde cron her 30 dk yeniden
      dener (log spam + boşa kota; ör. resmi tatilde NAV yayınlanmaz). Geri-çekilme: başarısız
      denemeden sonra 1 saat bekle. Böylece geç yayınlanan NAV / geçici hata için gün içinde
-     saatte bir tekrar denenir, ama 15 dakikada bir hammering yapılmaz. */
+     saatte bir tekrar denenir, ama her cron turunda hammering yapılmaz. */
   const TEFAS_RETRY_BACKOFF_MS = 60 * 60_000;
   const recentlyAttempted = Date.now() - lastAttempt < TEFAS_RETRY_BACKOFF_MS;
   const shouldTryTefas = heldFon.length > 0 && !alreadySucceededToday && !recentlyAttempted;

@@ -205,6 +205,11 @@ createServer(async (req, res) => {
   /* GİRİŞ EKRANI da uygulamanın bir ekranı ve mobilde denetlenebilmeli: `CIKIS=1` ile
      stub oturumsuz davranır (`user: null`) → App kabuğu Auth ekranını render eder.
      Kullanım: CIKIS=1 node apps/web/scripts/mobil-stub.mjs */
+  /* HATA EKRANI da denetlenebilmeli: `HATA=503` (DB'ye ulaşılamıyor — Neon kotası) ya da
+     `HATA=500` ile her /api isteği o kodla döner → App kabuğu HataEkrani'ni render eder. */
+  if (process.env.HATA && url.pathname.startsWith("/api/")) {
+    return json({ error: process.env.HATA === "503" ? "Veritabanına şu an ulaşılamıyor" : "Sunucu hatası" }, Number(process.env.HATA));
+  }
   if (url.pathname === "/api/auth/me") {
     return json({ user: process.env.CIKIS ? null : { id: 1, email: "demo@finans.local" } });
   }

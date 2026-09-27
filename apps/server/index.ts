@@ -47,8 +47,21 @@ app.use("/api/*", async (c, next) => {
   await next();
 });
 
-/* ---- global hata yakalayıcı: stack sızdırma yok, temiz 500 ---- */
+/* ---- global hata yakalayıcı: stack sızdırma yok, temiz 500 ----
+   Veritabanına ULAŞILAMIYORSA 503: kod hatası değil geçici bir kesinti, istemci bunu ayırıp
+   "verin güvende, biraz sonra dene" diyebilsin. Yaşandı: Neon'un aylık compute kotası bitince
+   her sorgu 53000 (insufficient_resources) döndü ve ekran "Sunucu hatası" diyordu.
+   Sınıflar: 53 kaynak/kota, 08 bağlantı, 57P kapanış/başlıyor; ağ katmanı hataları da aynı. */
+const dbErisilemez = (err: any) => {
+  const code = String(err?.code ?? "");
+  return /^(53|08|57P)/.test(code) || ["ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND", "ECONNRESET"].includes(code)
+    || /Connection terminated|connection timeout/i.test(String(err?.message ?? ""));
+};
 app.onError((err, c) => {
+  if (dbErisilemez(err)) {
+    console.error(`[api] veritabanına ulaşılamıyor (${(err as any).code ?? "?"}): ${err.message}`);
+    return c.json({ error: "Veritabanına şu an ulaşılamıyor" }, 503);
+  }
   console.error("[api] hata:", err);
   return c.json({ error: "Sunucu hatası" }, 500);
 });
@@ -1297,7 +1310,12 @@ async function materializeDueStatements(): Promise<void> {
   }
 }
 
-/* saat başı + her 15 dk fiyat tazele (piyasa dışı saatlerde de zararsız) + otonom kalemleri/ekstreleri işle */
+/* her 30 dk fiyat tazele (piyasa dışı saatlerde de zararsız) + otonom kalemleri/ekstreleri işle.
+   30 dk, 15 değil: her tur DB'ye dokunur (portföy boşken bile SELECT + fx UPSERT) ve Neon
+   compute'u 5 dk boşta kalınca uyuttuğu için her tur en az 5 dk'lık pencere satın alır —
+   15 dk'da ≈240 compute-saat/ay ediyordu, ücretsiz kota 191.9 (2026-09'da kota bitti,
+   prod durdu). 30 dk ≈120. Kayıp yok: gerçekleştirmenin telafi pencereleri 45/10 gün, fiyat
+   rozeti zaten gecikmeyi yazıyor, "Fiyatları yenile" elle anında tazeler. */
 const runScheduledJobs = () => {
   refreshAll().catch(() => {});
   materializeDueRecurring().catch(() => {});
@@ -1328,7 +1346,7 @@ cron.schedule("20 3 * * *", () => {
     .then((r) => { if (r.length) console.log(`[bilanço] ${r.length} sembol tazelendi (${r.filter((x) => x.tahmini).length} tanesi tahmini tarih)`); })
     .catch((e) => console.warn("[bilanço] günlük tazeleme hatası:", e));
 });
-cron.schedule("*/15 * * * *", runScheduledJobs);
+cron.schedule("*/30 * * * *", runScheduledJobs);
 
 /* ---- uyanık tutma (Faz 23) ----
    Render ücretsiz katmanı 15 dk GELEN İSTEK olmazsa süreci uyutur; sonraki ilk istek 30-60 sn
