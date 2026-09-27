@@ -66,7 +66,7 @@ export const DUZ: Record<ZarfliTablo, Record<string, string>> = {
   },
   transactions: { date: "tarih — sıralama, dönem süzgeci", category_id: "FK", account_id: "FK" },
   card_txs: { card_id: "FK", date: "tarih — ekstreye düşme (kesim günü) hesabı istemcide ama sıralama sunucuda", category_id: "FK" },
-  cards: { statement_day: "kesim günü — ekstre takvimi", due_day: "son ödeme günü — ekstre takvimi", pay_account_id: "FK (ödeme talimatı)" },
+  cards: { statement_day: "kesim günü — ekstre takvimi", due_day: "son ödeme günü — ekstre takvimi", pay_account_id: "FK (ödeme talimatı)", pay_since: "talimatın başladığı gün — otomatik ödeme bundan önceki vadeye dokunmaz" },
   transfers: { date: "tarih", from_account_id: "FK", to_account_id: "FK" },
   trades: {
     date: "tarih", asset_type: "varlık türü — fiyat kaynağı seçimi", side: "işlem türü (ALIŞ/SATIŞ/…) — adet/fiyat değil",
@@ -77,6 +77,7 @@ export const DUZ: Record<ZarfliTablo, Record<string, string>> = {
   recurring: {
     kind: "gelir/gider", day: "ayın günü — takvim", from_month: "yaşam penceresi", to_month: "yaşam penceresi",
     account_id: "FK", card_id: "FK", category_id: "FK", auto: "otomatik gerçekleştirme bayrağı",
+    auto_since: "otomatik talimatın başladığı gün — bundan önceki occurrence yazılmaz",
   },
   recurring_amounts: { recurring_id: "FK + birincil anahtar", from_month: "BİRİNCİL ANAHTAR — şifreli olsa ON CONFLICT hiç tetiklenmezdi" },
   ai_conversations: {

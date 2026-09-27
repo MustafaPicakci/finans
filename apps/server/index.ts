@@ -436,7 +436,26 @@ api.get("/all", async (c) => c.json(await loadAllData(c.get("user").id, { gecmis
 
 /* ---- generic CRUD ---- */
 type Col = { name: string; required?: boolean; default?: unknown };
-function crud(route: string, table: string, cols: Col[]) {
+
+/* ---- otomatik talimatın başlangıç günü (kart ödeme talimatı, otomatik düzenli kalem) ----
+   Otomatik yazma tarayıcıda (engine/otomatik.ts) bu günden ÖNCEKİ vadelere dokunmaz; eskiden
+   yerinde sabit 10/45 günlük pencere vardı ve uygulama o süre açılmazsa vade bir daha hiç
+   yazılmıyordu. Damgayı SUNUCU atar çünkü eski ve yeni satırı aynı anda yalnız o görür, ve
+   bütün yazma yolları (form, kart seçicisi, asistan) buradan geçer:
+   - pasiften aktife geçiş → bugün; aktif kalıyorsa (ör. hesap A→B, ad değişti) → dokunulmaz;
+   - pasife geçiş → NULL. FK silinmesiyle pasifleşen satır (hesap/kart silindi, ON DELETE SET
+     NULL) eski damgasını taşır ama ESKİ satır pasif göründüğü için yeniden açılışta taze damga
+     alır — yoksa aradaki bütün vadeleri geriye dönük öderdi.
+   "Bugün" sunucunun takvim günüdür (Render UTC): TSİ 00-03 arası açılan talimat bir önceki
+   günden başlar. Sonucu en fazla o günün vadesini kapsamaktır; tarayıcı saatine güvenmekten
+   (her istemcinin kendi saati) tutarlı. */
+function talimatDamgasi(eskiAktif: boolean, eskiDamga: string | null | undefined, yeniAktif: boolean): string | null {
+  if (!yeniAktif) return null;
+  return eskiAktif && eskiDamga ? eskiDamga : todayLocal();
+}
+type Talimat = { kolon: string; aktif: (satir: Record<string, any>) => boolean };
+
+function crud(route: string, table: string, cols: Col[], talimat?: Talimat) {
   api.post(`/${route}`, async (c) => {
     const b = await c.req.json().catch(() => null);
     if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
@@ -453,7 +472,8 @@ function crud(route: string, table: string, cols: Col[]) {
        Not: istemcinin AÇIKÇA gönderdiği null hâlâ NULL yazar (anlamlı bir "boşalt" isteği). */
     const used = cols.filter((col) => b[col.name] !== undefined || col.default !== undefined);
     const names = [...used.map((x) => x.name), "user_id"]; // Faz 5.2: her kayıt sahibine bağlı
-    const values = [...used.map((col) => b[col.name] ?? col.default ?? null), uid];
+    const values: unknown[] = [...used.map((col) => b[col.name] ?? col.default ?? null), uid];
+    if (talimat) { names.push(talimat.kolon); values.push(talimatDamgasi(false, null, talimat.aktif(b))); }
     const info = await db.run(
       `INSERT INTO ${table} (${names.join(",")}) VALUES (${names.map(() => "?").join(",")}) RETURNING id`,
       ...values,
@@ -470,11 +490,19 @@ function crud(route: string, table: string, cols: Col[]) {
        silinmiş bir) kaydını zaten değiştirmiyordu, ama uç yine de {ok:true} dönüyordu: arayüz
        "kaydedildi" der, hiçbir şey değişmezdi. Tanım kayıtları Faz 18'de düzenlenebilir olduğundan
        bu sessiz yalan artık kullanıcının gördüğü bir hataya dönüşürdü. */
-    const upd = await db.run(
-      `UPDATE ${table} SET ${names.map((n) => `${n}=?`).join(",")} WHERE id=? AND user_id=?`,
-      ...names.map((n) => b[n]), c.req.param("id"), c.get("user").id,
-    );
-    if (!upd.changes) return c.json({ error: "kayıt yok" }, 404);
+    const id = c.req.param("id"), uid = c.get("user").id;
+    const changes = await db.tx(async (t) => {
+      const set = names.map((n) => `${n}=?`);
+      const values: unknown[] = names.map((n) => b[n]);
+      if (talimat) {
+        const eski = await t.get<Record<string, any>>(`SELECT * FROM ${table} WHERE id=? AND user_id=? FOR UPDATE`, id, uid);
+        if (!eski) return 0;
+        set.push(`${talimat.kolon}=?`);
+        values.push(talimatDamgasi(talimat.aktif(eski), eski[talimat.kolon], talimat.aktif({ ...eski, ...b })));
+      }
+      return (await t.run(`UPDATE ${table} SET ${set.join(",")} WHERE id=? AND user_id=?`, ...values, id, uid)).changes;
+    });
+    if (!changes) return c.json({ error: "kayıt yok" }, 404);
     return c.json({ ok: true });
   });
   api.delete(`/${route}/:id`, async (c) => {
@@ -683,6 +711,8 @@ api.delete("/transfers/:id", async (c) => {
    değişmedi), PUT yalnız kimlik kolonlarını günceller, tutar değişikliği /recurring/:id/amount'tan. */
 /* E2EE aşama 5c: ad zarfta (`enc`); tür, gün, yaşam penceresi ve hedefler düz — takvim onlara bakıyor. */
 const REC_ID_COLS = ["kind", "enc", "day", "from_month", "to_month", "account_id", "card_id", "category_id", "auto"] as const;
+/** Otomatik talimat = `auto` + bir hedef; hedefsiz kalem yalnız tahmindir (bkz. talimatDamgasi). */
+const recAktif = (r: Record<string, any>) => !!r.auto && (r.account_id != null || r.card_id != null);
 api.post("/recurring", async (c) => {
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
@@ -692,9 +722,10 @@ api.post("/recurring", async (c) => {
   const uid = c.get("user").id;
   const id = await db.tx(async (t) => {
     const info = await t.run(
-      `INSERT INTO recurring (${REC_ID_COLS.join(",")},user_id) VALUES (${REC_ID_COLS.map(() => "?").join(",")},?) RETURNING id`,
+      `INSERT INTO recurring (${REC_ID_COLS.join(",")},auto_since,user_id) VALUES (${REC_ID_COLS.map(() => "?").join(",")},?,?) RETURNING id`,
       b.kind, b.enc, b.day, b.from_month ?? null, b.to_month ?? null,
-      b.account_id ?? null, b.card_id ?? null, b.category_id ?? null, b.auto ?? false, uid,
+      b.account_id ?? null, b.card_id ?? null, b.category_id ?? null, b.auto ?? false,
+      talimatDamgasi(false, null, recAktif(b)), uid,
     );
     await t.run(
       "INSERT INTO recurring_amounts (recurring_id, from_month, enc, user_id) VALUES (?,?,?,?)",
@@ -710,10 +741,18 @@ api.put("/recurring/:id", async (c) => {
   const names = REC_ID_COLS.filter((n) => b[n] !== undefined); // amount bilinçli listede yok → sessizce yok sayılır
   if (!names.length) return c.json({ error: "boş" }, 400);
   if (b.enc !== undefined && !zarfGecerli(b.enc)) return c.json({ error: "geçersiz zarf" }, 400);
-  await db.run(
-    `UPDATE recurring SET ${names.map((n) => `${n}=?`).join(",")} WHERE id=? AND user_id=?`,
-    ...names.map((n) => b[n]), c.req.param("id"), c.get("user").id,
-  );
+  const id = c.req.param("id"), uid = c.get("user").id;
+  const bulundu = await db.tx(async (t) => {
+    const eski = await t.get<Record<string, any>>("SELECT * FROM recurring WHERE id=? AND user_id=? FOR UPDATE", id, uid);
+    if (!eski) return false;
+    const damga = talimatDamgasi(recAktif(eski), eski.auto_since, recAktif({ ...eski, ...b }));
+    await t.run(
+      `UPDATE recurring SET ${names.map((n) => `${n}=?`).join(",")},auto_since=? WHERE id=? AND user_id=?`,
+      ...names.map((n) => b[n]), damga, id, uid,
+    );
+    return true;
+  });
+  if (!bulundu) return c.json({ error: "kayıt yok" }, 404);
   return c.json({ ok: true });
 });
 api.delete("/recurring/:id", async (c) => {
@@ -1021,7 +1060,7 @@ api.delete("/deposits/:id", async (c) => {
 crud("cards", "cards", [
   { name: "enc", required: true }, { name: "statement_day", required: true }, { name: "due_day", required: true },
   { name: "pay_account_id" },
-]);
+], { kolon: "pay_since", aktif: (r) => r.pay_account_id != null });
 /* Harcamanın adı, tutarı ve taksit sayısı ZARFTA. Kategori (FK) düz: toplu kategorilemede yalnız
    o değişir ve zarfa dokunmadan yazılabilir. */
 crud("cardtxs", "card_txs", [
@@ -1502,7 +1541,8 @@ app.get("*", serveApp);
 
    Karar artık engine'de (`otomatik.ts`: `bekleyenDuzenli` / `bekleyenEkstreler`, 22 testli),
    sürücüsü uygulama açılışında. Defter yalnız istemci üzerinden okunduğu için ekranda
-   eksik rakam oluşmuyor; telafi pencereleri (45 gün / 10 gün) olduğu gibi devralındı. */
+   eksik rakam oluşmuyor. Geriye dönük sınır sabit bir pencere değil, talimatın başladığı gündür
+   (`pay_since` / `auto_since`, bkz. talimatDamgasi). */
 
 /* her 30 dk fiyat tazele (piyasa dışı saatlerde de zararsız) + tüketilmiş e-posta token'larını buda.
    30 dk, 15 değil: her tur DB'ye dokunur (portföy boşken bile SELECT + fx UPSERT) ve Neon
@@ -1609,6 +1649,6 @@ refreshCompanyEvents()
 
 /* Başlangıç catch-up'ı: Render free tier trafik yokken süreci uyutur; uyanışta node-cron ilk 15-dk
    tıkına dek beklerdi → kullanıcı bayat fiyat/işlenmemiş otonom kalem görürdü. Sunar sunmaz bir kez
-   çalıştır — uykuda kaçan vadeler telafi pencereleriyle (45/10 gün) yakalanır. Sık uyanışlar zararsız:
-   TEFAS günde-bir/geri-çekilme kapıları DB'de, otonom işler idempotent (PK'ler çift kaydı engeller). */
+   çalıştır. Sık uyanışlar zararsız: TEFAS günde-bir/geri-çekilme kapıları DB'de. (Otonom kalem/ekstre
+   yazımı artık burada değil, uygulama açılışında — bkz. engine/otomatik.ts.) */
 setTimeout(runScheduledJobs, 3_000).unref();

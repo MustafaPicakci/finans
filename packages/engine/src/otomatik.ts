@@ -20,22 +20,21 @@ import { txShares } from "./cards.js";
    oluşmuyor. Düzenli kalemde kayıt zamanında da geç de yazılsa BİREBİR aynı çıkıyor —
    tarih `recOccurrenceDate(ym)`'den gelir, yazıldığı andan değil.
 
-   Pencereler sunucudaki cron'dan devralındı ve bilinçli: yeni açılan bir `auto` kaleme
-   derin geçmiş doldurtulmaz. */
+   SINIR: sabit gün penceresi DEĞİL, TALİMATIN BAŞLADIĞI GÜN (`auto_since` / `pay_since`).
+   Eskiden 45 gün (kalem) / 10 gün (ekstre) pencere vardı — Faz 8'in sunucu cron'undan kalmaydı
+   ve orada zararsızdı, çünkü cron 15 dakikada bir koşuyordu. Açılışa taşınınca zararlı oldu:
+   uygulama 10 gün açılmazsa vadesi geçen ekstre BİR DAHA yazılmıyordu; geçmiş vadeli ekstre
+   "ödendi" sayıldığı için borç ekrandan kalkıyor ama para hesaptan hiç düşmüyordu (bakiye
+   olduğundan yüksek). Pencerenin tek meşru işi, talimattan ÖNCEKİ vadelere dokunmamaktı
+   (kullanıcı onları zaten elle ödemiş/girmiş olabilir) — başlangıç tarihi bunu kesin yapar,
+   üstelik kaç gün geçtiğinden bağımsız. Tarihi SUNUCU damgalar (eski ve yeni satırı aynı anda
+   yalnız o görür): talimat pasiften aktife geçtiği gün yazılır, kapanınca silinir.
+   Tarih yoksa (eski sunucu / önbellekteki eski paket) HİÇBİR ŞEY yazılmaz: sınırı bilmeden
+   geriye gitmek, eski ekstreleri ikinci kez ödemek demek olabilir. */
 
-/** Düzenli kalemde telafi penceresi — bundan eski occurrence'lar otomatik yazılmaz. */
-export const OTOMATIK_PENCERE_GUN = 45;
-/** Ekstre ödeme talimatında telafi penceresi. */
-export const EKSTRE_PENCERE_GUN = 10;
-
-const gunFarki = (a: string, b: string): number => {
-  const ms = (s: string) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d).getTime(); };
-  return Math.round((ms(a) - ms(b)) / 86_400_000);
-};
-const oncekiYm = (ym: string): string => {
+const sonrakiYm = (ym: string): string => {
   const [y, m] = ym.split("-").map(Number);
-  const d = new Date(y, m - 2, 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`;
 };
 
 /** Gerçekleşmeyi bekleyen bir occurrence. `amount` deftere/karta yazılacak tutar, İŞARETİYLE. */
@@ -52,9 +51,7 @@ export type BekleyenKalem = {
 
 /** `auto` + hedefli kalemlerden günü gelmiş ama henüz gerçekleşmemiş olanlar. */
 export function bekleyenDuzenli(data: AllData, today: string): BekleyenKalem[] {
-  const [ty, tm] = today.split("-").map(Number);
-  const ymCur = `${ty}-${String(tm).padStart(2, "0")}`;
-  const aylar = [oncekiYm(ymCur), ymCur];
+  const ymCur = today.slice(0, 7);
   const yapilmis = new Set(data.recurring_realized.map((x) => `${x.recurring_id}:${x.ym}`));
   const amtIdx = recurringAmountIndex(data.recurring_amounts ?? []);
   const out: BekleyenKalem[] = [];
@@ -62,13 +59,15 @@ export function bekleyenDuzenli(data: AllData, today: string): BekleyenKalem[] {
   for (const r of data.recurring) {
     if (!r.auto) continue;
     if (r.account_id == null && r.card_id == null) continue; // hedefsiz kalem yalnız tahmindir
-    for (const ym of aylar) {
+    const since = r.auto_since;
+    if (!since) continue; // sınır bilinmiyor → yazma (bkz. dosya başı)
+    const bas = r.from_month && r.from_month > since.slice(0, 7) ? r.from_month : since.slice(0, 7);
+    for (let ym = bas; ym <= ymCur; ym = sonrakiYm(ym)) {
       if (yapilmis.has(`${r.id}:${ym}`)) continue;
-      if (r.from_month && ym < r.from_month) continue;
       if (r.to_month && ym > r.to_month) continue;
       const date = keyOf(recOccurrenceDate(r, ym));
-      if (date > today) continue;                                  // günü gelmemiş
-      if (gunFarki(today, date) > OTOMATIK_PENCERE_GUN) continue;  // pencere dışı
+      if (date > today) continue;  // günü gelmemiş
+      if (date < since) continue;  // talimattan önceki occurrence — elle girilmiş olabilir
       const ham = recAmountOn(amtIdx.get(r.id), ym);
       if (ham === undefined) continue; // tutarı tanımlı değil: "gerçekleşti ama kayıt yok"a düşmesin
       /* İşaret hedefe göre: KARTA düşen gider ekstreye POZİTİF yazılır (borç büyür),
@@ -95,13 +94,14 @@ export function bekleyenEkstreler(data: AllData, today: string): BekleyenEkstre[
   for (const card of data.cards) {
     const acc = card.pay_account_id;
     if (acc == null || !hesaplar.has(acc)) continue; // talimat yok ya da hesap silinmiş
+    const since = card.pay_since;
+    if (!since) continue; // sınır bilinmiyor → yazma (bkz. dosya başı)
     const tutarlar = new Map<string, number>();
     for (const tx of data.card_txs) {
       if (tx.card_id !== card.id) continue;
       for (const sh of txShares(tx, card)) {
         const k = keyOf(sh.due);
-        if (k > today) continue;
-        if (gunFarki(today, k) > EKSTRE_PENCERE_GUN) continue;
+        if (k > today || k < since) continue; // vadesi gelmemiş ya da talimattan önceki ekstre
         tutarlar.set(k, (tutarlar.get(k) ?? 0) + sh.amount);
       }
     }

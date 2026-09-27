@@ -1155,6 +1155,7 @@ doğrulanır, merge yalnız kullanıcının son onayıyla.**
 - **2** otomatik gerçekleştirme sunucu cron'undan uygulama açılışına taşındı (`otomatik.ts`).
   Plan "sunucuda etkinleştirici" diyordu; önceden üretilen satırların bayatlaması ikinci bir
   senkron protokolü gerektireceği için bu yol seçildi (kullanıcıya soruldu).
+- **2b** (2026-09-27, kullanıcı kararı) sabit 10/45 günlük telafi pencereleri kaldırıldı: sınır talimatın başladığı gün (`pay_since`/`auto_since`, sunucu damgalar). Pencere cron'da zararsızdı, açılışa taşınınca 10 gün açılmayan uygulamada ekstre bir daha yazılmıyor ve bakiye sessizce şişik kalıyordu. Mevcut talimatlara göçte eski kuralın o gün yakalayacağı en eski gün yazıldı.
 - **3** `packages/crypto` (WebCrypto, npm kripto paketi yok, altın vektörlü testler) ve sıfır bilgi
   girişi: parola tarayıcıdan çıkmaz, sunucuya `auth_token` gider; legacy hesaplar ilk girişte
   aynı istekte v2'ye geçer. Yeni parola kuralı 12+ karakter.

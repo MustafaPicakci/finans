@@ -27,7 +27,7 @@ const categories = [
   { id: 4, name: "Faturalar", kind: "expense", color: null },
 ];
 const cards = [
-  { id: 1, name: "Akbank Axess", limit_amount: 60000, statement_day: 25, due_day: 10, pay_account_id: 1 },
+  { id: 1, name: "Akbank Axess", limit_amount: 60000, statement_day: 25, due_day: 10, pay_account_id: 1, pay_since: d(-10) }, // talimat başlangıcı (engine/otomatik.ts)
   { id: 2, name: "Garanti Bonus", limit_amount: 35000, statement_day: 15, due_day: 3, pay_account_id: null },
 ];
 /* Faz 39 — kategori İKİ HÂLİYLE duruyor (company_events'in `tahmini` fikstürüyle aynı gerekçe):
@@ -110,9 +110,9 @@ const transactions = [
   { id: 6, date: d(-4), name: "FATURALAR", amount: -2350, category_id: null, account_id: 1 },
 ];
 const recurring = [
-  { id: 1, kind: "income", name: "Maaş", day: 15, from_month: null, to_month: null, account_id: 2, card_id: null, category_id: 3, auto: true },
+  { id: 1, kind: "income", name: "Maaş", day: 15, from_month: null, to_month: null, account_id: 2, card_id: null, category_id: 3, auto: true, auto_since: d(-45) },
   { id: 2, kind: "expense", name: "Kira", day: 5, from_month: null, to_month: null, account_id: 1, card_id: null, category_id: null, auto: false },
-  { id: 3, kind: "expense", name: "Netflix aboneliği", day: 20, from_month: null, to_month: null, account_id: null, card_id: 1, category_id: null, auto: true },
+  { id: 3, kind: "expense", name: "Netflix aboneliği", day: 20, from_month: null, to_month: null, account_id: null, card_id: 1, category_id: null, auto: true, auto_since: d(-45) },
 ];
 const all = {
   accounts, categories, cards, card_txs, trades, prices, price_history, benchmark_history, transactions, recurring,
