@@ -3,16 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Finans — nakit, portföy ve borç tek defterde</title>
-<meta name="description" content="Kişisel finans defteri: hesaplarını, yatırımlarını, kart ekstrelerini ve kredi taksitlerini aynı tabloda birleştirir. Net varlığını ve önündeki ayları tek ekranda gör.">
+<title>Finans · Kişisel finans takibi</title>
+<meta name="description" content="Banka hesaplarınızı, kartlarınızı, kredilerinizi ve yatırımlarınızı tek yerden takip edin. Ay sonunda ne kadar paranız kalacağını önceden görün. Kayıtlarınız şifreli saklanır.">
 <link rel="canonical" href="/">
 <meta name="theme-color" content="#F4F3F0" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0D0D11" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="/favicon-32.png" sizes="32x32">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta property="og:type" content="website">
-<meta property="og:title" content="Finans — nakit, portföy ve borç tek defterde">
-<meta property="og:description" content="Hesaplarını, yatırımlarını, kart ekstrelerini ve kredi taksitlerini aynı tabloda birleştir. Net varlığını ve önündeki ayları tek ekranda gör.">
+<meta property="og:title" content="Finans · Kişisel finans takibi">
+<meta property="og:description" content="Banka hesaplarınızı, kartlarınızı, kredilerinizi ve yatırımlarınızı tek yerden takip edin. Kayıtlarınız şifreli saklanır.">
 <meta property="og:locale" content="tr_TR">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -90,6 +90,15 @@ button{font-family:inherit}
 .chip[aria-selected="true"]{border-color:transparent;background:var(--brand-soft);color:var(--brand);font-weight:600}
 .faq-q{display:flex;align-items:center;gap:12px;width:100%;padding:16px 20px;border:none;background:none;cursor:pointer;text-align:left;color:var(--ink)}
 .faq-a{padding:0 20px 18px;font-size:13.5px;line-height:1.6;color:var(--ink-2);max-width:520px}
+/* Güvenlik bölümü: aynı üç kayıt iki yüzüyle — ekranda açık, bizde okunamaz (soyut maske;
+   gerçek saklama biçimi bilinçli olarak gösterilmez). */
+.enc-row{display:flex;align-items:center;gap:12px;padding:9px 16px;border-top:1px solid var(--line-2);font-size:12.5px}
+.enc-row .d{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--ink-3);width:70px;flex-shrink:0}
+.enc-row .n{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.enc-row .v{font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums;white-space:nowrap}
+.enc-row .m{height:10px;border-radius:5px;background:var(--line);flex-shrink:0}
+.enc-row .k{flex:1;min-width:0;display:flex;align-items:center}
+.enc-row .l{color:var(--ink-3);display:grid;place-items:center;flex-shrink:0}
 /* Dokunma hedefi: uygulamadaki mobil kuralın (min-height:40px) landing karşılığı */
 @media(max-width:900px){
   .wrap{padding:0 20px}
@@ -115,6 +124,7 @@ button{font-family:inherit}
       <span style="font-weight:700;font-size:16.5px;letter-spacing:-.02em">Finans</span>
     </a>
     <nav class="navlinks" style="display:flex;align-items:center;gap:4px;margin-left:14px">
+      <a href="#guvenlik" style="padding:7px 12px;border-radius:9px;font-size:13.5px;font-weight:500;color:var(--ink-2)">Güvenlik</a>
       <a href="#neden" style="padding:7px 12px;border-radius:9px;font-size:13.5px;font-weight:500;color:var(--ink-2)">Neden Finans</a>
       <a href="#ozellikler" style="padding:7px 12px;border-radius:9px;font-size:13.5px;font-weight:500;color:var(--ink-2)">Özellikler</a>
       <a href="#giris" style="padding:7px 12px;border-radius:9px;font-size:13.5px;font-weight:500;color:var(--ink-2)">Veri girişi</a>
@@ -134,11 +144,12 @@ button{font-family:inherit}
   <div class="wrap" style="position:relative">
     <div style="max-width:760px;animation:fadeUp .5s ease both">
       <div style="display:inline-flex;align-items:center;gap:9px;padding:5px 12px 5px 6px;border:1px solid var(--line);background:var(--surface);border-radius:999px;font-size:12.5px;font-weight:500;color:var(--ink-2);box-shadow:var(--shadow-sm)">
-        <span style="padding:2px 8px;border-radius:999px;background:var(--brand-soft);color:var(--brand);font-size:11px;font-weight:700;letter-spacing:.03em">TL BAZLI</span>
-        Nakit, portföy ve borç aynı defterde
+        <span style="display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;background:var(--pos-soft);color:var(--pos);font-size:11px;font-weight:700;letter-spacing:.03em">
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="7" width="10" height="7.5" rx="1.6"/><path d="M5.2 7V5.2a2.8 2.8 0 0 1 5.6 0V7"/></svg>ŞİFRELİ</span>
+        <a href="#guvenlik" style="color:inherit">Kayıtlarınız şifreli saklanır</a>
       </div>
-      <h1 class="h1" style="margin-top:22px">Nakit, portföy ve borç. Tek defterde.</h1>
-      <p class="lede" style="margin-top:20px;max-width:600px">Finans; hesaplarınızı, yatırımlarınızı, kart ekstrelerinizi ve kredi taksitlerinizi aynı tabloda birleştirir — böylece net varlığınızı ve önünüzdeki ayları tek ekranda görürsünüz.</p>
+      <h1 class="h1" style="margin-top:22px">Bütün paranızı tek yerden takip edin.</h1>
+      <p class="lede" style="margin-top:20px;max-width:600px">Banka hesaplarınızı, kredi kartlarınızı, kredilerinizi ve yatırımlarınızı aynı yere girin. Finans bugün ne kadar paranız olduğunu ve önümüzdeki aylarda ne kadar kalacağını gösterir.</p>
       <div style="display:flex;gap:11px;flex-wrap:wrap;margin-top:30px">
         <a href="/app" class="btn-primary">Ücretsiz başla
           <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M2.5 7.5h10M9 4l3.5 3.5L9 11"/></svg>
@@ -146,7 +157,7 @@ button{font-family:inherit}
         <a href="#ozellikler" class="btn-ghost">Nasıl çalışır</a>
       </div>
       <div style="display:flex;gap:22px;flex-wrap:wrap;margin-top:24px;font-size:12.5px;color:var(--ink-3)">
-        <span>Ücretsiz, kredi kartı istemez</span><span>·</span><span>Banka bağlantısı yok</span><span>·</span><span>Verini istediğin an indir</span>
+        <span>Şifreli</span><span>·</span><span>Banka bağlantısı yok</span><span>·</span><span>Verilerinizi istediğiniz an indirin</span>
       </div>
     </div>
 
@@ -235,49 +246,100 @@ button{font-family:inherit}
   </div>
 </section>
 
+<!-- ==================== GÜVENLİK ====================
+     Ziyaretçiye mekanizma değil sonuç anlatılır. Gerekçe ve ifade kuralı: docs/E2EE.md. -->
+<section id="guvenlik" class="sect">
+  <div class="wrap">
+    <div class="split" style="align-items:center">
+      <div>
+        <div class="sect-kicker" style="color:var(--pos)">Gizlilik</div>
+        <h2 class="h2" style="margin-top:14px">Girdiğiniz rakamları biz de göremiyoruz.</h2>
+        <p class="lede" style="margin-top:16px">Tutarlar, hesap adları ve notlar şifreli olarak saklanır. Kilidi sizin parolanız açıyor ve bizde bir kopyası yok. Veritabanına baksak bile karşımıza okunabilir bir şey çıkmıyor.</p>
+      </div>
+
+      <div class="card" style="border-radius:20px;box-shadow:var(--shadow);overflow:hidden" role="img" aria-label="Aynı kayıtlar ekranınızda okunur, veritabanımızda okunamaz">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px 16px;background:var(--surface-3)">
+          <span style="font-size:12.5px;font-weight:700">Sizin ekranınızda</span>
+        </div>
+        <div class="enc-row"><span class="d">12 Eyl</span><span class="n">Migros</span><span class="v" style="color:var(--neg)">−₺450,50</span></div>
+        <div class="enc-row"><span class="d">15 Eyl</span><span class="n">Maaş</span><span class="v" style="color:var(--pos)">+₺62.000</span></div>
+        <div class="enc-row"><span class="d">18 Eyl</span><span class="n">Yapı Kredi ekstresi</span><span class="v" style="color:var(--neg)">−₺28.400</span></div>
+
+        <div style="display:flex;align-items:center;justify-content:center;gap:8px;padding:11px 16px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--pos-soft);color:var(--pos);font-size:12px;font-weight:600">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="7" width="10" height="7.5" rx="1.6"/><path d="M5.2 7V5.2a2.8 2.8 0 0 1 5.6 0V7"/></svg> şifreli olarak kaydedilir
+        </div>
+
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px 16px;background:var(--surface-3)">
+          <span style="font-size:12.5px;font-weight:700">Bizim gördüğümüz</span>
+        </div>
+        <div class="enc-row"><span class="d">12 Eyl</span><span class="k"><span class="m" style="width:34%"></span></span><span class="m" style="width:58px"></span><span class="l"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="7" width="10" height="7.5" rx="1.6"/><path d="M5.2 7V5.2a2.8 2.8 0 0 1 5.6 0V7"/></svg></span></div>
+        <div class="enc-row"><span class="d">15 Eyl</span><span class="k"><span class="m" style="width:22%"></span></span><span class="m" style="width:64px"></span><span class="l"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="7" width="10" height="7.5" rx="1.6"/><path d="M5.2 7V5.2a2.8 2.8 0 0 1 5.6 0V7"/></svg></span></div>
+        <div class="enc-row"><span class="d">18 Eyl</span><span class="k"><span class="m" style="width:62%"></span></span><span class="m" style="width:58px"></span><span class="l"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="7" width="10" height="7.5" rx="1.6"/><path d="M5.2 7V5.2a2.8 2.8 0 0 1 5.6 0V7"/></svg></span></div>
+      </div>
+    </div>
+
+    <div class="cols-3" style="margin-top:38px">
+      <div class="card" style="padding:20px 22px;display:flex;gap:14px;align-items:flex-start">
+        <span style="width:32px;height:32px;flex-shrink:0;border-radius:10px;background:var(--pos-soft);color:var(--pos);display:grid;place-items:center"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/><path d="M2.5 13.5l11-11"/></svg></span>
+        <div><div style="font-size:15px;font-weight:700;letter-spacing:-.01em">Parolanızı bilmiyoruz</div><div style="font-size:13.5px;color:var(--ink-2);margin-top:5px;line-height:1.55">Parolanız bize gönderilmiyor, bir yerde de saklanmıyor.</div></div>
+      </div>
+      <div class="card" style="padding:20px 22px;display:flex;gap:14px;align-items:flex-start">
+        <span style="width:32px;height:32px;flex-shrink:0;border-radius:10px;background:var(--pos-soft);color:var(--pos);display:grid;place-items:center"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="2" y="4" width="12" height="8" rx="1.6"/><path d="M5 8h.01M8 8h.01M11 8h.01" stroke-width="2.4" stroke-linecap="round"/></svg></span>
+        <div><div style="font-size:15px;font-weight:700;letter-spacing:-.01em">Kurtarma kodunuzu saklayın</div><div style="font-size:13.5px;color:var(--ink-2);margin-top:5px;line-height:1.55">Hesabı açarken size bir kurtarma kodu veriyoruz. Parolanızı unutursanız verilerinize onunla ulaşırsınız. İkisini birden kaybederseniz verileri biz de açamayız.</div></div>
+      </div>
+      <div class="card" style="padding:20px 22px;display:flex;gap:14px;align-items:flex-start">
+        <span style="width:32px;height:32px;flex-shrink:0;border-radius:10px;background:var(--pos-soft);color:var(--pos);display:grid;place-items:center"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.5v8M4.8 7.5L8 10.7l3.2-3.2M3 13.5h10"/></svg></span>
+        <div><div style="font-size:15px;font-weight:700;letter-spacing:-.01em">Verileriniz sizin</div><div style="font-size:13.5px;color:var(--ink-2);margin-top:5px;line-height:1.55">İstediğiniz zaman hepsini indirebilir ya da hesabınızı kalıcı olarak silebilirsiniz.</div></div>
+      </div>
+    </div>
+
+    <p style="font-size:12.5px;color:var(--ink-3);line-height:1.6;margin:18px 0 0">Asistanı kullanırsanız yazdığınız mesaj yapay zekâ servisine gönderilir, saklanmaz. İsterseniz asistanı Hesabım'dan kapatabilirsiniz. Ayrıntılar <a href="/gizlilik">Gizlilik Politikası</a>'nda.</p>
+  </div>
+</section>
+
 <!-- ==================== NEDEN ==================== -->
-<section id="neden" class="sect">
+<section id="neden" class="sect" style="border-top:1px solid var(--line)">
   <div class="wrap">
     <div style="max-width:620px">
       <div class="sect-kicker">Neden Finans</div>
-      <h2 class="h2" style="margin-top:14px">Paranız üç ayrı yerde yaşıyor. Karar tek yerde verilir.</h2>
-      <p class="lede" style="margin-top:16px">Banka uygulamasında bakiye, aracı kurumda portföy, kart uygulamasında ekstre. Hiçbiri size “ayın 20'sinde bu taksidi ödeyince elimde ne kalıyor?” sorusunun cevabını vermiyor. Finans bu üç tarafı tek bir defterde birleştirir.</p>
+      <h2 class="h2" style="margin-top:14px">Bakiye bir uygulamada, kart borcu başka birinde, yatırımlar bir başkasında.</h2>
+      <p class="lede" style="margin-top:16px">Hiçbiri de “ayın 20'sinde taksidi ödeyince elimde ne kalacak?” sorusuna cevap vermiyor. Finans hepsini bir araya getirip bu hesabı sizin yerinize yapar.</p>
     </div>
     <div class="cols-3" style="margin-top:38px">
       <div class="card" style="padding:22px 24px">
         <div style="display:flex;align-items:center;gap:9px">
           <span style="width:26px;height:26px;border-radius:9px;background:var(--neg-soft);color:var(--neg);display:grid;place-items:center;font-size:13px;font-weight:700">✕</span>
-          <span style="font-size:12px;font-weight:600;color:var(--ink-3)">Dağınık veri</span>
+          <span style="font-size:12px;font-weight:600;color:var(--ink-3)">Her şey dağınık</span>
         </div>
-        <div style="font-size:15.5px;font-weight:700;margin-top:14px;letter-spacing:-.01em">Bakiye bankada, portföy aracı kurumda, ekstre kart uygulamasında.</div>
+        <div style="font-size:15.5px;font-weight:700;margin-top:14px;letter-spacing:-.01em">Bakiyeye bankadan, yatırımlara aracı kurumdan, ekstreye kart uygulamasından bakıyorsunuz.</div>
         <div style="height:1px;background:var(--line-2);margin:16px 0"></div>
         <div style="display:flex;align-items:flex-start;gap:9px">
           <span style="width:26px;height:26px;flex-shrink:0;border-radius:9px;background:var(--pos-soft);color:var(--pos);display:grid;place-items:center;font-size:13px;font-weight:700">✓</span>
-          <span style="font-size:13.5px;color:var(--ink-2);line-height:1.5">Tek defter: Özet, Nakit Akışı, Plan, Kartlar, Portföy, Kayıtlar, Hesaplar ve Asistan.</span>
+          <span style="font-size:13.5px;color:var(--ink-2);line-height:1.5">Hepsi tek uygulamada: hesaplar, kartlar, krediler ve yatırımlar.</span>
         </div>
       </div>
       <div class="card" style="padding:22px 24px">
         <div style="display:flex;align-items:center;gap:9px">
           <span style="width:26px;height:26px;border-radius:9px;background:var(--neg-soft);color:var(--neg);display:grid;place-items:center;font-size:13px;font-weight:700">✕</span>
-          <span style="font-size:12px;font-weight:600;color:var(--ink-3)">Kör nokta</span>
+          <span style="font-size:12px;font-weight:600;color:var(--ink-3)">Ay sonu belirsiz</span>
         </div>
-        <div style="font-size:15.5px;font-weight:700;margin-top:14px;letter-spacing:-.01em">Bugünkü bakiyeyi biliyorsunuz; ay sonunu bilmiyorsunuz.</div>
+        <div style="font-size:15.5px;font-weight:700;margin-top:14px;letter-spacing:-.01em">Bugün ne kadar paranız olduğunu biliyorsunuz, ay sonunda ne kalacağını bilmiyorsunuz.</div>
         <div style="height:1px;background:var(--line-2);margin:16px 0"></div>
         <div style="display:flex;align-items:flex-start;gap:9px">
           <span style="width:26px;height:26px;flex-shrink:0;border-radius:9px;background:var(--pos-soft);color:var(--pos);display:grid;place-items:center;font-size:13px;font-weight:700">✓</span>
-          <span style="font-size:13.5px;color:var(--ink-2);line-height:1.5">Taksit ve ekstreleri de içeren aylık projeksiyon (varsayılan 6 ay), her satırda kalan nakit.</span>
+          <span style="font-size:13.5px;color:var(--ink-2);line-height:1.5">Maaşı, kirayı, taksitleri ve ekstreleri hesaba katıp önümüzdeki aylarda gün gün ne kadar paranız kalacağını gösterir.</span>
         </div>
       </div>
       <div class="card" style="padding:22px 24px">
         <div style="display:flex;align-items:center;gap:9px">
           <span style="width:26px;height:26px;border-radius:9px;background:var(--neg-soft);color:var(--neg);display:grid;place-items:center;font-size:13px;font-weight:700">✕</span>
-          <span style="font-size:12px;font-weight:600;color:var(--ink-3)">Zahmetli giriş</span>
+          <span style="font-size:12px;font-weight:600;color:var(--ink-3)">Kayıt girmek yorucu</span>
         </div>
-        <div style="font-size:15.5px;font-weight:700;margin-top:14px;letter-spacing:-.01em">Her kayıt tipi için ayrı ekran, uzun formlar, yarım kalan girişler.</div>
+        <div style="font-size:15.5px;font-weight:700;margin-top:14px;letter-spacing:-.01em">Her şey için ayrı bir ekran, uzun formlar.</div>
         <div style="height:1px;background:var(--line-2);margin:16px 0"></div>
         <div style="display:flex;align-items:flex-start;gap:9px">
           <span style="width:26px;height:26px;flex-shrink:0;border-radius:9px;background:var(--pos-soft);color:var(--pos);display:grid;place-items:center;font-size:13px;font-weight:700">✓</span>
-          <span style="font-size:13.5px;color:var(--ink-2);line-height:1.5">Sekiz kayıt tipini karşılayan tek panel; tip seçilir, alanlar kendini uyarlar.</span>
+          <span style="font-size:13.5px;color:var(--ink-2);line-height:1.5">Her şeyi tek bir “Ekle” düğmesinden girersiniz. Sık girdikleriniz bir dokunuşla dolar.</span>
         </div>
       </div>
     </div>
@@ -289,8 +351,8 @@ button{font-family:inherit}
   <div class="wrap">
     <div style="max-width:620px">
       <div class="sect-kicker">Özellikler</div>
-      <h2 class="h2" style="margin-top:14px">Sekiz sekme, tek finansal tablo</h2>
-      <p class="lede" style="margin-top:16px">İlişkili her işlem aynı sekmede duruyor — nakitle ilgili ne varsa Nakit Akışı'nda, kart borcu Kartlar'da, krediler Plan'da.</p>
+      <h2 class="h2" style="margin-top:14px">Neler yapabilirsiniz</h2>
+      <p class="lede" style="margin-top:16px">Her konunun kendi sekmesi var: nakit için Nakit Akışı, kart borçları için Kartlar, krediler için Plan.</p>
     </div>
 
     <div style="display:grid;gap:14px;margin-top:38px">
@@ -326,20 +388,20 @@ button{font-family:inherit}
     <div class="split">
       <div>
         <div class="sect-kicker">Veri girişi</div>
-        <h2 class="h2" style="margin-top:14px">Tek panel. Sekiz kayıt tipi.</h2>
-        <p class="lede" style="margin-top:16px">Gelir/gider, transfer, kart harcaması, düzenli kalem, kredi, portföy işlemi, vadeli mevduat ve toplu içe aktarma aynı panelde. Tipi seçince alanlar kendini değiştirir.</p>
+        <h2 class="h2" style="margin-top:14px">Her şeyi aynı yerden girin</h2>
+        <p class="lede" style="margin-top:16px">Gelir, gider, hesaplar arası transfer, kart harcaması, düzenli ödemeler, kredi, yatırım ve vadeli mevduat aynı “Ekle” penceresinden girilir. Ne eklediğinizi seçtiğinizde form ona göre değişir.</p>
         <div style="display:grid;gap:12px;margin-top:26px">
           <div style="display:flex;align-items:flex-start;gap:13px">
             <span class="mono" style="width:30px;height:30px;flex-shrink:0;border-radius:10px;background:var(--brand-soft);color:var(--brand);display:grid;place-items:center;font-size:12px;font-weight:600">01</span>
-            <div><div style="font-size:14.5px;font-weight:600">Tipi seçin</div><div style="font-size:13.5px;color:var(--ink-2);margin-top:2px;line-height:1.5">Her seçeneğin altında o kaydın neyi etkilediği yazar: bakiye, projeksiyon, ekstre.</div></div>
+            <div><div style="font-size:14.5px;font-weight:600">Ne eklediğinizi seçin</div><div style="font-size:13.5px;color:var(--ink-2);margin-top:2px;line-height:1.5">Her seçeneğin altında neyi etkileyeceği yazar: bakiyeyi mi, ekstreyi mi, planı mı.</div></div>
           </div>
           <div style="display:flex;align-items:flex-start;gap:13px">
             <span class="mono" style="width:30px;height:30px;flex-shrink:0;border-radius:10px;background:var(--brand-soft);color:var(--brand);display:grid;place-items:center;font-size:12px;font-weight:600">02</span>
-            <div><div style="font-size:14.5px;font-weight:600">Formu doldurun</div><div style="font-size:13.5px;color:var(--ink-2);margin-top:2px;line-height:1.5">Sık girdikleriniz üstte çip olarak durur; ada göre yazmaya başlayınca tutar, kategori ve hesap son kaydınızdan dolar.</div></div>
+            <div><div style="font-size:14.5px;font-weight:600">Formu doldurun</div><div style="font-size:13.5px;color:var(--ink-2);margin-top:2px;line-height:1.5">Sık girdikleriniz üstte hazır durur. Bir adı yazmaya başladığınızda tutar, kategori ve hesap son kaydınızdan gelir.</div></div>
           </div>
           <div style="display:flex;align-items:flex-start;gap:13px">
             <span class="mono" style="width:30px;height:30px;flex-shrink:0;border-radius:10px;background:var(--brand-soft);color:var(--brand);display:grid;place-items:center;font-size:12px;font-weight:600">03</span>
-            <div><div style="font-size:14.5px;font-weight:600">Kaydedin</div><div style="font-size:13.5px;color:var(--ink-2);margin-top:2px;line-height:1.5">Kayıt ilgili sekmelere ve nakit projeksiyonuna aynı anda işler; sonradan düzenlenebilir.</div></div>
+            <div><div style="font-size:14.5px;font-weight:600">Kaydedin</div><div style="font-size:13.5px;color:var(--ink-2);margin-top:2px;line-height:1.5">Kayıt ilgili bütün ekranlara aynı anda yansır. Sonradan düzenleyebilirsiniz.</div></div>
           </div>
         </div>
       </div>
@@ -348,7 +410,7 @@ button{font-family:inherit}
         <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--line)">
           <div>
             <div style="font-size:15px;font-weight:700">Kayıt ekle</div>
-            <div style="font-size:11.5px;color:var(--ink-3);margin-top:1px">tek panelden her tip</div>
+            <div style="font-size:11.5px;color:var(--ink-3);margin-top:1px">hepsi aynı pencereden</div>
           </div>
           <span style="width:26px;height:26px;border-radius:8px;border:1px solid var(--line);color:var(--ink-3);display:grid;place-items:center;font-size:12px" aria-hidden="true">✕</span>
         </div>
@@ -383,9 +445,9 @@ button{font-family:inherit}
   <div class="wrap">
     <div class="split" style="align-items:flex-start">
       <div>
-        <div class="sect-kicker">Çok varlıklı portföy</div>
-        <h2 class="h2" style="margin-top:14px">Altından kriptoya, hepsi aynı tabloda</h2>
-        <p class="lede" style="margin-top:16px">Altı varlık türü — BIST, yatırım fonu, altın, döviz, kripto ve ABD hisse/ETF — tek maliyet-değer mantığıyla izlenir. Dolar bazlı varlıklar kendi biriminde tutulur, toplamlar TL'ye çevrilir; portföy nakit ve borçlarla aynı net varlık hesabına girer.</p>
+        <div class="sect-kicker">Yatırımlar</div>
+        <h2 class="h2" style="margin-top:14px">Altından kriptoya bütün yatırımlarınız</h2>
+        <p class="lede" style="margin-top:16px">Borsa İstanbul hisseleri, yatırım fonları, altın, döviz, kripto ve ABD hisseleri aynı şekilde takip edilir. Dolarla aldıklarınız dolar olarak kalır, toplamlar TL'ye çevrilir. Yatırımlarınız nakit ve borçlarınızla birlikte toplam varlığınıza eklenir.</p>
       </div>
       <div id="assetList" style="display:grid;gap:9px"></div>
     </div>
@@ -412,7 +474,7 @@ button{font-family:inherit}
       <div style="position:absolute;inset:0;background:radial-gradient(600px 240px at 50% -30%,var(--brand-soft),transparent)"></div>
       <div style="position:relative">
         <h2 class="h2" style="max-width:520px;margin:0 auto">Bu ayın sonunda elinizde ne kalacak?</h2>
-        <p class="lede" style="margin:14px auto 0;max-width:470px">Hesaplarınızı ve düzenli kalemlerinizi bir kez girin — Finans gerisini hesaplar.</p>
+        <p class="lede" style="margin:14px auto 0;max-width:470px">Hesaplarınızı ve düzenli ödemelerinizi bir kez girin, gerisini Finans hesaplasın.</p>
         <div style="display:flex;gap:11px;justify-content:center;flex-wrap:wrap;margin-top:28px">
           <a href="/app" class="btn-primary" style="padding:14px 26px">Finans'ı açın
             <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M2.5 7.5h10M9 4l3.5 3.5L9 11"/></svg>
@@ -430,10 +492,11 @@ button{font-family:inherit}
     <div style="display:flex;align-items:center;gap:10px">
       <span style="width:26px;height:26px;border-radius:8px;background:linear-gradient(140deg,var(--brand),var(--brand-2));color:#fff;display:grid;place-items:center;font-weight:800;font-size:14px">₺</span>
       <span style="font-weight:700;font-size:14px;letter-spacing:-.02em">Finans</span>
-      <span style="font-size:12.5px;color:var(--ink-3)">· kişisel finans defteri</span>
+      <span style="font-size:12.5px;color:var(--ink-3)">· kişisel finans takibi</span>
     </div>
     <div style="flex:1"></div>
     <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:12.5px">
+      <a href="#guvenlik" style="color:var(--ink-2)">Güvenlik</a>
       <a href="#neden" style="color:var(--ink-2)">Neden Finans</a>
       <a href="#ozellikler" style="color:var(--ink-2)">Özellikler</a>
       <a href="#sss" style="color:var(--ink-2)">S.S.S.</a>

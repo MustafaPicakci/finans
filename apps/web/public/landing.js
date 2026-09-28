@@ -32,24 +32,24 @@
   var soft = function (t) { return "color-mix(in srgb," + cv(t) + " 13%,transparent)"; };
   var features = {
     ozet: {
-      title: "Özet", glyph: "◧", tone: cv("pos"), soft: cv("pos-soft"), tabs: "tek ekran",
-      head: "Net varlığınız tek sayıda, kaynakları tek bakışta",
-      body: "Nakit, portföy, vadeli mevduat ve borçlar aynı hesaba girer. Net varlık, hesap dağılımı, varlık dağılımı ve Nakit Haritası açılışta karşınızda.",
-      points: ["Net varlık = nakit + portföy + vadeli − kart ve kredi borcu", "Önümüzdeki günlerin likit nakit eğrisi", "Hesap bazında nakit ve varlık türüne göre dağılım", "Yaklaşan hareketler ve nakit açığı uyarısı"],
-      demoTitle: "Net varlık kırılımı", demoMeta: "örnek",
+      title: "Özet", glyph: "◧", tone: cv("pos"), soft: cv("pos-soft"), tabs: "ana ekran",
+      head: "Toplam ne kadar paranız var, tek bakışta",
+      body: "Nakit, yatırımlar ve vadeli mevduattan borçlar düşülür, geriye tek bir rakam kalır. Uygulamayı açtığınızda ilk bunu görürsünüz; altında neyin ne kadar tuttuğu yazar.",
+      points: ["Kart ve kredi borcu düşülmüş gerçek toplam", "Önümüzdeki günlerde nakdinizin nasıl değişeceği", "Paranızın hangi hesapta, hangi yatırımda durduğu", "Yaklaşan ödemeler ve para yetmeyecekse uyarı"],
+      demoTitle: "Toplam varlık", demoMeta: "örnek",
       demo: [
         { name: "Nakit", meta: "4 hesap", value: "₺297.000", color: cv("ink"), dot: cv("t-nakit") },
         { name: "Portföy", meta: "6 varlık türü", value: "₺1.243.400", color: cv("ink"), dot: cv("brand") },
         { name: "Kart borcu", meta: "2 ekstre", value: "−₺48.600", color: cv("neg"), dot: cv("t-kripto") },
         { name: "Kredi borcu", meta: "2 kredi", value: "−₺512.000", color: cv("neg"), dot: cv("t-altin") }
       ],
-      footLabel: "Net varlık", footValue: "₺979.800", footColor: cv("ink")
+      footLabel: "Toplam", footValue: "₺979.800", footColor: cv("ink")
     },
     nakit: {
       title: "Nakit Akışı", glyph: "≋", tone: cv("t-nakit"), soft: soft("t-nakit"), tabs: "Takvim · Liste",
       head: "Ayın 20'sinde elinizde ne kalacağını bugün görün",
-      body: "Düzenli gelir ve giderler, kart ekstreleri ve kredi taksitleri tek projeksiyona akar. Takvimde her günün sonundaki nakit, listede her işlemden sonra kalan bakiye yazar.",
-      points: ["Varsayılan 6 aylık projeksiyon — süreyi Özet'ten değiştirirsiniz", "Gün gün takvim görünümü ve en düşük nokta", "Her işlemden sonra kalan bakiye", "Ödeme öncesi açık varsa \u201Cfon boz\u201D önerisi"],
+      body: "Maaş, kira, faturalar, kart ekstreleri ve kredi taksitleri takvime yerleşir. Her günün sonunda hesabınızda ne kadar kalacağını görürsünüz.",
+      points: ["Varsayılan olarak 6 ay ileriye bakar, isterseniz değiştirirsiniz", "Paranın en çok azaldığı gün işaretlenir", "Listede her ödemeden sonra kalan bakiye yazar", "Ödeme gününde para yetmeyecekse hangi fonu bozabileceğinizi söyler"],
       demoTitle: "Yaklaşan hareketler", demoMeta: "kalan nakit",
       demo: [
         { name: "Kira geliri", meta: "15 Ağu · düzenli gelir", value: "₺313.000", color: cv("pos"), dot: cv("pos") },
@@ -61,9 +61,9 @@
     },
     borc: {
       title: "Kartlar & Krediler", glyph: "◱", tone: cv("t-kripto"), soft: soft("t-kripto"), tabs: "Kartlar · Plan",
-      head: "Ekstre, taksit ve kredi projeksiyona kendiliğinden akar",
-      body: "Kart borcu, kesim ve son ödeme tarihleri ve taksitli harcamalar Kartlar sekmesinde; krediler Plan'da. İkisi de nakit projeksiyonuna otomatik yansır.",
-      points: ["Kart limiti, kullanım oranı ve kullanılabilir tutar", "Harcama kesim gününe göre doğru ekstreye düşer", "Taksitli harcama ardışık ekstrelere bölünür", "Kredide kalan taksit tarihten hesaplanır; biten kredi projeksiyondan düşer"],
+      head: "Kart borçları ve krediler hesaba kendiliğinden girer",
+      body: "Kart harcamanızı girersiniz, hangi ekstreye düşeceğini Finans hesaplar. Kredilerin kalan taksitleri de kendiliğinden takip edilir ve ikisi de ileriye dönük hesaba katılır.",
+      points: ["Kart limitiniz, ne kadarını kullandığınız, ne kadar kaldığı", "Harcama kesim tarihine göre doğru ekstreye yazılır", "Taksitli alışveriş aylara bölünür", "Biten kredi listeden kendiliğinden düşer"],
       demoTitle: "Borç kalemleri", demoMeta: "örnek",
       demo: [
         { name: "Yapı Kredi World", meta: "kesim 18 Ağu · limit ₺75.000", value: "−₺28.400", color: cv("neg"), dot: cv("t-nakit") },
@@ -74,10 +74,10 @@
       footLabel: "Aylık toplam borç ödemesi", footValue: "₺37.100", footColor: cv("neg")
     },
     portfoy: {
-      title: "Portföy", glyph: "◫", tone: cv("brand"), soft: cv("brand-soft"), tabs: "pozisyon + işlem",
-      head: "Altı varlık türü, tek maliyet-değer mantığı",
-      body: "BIST, yatırım fonu, altın, döviz, kripto ve ABD hisse/ETF aynı tabloda. Her pozisyonun ortalama maliyeti, güncel değeri, açık kâr–zararı ve ağırlığı yan yana durur.",
-      points: ["Açık ve gerçekleşen kâr–zarar ayrı ayrı", "Değer grafiği kârı konan paradan ayırır, referans endekslerle karşılaştırır", "Portföy grupları: aynı sembol iki grupta ayrı maliyet", "Dolar bazlı varlıklar kendi biriminde, toplamlar TL"],
+      title: "Portföy", glyph: "◫", tone: cv("brand"), soft: cv("brand-soft"), tabs: "hisse, fon, altın",
+      head: "Hisse, fon, altın, döviz, kripto bir arada",
+      body: "Bütün yatırımlarınız aynı listede. Her birinin kaça aldığınızı, bugün kaç ettiğini ve ne kadar kazandırdığını görürsünüz.",
+      points: ["Satıp kazandığınız ile hâlâ elinizde duran kâr ayrı ayrı", "Grafik yatırdığınız parayla kazancınızı karıştırmaz, endekslerle kıyaslar", "Farklı amaçlar için ayrı portföyler açabilirsiniz", "Dolarla aldıklarınız dolar olarak durur, toplam TL'ye çevrilir"],
       demoTitle: "Pozisyonlar", demoMeta: "açık K/Z",
       demo: [
         { name: "GRAM · Gram altın", meta: "120 gr · ort. ₺2.450", value: "+₺64.200", color: cv("pos"), dot: cv("t-altin") },
@@ -89,16 +89,16 @@
     },
     asistan: {
       title: "Asistan", glyph: "◍", tone: cv("t-fon"), soft: soft("t-fon"), tabs: "yaz, söyle, paylaş",
-      head: "İşlemi anlatın, kayda o çevirsin",
-      body: "Ne yaptığınızı gündelik dille yazarsınız; asistan bunu bir kayıt planına çevirir ve önce onayınıza sunar. Siz onaylamadan hiçbir şey yazılmaz.",
-      points: ["Her plan onay kartında görünür — satırları çıkarabilirsiniz", "Uyguladığınız planı tek düğmeyle geri alın", "Sesle yazdırma tarayıcıda çalışır; ses sunucuya gitmez", "Android'de banka SMS'ini \u201CPaylaş → Finans\u201D ile gönderin"],
-      demoTitle: "Onay bekleyen plan", demoMeta: "uygulanmadan önce",
+      head: "Yazın ya da söyleyin, kaydı asistan hazırlasın",
+      body: "“Migros'ta 3.240 harcadım” yazmanız yeterli. Asistan bunu kayda çevirip size gösterir, siz onaylayana kadar hiçbir şey kaydedilmez.",
+      points: ["Kaydetmeden önce ne yapılacağını görür, istemediğinizi çıkarırsınız", "Yanlış bir şey olursa tek dokunuşla geri alırsınız", "Sesle yazdırabilirsiniz, ses kaydı bize gelmez", "Android'de banka SMS'ini \u201CPaylaş → Finans\u201D ile gönderebilirsiniz"],
+      demoTitle: "Onayınızı bekliyor", demoMeta: "henüz kaydedilmedi",
       demo: [
         { name: "\u201CMigros\u2019ta 3.240 harcadım\u201D", meta: "gider · Market · Vakıfbank", value: "−₺3.240", color: cv("neg"), dot: cv("t-nakit") },
         { name: "\u201CMaaş yattı\u201D", meta: "gelir · Vakıfbank", value: "+₺62.000", color: cv("pos"), dot: cv("pos") },
-        { name: "\u201CYapı Kredi ekstresini öde\u201D", meta: "tutarı sunucu hesaplar", value: "−₺28.400", color: cv("neg"), dot: cv("t-kripto") }
+        { name: "\u201CYapı Kredi ekstresini öde\u201D", meta: "tutarı uygulama hesaplar", value: "−₺28.400", color: cv("neg"), dot: cv("t-kripto") }
       ],
-      footLabel: "Onaylamadan hiçbiri yazılmaz", footValue: "3 kayıt", footColor: cv("ink")
+      footLabel: "Onaylamadan hiçbiri kaydedilmez", footValue: "3 kayıt", footColor: cv("ink")
     }
   };
   var featureOrder = ["ozet", "nakit", "borc", "portfoy", "asistan"];
@@ -153,27 +153,27 @@
     kalem: {
       amountLabel: "Tutar", amount: "3.240",
       fields: [chips("Tür", ["Gider", "Gelir"], "Gider"), chips("Kategori", ["Market", "Yeme-içme", "Ulaşım", "Fatura"], "Market"), field("Hesap", "Vakıfbank Vadesiz"), field("Tarih", "11 Ağu 2026", true)],
-      effect: "Bugün/geçmiş tarihli → bakiyeye işler; ileri tarihli → plana girer"
+      effect: "Bugünün tarihiyle bakiyeden düşer, ileri bir tarihle plana eklenir"
     },
     transfer: {
       amountLabel: "Transfer tutarı", amount: "25.000",
       fields: [field("Gönderen", "Vakıfbank Vadesiz"), field("Alan", "Enpara"), field("Tarih", "11 Ağu 2026", true), field("Açıklama", "Birikim hesabına")],
-      effect: "İki bacağı tek kayıtta yazar; gelir/gider sayılmaz, net varlık değişmez"
+      effect: "Bir hesaptan düşer, diğerine eklenir. Gider sayılmaz."
     },
     cardtx: {
       amountLabel: "Harcama tutarı", amount: "4.500",
       fields: [field("Kart", "Yapı Kredi World"), chips("Taksit", ["Tek çekim", "3", "6", "12"], "12"), chips("Kategori", ["Market", "Teknoloji", "Giyim", "Diğer"], "Teknoloji"), field("Tarih", "11 Ağu 2026", true)],
-      effect: "Kesim gününe göre doğru ekstreye düşer; taksitler ardışık ekstrelere bölünür"
+      effect: "Doğru ekstreye yazılır, taksitler sonraki aylara bölünür"
     },
     duzenli: {
       amountLabel: "Aylık tutar", amount: "62.000",
       fields: [chips("Tür", ["Gelir", "Gider"], "Gelir"), field("Ad", "Maaş"), field("Ayın günü", "25", true), field("Hedef hesap", "Vakıfbank Vadesiz")],
-      effect: "Her ay projeksiyona girer; tutarı sonradan değiştirmek geçmişi bozmaz"
+      effect: "Her ay plana girer. Tutar değişirse geçmiş aylar etkilenmez."
     },
     trade: {
       amountLabel: "İşlem tutarı", amount: "59.200",
       fields: [chips("Yön", ["ALIŞ", "SATIŞ", "TEMETTÜ", "BEDELSİZ"], "ALIŞ"), field("Sembol", "GRAM ALTIN"), field("Adet × Fiyat", "20 gr × ₺2.960", true), field("Hesap", "Enpara")],
-      effect: "Pozisyona ve net varlığa yansır; hesap seçilirse bakiyeyi de oynatır"
+      effect: "Portföyünüze eklenir. Hesap seçerseniz parası o hesaptan düşer."
     }
   };
   var entryOrder = [["kalem", "Gelir / Gider"], ["transfer", "Transfer"], ["cardtx", "Kart"], ["duzenli", "Düzenli"], ["trade", "Portföy"]];
@@ -232,12 +232,14 @@
      Cevaplar DOM'da hep var, kapalı olan gizleniyor: arama motoru JS çalıştırmadan
      da tüm soru-cevabı görsün (sayfanın SEO işi bu). */
   var faqs = [
-    { q: "Bankamı bağlamam gerekiyor mu?", a: "Hayır. Finans hiçbir banka hesabına bağlanmaz, banka kimlik bilgisi istemez. Hesaplarınızı ve düzenli kalemlerinizi bir kez tanımlarsınız, sonrası tek panelden birkaç saniyelik kayıt." },
-    { q: "Verilerim nerede tutuluyor?", a: "Kayıtlarınız uygulamanın bulut veri tabanında, yalnız sizin hesabınıza bağlı olarak saklanır — her kullanıcının verisi veri tabanı düzeyinde ayrıdır. Kullanmak için e-posta ile bir hesap açmanız gerekir; parolanız hiçbir zaman düz metin olarak kaydedilmez. Verinizin tamamını istediğiniz an indirebilir, hesabınızı kalıcı olarak silebilirsiniz. Ayrıntılar Gizlilik Politikası'nda." },
-    { q: "Döviz ve dolar bazlı varlıklar nasıl gösteriliyor?", a: "Her pozisyon kendi biriminde girilir, tüm toplamlar TL karşılığıyla hesaplanır. Üstteki ₺/$ düğmesiyle tüm ekranı dolar bazına çevirebilirsiniz." },
-    { q: "Taksitler ve kredi ödemeleri projeksiyona giriyor mu?", a: "Evet. Kart ekstreleri, taksitli harcamaların aylık payı ve kredi taksitleri nakit projeksiyonuna otomatik yansır — dip noktayı bu yüzden gerçekçi görürsünüz." },
-    { q: "Asistan nasıl çalışıyor?", a: "Yaptığınız işlemi gündelik dille yazarsınız ya da sesle söylersiniz; asistan bunu bir kayıt planına çevirip önce onayınıza sunar — onaylamadan hiçbir şey yazılmaz. Uyguladığınız bir planı sonradan geri alabilirsiniz. Sesle yazdırma tarayıcının kendi özelliğidir, ses kaydı sunucuya gönderilmez. Asistan yalnız bu panelin konularına cevap verir ve yatırım tavsiyesi vermez." },
-    { q: "Yatırım tavsiyesi veriyor mu?", a: "Vermiyor. Finans sadece sizin girdiğiniz veriyi düzenler ve hesaplar; alım-satım önerisi ya da getiri tahmini sunmaz." }
+    { q: "Bankamı bağlamam gerekiyor mu?", a: "Hayır. Finans hiçbir banka hesabına bağlanmaz, banka şifrenizi de istemez. Hesaplarınızı ve düzenli ödemelerinizi bir kez girersiniz, sonrasında yeni bir kayıt birkaç saniye sürer." },
+    { q: "Verilerim nerede tutuluyor?", a: "Bulutta, şifreli olarak. Tutarları, adları ve notları yalnızca siz okuyabilirsiniz. İstediğiniz zaman verilerinizin tamamını indirebilir ya da hesabınızı silebilirsiniz. Ayrıntılar Gizlilik Politikası'nda." },
+    { q: "Siz verilerimi görebiliyor musunuz?", a: "Hayır. Sakladığımız kayıtlar şifreli ve bizde onları açacak bir anahtar yok. Veritabanını barındıran şirket ya da verileri ele geçiren biri de okuyamaz." },
+    { q: "Parolamı unutursam ne olur?", a: "Hesabı açarken size bir kurtarma kodu veriyoruz. Parolanızı unutursanız bu kodla yeni parola belirlersiniz, verileriniz olduğu gibi kalır. İkisini birden kaybederseniz verilerinizi biz de açamayız ve hesabı sıfırdan başlatmanız gerekir. O yüzden kodu güvenli bir yere not edin." },
+    { q: "Döviz ve dolarla alınan yatırımlar nasıl görünüyor?", a: "Her yatırım kendi para biriminde girilir, toplamlar TL olarak hesaplanır. Üstteki ₺/$ düğmesiyle ekranı dolara çevirebilirsiniz." },
+    { q: "Taksitler ve kredi ödemeleri hesaba giriyor mu?", a: "Evet. Kart ekstreleri, taksitli alışverişlerin aylık payı ve kredi taksitleri ileriye dönük hesaba kendiliğinden girer. Paranızın en çok azalacağı günü bu yüzden gerçekçi görürsünüz." },
+    { q: "Asistan nasıl çalışıyor?", a: "Ne yaptığınızı yazarsınız ya da söylersiniz, asistan bunu kayda çevirip size gösterir. Siz onaylamadan hiçbir şey kaydedilmez, yaptığınızı sonradan geri de alabilirsiniz. Sesle yazdırırken ses kaydı bize gelmez. Asistan yalnızca uygulamayla ilgili sorulara cevap verir, yatırım tavsiyesi vermez. Kullandığınızda mesajınız yapay zekâ servisine gönderilir ve saklanmaz; isterseniz asistanı Hesabım'dan kapatabilirsiniz." },
+    { q: "Yatırım tavsiyesi veriyor mu?", a: "Hayır. Finans yalnızca girdiğiniz bilgileri düzenler ve hesaplar. Al-sat önerisi ya da getiri tahmini yapmaz." }
   ];
   $("faqList").innerHTML = faqs.map(function (f, i) {
     return '<div style="background:var(--surface)">' +
