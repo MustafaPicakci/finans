@@ -4,3 +4,4 @@ export * from "./read.js";
 export * from "./context.js";
 export * from "./enrich.js";
 export * from "./agent.js";
+export * from "./role.js";

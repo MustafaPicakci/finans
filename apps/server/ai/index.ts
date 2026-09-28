@@ -18,7 +18,7 @@
 
 import { randomUUID } from "node:crypto";
 import { getProvider } from "./provider.js";
-import { systemPrompt, toolDefs, type UserContext, type ChatMessage } from "@finans/asistan";
+import { systemPrompt, toolDefs, baglamKur, gecmisDenetle, RoleHatasi, type ChatMessage } from "@finans/asistan";
 import { db, nowLocal, zarfGecerli } from "../db.js";
 
 /* E2EE aşama 5d: sohbet başlığı, mesaj içeriği, plan ve işlem özeti ZARFTA. Sunucu bu
@@ -252,6 +252,14 @@ export function mountAi(api: any, deps: { rateLimited: RateLimiter }): void {
      sınır ise /ai/messages'ta (eski 30/5dk bütçesi orada korunuyor). */
   const BAGLAM_TAVAN = 60_000;
   const TUR_TAVAN = 60;
+  /* Kullanıcı başına GÜNLÜK model turu tavanı. Asıl koruma bu: bağlam ve geçmiş istemciden
+     geldiği için (E2EE) sahte bir istek biçimce doğru olabilir, ama bedeli sınırlanır —
+     kayıt herkese açık ve anahtar paylaşılan bir kota (kötüye kullanılırsa asistan herkes
+     için durur). Normal kullanım: mesaj başına 1-3 tur, yani ~100+ mesaj/gün.
+     Sayaç bellekte: süreç yeniden başlarsa sıfırlanır. Kabul edilebilir, çünkü süreç ancak
+     trafik YOKKEN uyur (Render) — süren bir kötüye kullanım onu zaten uyanık tutar. */
+  const GUNLUK_TUR = 300;
+  const araclar = new Set(toolDefs().map((t) => t.name));
   api.post("/ai/relay", async (c: any) => {
     const uid = c.get("user").id;
     const p = getProvider();
@@ -259,17 +267,23 @@ export function mountAi(api: any, deps: { rateLimited: RateLimiter }): void {
     if (!(await asistanAcik(uid))) return c.json({ error: "Asistan kapalı (Hesabım'dan açabilirsin)" }, 403);
     if (deps.rateLimited(`airelay:${uid}`, 120, 5 * 60_000)) return c.json({ error: "Çok fazla istek, biraz sonra tekrar dene" }, 429);
     const b = await c.req.json().catch(() => null);
-    const ctx = b?.context, messages = b?.messages;
-    if (!ctx || typeof ctx !== "object" || !Array.isArray(messages) || !messages.length) return c.json({ error: "geçersiz istek" }, 400);
-    if (messages.length > TUR_TAVAN) return c.json({ error: "konuşma çok uzun" }, 400);
-    if (JSON.stringify(ctx).length > BAGLAM_TAVAN) return c.json({ error: "bağlam çok büyük" }, 413);
-    const bicimOk = messages.every((m: any) =>
-      (m?.role === "user" && typeof m.content === "string") ||
-      (m?.role === "assistant" && typeof m.content === "string" && (m.toolCalls === undefined || Array.isArray(m.toolCalls))) ||
-      (m?.role === "tool" && typeof m.callId === "string" && typeof m.name === "string"));
-    if (!bicimOk) return c.json({ error: "geçersiz mesaj biçimi" }, 400);
+    /* Bağlam istemcinin nesnesi değil, ondan YENİDEN KURULAN nesnedir (bilinen alanlar, tipler,
+       kırpılmış tek satır metin — bkz. @finans/asistan role.ts); geçmiş biçim/boyut/araç adı
+       denetiminden geçer. Tavan ancak geçerli istek sayılır: bozuk istek günlük hakkı yakmasın. */
+    let ctx, messages;
     try {
-      const r = await p.chat({ system: systemPrompt(ctx as UserContext), messages: messages as ChatMessage[], tools: toolDefs() });
+      ctx = baglamKur(b?.context);
+      messages = gecmisDenetle(b?.messages, araclar, TUR_TAVAN) as ChatMessage[];
+    } catch (e) {
+      if (e instanceof RoleHatasi) return c.json({ error: e.message }, 400);
+      throw e;
+    }
+    if (JSON.stringify(ctx).length > BAGLAM_TAVAN) return c.json({ error: "bağlam çok büyük" }, 413);
+    if (deps.rateLimited(`airelay-gun:${uid}`, GUNLUK_TUR, 24 * 60 * 60_000)) {
+      return c.json({ error: "Bugünlük asistan kullanım sınırına ulaştın, yarın tekrar dene" }, 429);
+    }
+    try {
+      const r = await p.chat({ system: systemPrompt(ctx), messages, tools: toolDefs() });
       return c.json({ text: r.text, toolCalls: r.toolCalls, model: p.label });
     } catch (e) {
       console.error("[ai] röle hatası:", (e as Error).message); // gövde DEĞİL, yalnız hata
