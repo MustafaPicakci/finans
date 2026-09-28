@@ -1,6 +1,6 @@
 # Sıfır bilgi şifreleme — tasarım
 
-*Durum: **uygulandı ve yerelde doğrulandı** (`e2ee` branch'i, aşama 0–6). Merge ve prod'a geçiş kullanıcı onayı bekliyor. Bu dosya **neden** sorusunu cevaplar; tasarımdan uygulamada sapılan yerler ilgili bölümde gerekçesiyle yazılı ("Uygulamada" notları).*
+*Durum: **uygulandı ve yerelde doğrulandı** (`e2ee` branch'i, aşama 0–6). Merge ve prod'a geçiş kullanıcı onayı bekliyor. Bu dosya **neden** sorusunu cevaplar; tasarımdan uygulamada sapılan yerler ilgili bölümde gerekçesiyle yazılı ("Uygulamada" notları). Teknik bilgi gerektirmeyen anlatımı: [E2EE-ANLATIM.md](E2EE-ANLATIM.md).*
 
 Amaç tek cümle: **sunucuyu işleten kişi kullanıcının finansal verisini okuyamasın.** Bugün okuyabiliyor — `DATABASE_URL` elinde, satırlar düz metin. "Verin güvende" demek bu hâliyle bir söz, garanti değil.
 
