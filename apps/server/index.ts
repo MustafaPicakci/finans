@@ -15,6 +15,7 @@ import { ZARF, ZARF_DUZ, type ZarfliTablo } from "@finans/crypto/map";
 import { sendMail, resetEmail, verifyEmail, mailConfigured, verifyMailConfig, mailFromWarning } from "./mail.js";
 import { mountAi } from "./ai/index.js";
 import { getProvider } from "./ai/provider.js";
+import { pushAcik, vapidPublic, aboneAdresiGecerli, pushIlet, bildirimleriGonder } from "./push.js";
 
 const app = new Hono();
 app.use("*", logger());
@@ -1480,6 +1481,91 @@ api.post("/account/delete", async (c) => {
    doğrudan gidiyor. Asistana özel bir yazma yolu diye bir şey kalmadı. */
 mountAi(api, { rateLimited });
 
+/* ---- Bildirimler (Faz 44) — sunucu yalnız postacı, bkz. push.ts ----
+   Rotalar BURADA (ayrı dosyada değil): asistan rota kapısı (check-ai-routes) yalnız bu dosyayı ve
+   ai/index.ts'i tarar; başka dosyaya konsalar yazma uçları kapının dışında kalırdı. */
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/;
+const B64U = /^[A-Za-z0-9_-]+$/;
+api.get("/push/durum", async (c) => {
+  const uid = c.get("user").id;
+  const abonelikler = pushAcik()
+    ? await db.all("SELECT id, endpoint, p256dh, auth, cihaz, created_at, son_basari FROM push_abonelik WHERE user_id=? ORDER BY id", uid)
+    : [];
+  return c.json({ acik: pushAcik(), publicKey: vapidPublic() || null, abonelikler });
+});
+api.post("/push/abonelik", async (c) => {
+  if (!pushAcik()) return c.json({ error: "Bildirimler sunucuda yapılandırılmamış" }, 503);
+  const uid = c.get("user").id;
+  const b = await c.req.json().catch(() => null);
+  if (!b || !aboneAdresiGecerli(b.endpoint)) return c.json({ error: "geçersiz abonelik adresi" }, 400);
+  if (typeof b.p256dh !== "string" || !B64U.test(b.p256dh) || b.p256dh.length > 120) return c.json({ error: "geçersiz anahtar" }, 400);
+  if (typeof b.auth !== "string" || !B64U.test(b.auth) || b.auth.length > 40) return c.json({ error: "geçersiz anahtar" }, 400);
+  const cihaz = typeof b.cihaz === "string" ? b.cihaz.slice(0, 60) : null;
+  if (rateLimited(`push-abone:${uid}`, 20, 60 * 60_000)) return c.json({ error: "Çok fazla istek, biraz sonra tekrar dene" }, 429);
+  const sayi = await db.get<{ n: string }>("SELECT count(*) n FROM push_abonelik WHERE user_id=? AND endpoint<>?", uid, b.endpoint);
+  if (Number(sayi?.n ?? 0) >= 10) return c.json({ error: "En fazla 10 cihaz bildirim alabilir — Hesabım'dan eskisini kaldır" }, 409);
+  /* Aynı tarayıcı başka bir hesapla açılmışsa adres o hesaptan ALINIR: bir cihaza iki kişinin
+     tutarlı bildirimi gitmesin. Anahtarlar da yenilenir (tarayıcı aboneliği tazelemiş olabilir). */
+  const r = await db.run(
+    `INSERT INTO push_abonelik (user_id, endpoint, p256dh, auth, cihaz, created_at) VALUES (?,?,?,?,?,?)
+     ON CONFLICT (endpoint) DO UPDATE SET user_id=EXCLUDED.user_id, p256dh=EXCLUDED.p256dh, auth=EXCLUDED.auth, cihaz=EXCLUDED.cihaz
+     RETURNING id`, uid, b.endpoint, b.p256dh, b.auth, cihaz, nowLocal());
+  return c.json({ id: r.id });
+});
+api.delete("/push/abonelik/:id", async (c) => {
+  const r = await db.run("DELETE FROM push_abonelik WHERE id=? AND user_id=?", Number(c.req.param("id")), c.get("user").id);
+  return r.changes ? c.json({ ok: true }) : c.json({ error: "bulunamadı" }, 404);
+});
+/* Planın TAMAMI tek istekte ve atomik değiştirilir: istemci her açılışta planı baştan kurar
+   (silinen kalem, ödenen ekstre plandan düşsün). Bu cihaza zaten gitmiş anahtarlar elenir. */
+api.put("/push/plan", async (c) => {
+  const uid = c.get("user").id;
+  if (rateLimited(`push-plan:${uid}`, 60, 5 * 60_000)) return c.json({ error: "Çok fazla istek, biraz sonra tekrar dene" }, 429);
+  const b = await c.req.json().catch(() => null);
+  const surum = Number(b?.surum);
+  if (!Number.isInteger(surum) || surum < 1 || !Array.isArray(b?.ogeler) || b.ogeler.length > 1000) return c.json({ error: "geçersiz plan" }, 400);
+  for (const o of b.ogeler) {
+    if (!o || !Number.isInteger(o.abonelik_id) || typeof o.anahtar !== "string" || o.anahtar.length > 80
+      || !ISO.test(o.zaman) || !ISO.test(o.bitis) || typeof o.govde !== "string" || !B64U.test(o.govde) || o.govde.length > 5000)
+      return c.json({ error: "geçersiz plan öğesi" }, 400);
+  }
+  const sonuc = await db.tx(async (t) => {
+    const onceki = await t.get("SELECT surum FROM push_plan WHERE user_id=? FOR UPDATE", uid);
+    if (onceki && onceki.surum > surum) return { eski: true };
+    const benim = new Set((await t.all("SELECT id FROM push_abonelik WHERE user_id=?", uid)).map((x: { id: number }) => x.id));
+    const giden = new Set((await t.all(
+      "SELECT g.abonelik_id, g.anahtar FROM push_gonderilen g JOIN push_abonelik a ON a.id=g.abonelik_id WHERE a.user_id=?", uid,
+    )).map((x: { abonelik_id: number; anahtar: string }) => `${x.abonelik_id}|${x.anahtar}`));
+    await t.run("DELETE FROM push_kuyruk WHERE user_id=?", uid);
+    let n = 0;
+    for (const o of b.ogeler) {
+      if (!benim.has(o.abonelik_id) || giden.has(`${o.abonelik_id}|${o.anahtar}`)) continue;
+      await t.run("INSERT INTO push_kuyruk (user_id, abonelik_id, anahtar, zaman, bitis, govde) VALUES (?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+        uid, o.abonelik_id, o.anahtar, o.zaman, o.bitis, o.govde);
+      n++;
+    }
+    await t.run("INSERT INTO push_plan (user_id, surum, at) VALUES (?,?,?) ON CONFLICT (user_id) DO UPDATE SET surum=EXCLUDED.surum, at=EXCLUDED.at", uid, surum, nowLocal());
+    return { eski: false, n };
+  });
+  if (sonuc.eski) return c.json({ error: "Uygulamanın daha yeni bir sürümü planı kurmuş — sayfayı yenile" }, 409);
+  return c.json({ kuyruk: sonuc.n });
+});
+/* "Deneme bildirimi gönder": kurulumun gerçekten uçtan uca çalıştığını kullanıcının görmesi için.
+   İçerik yine istemcide şifrelenmiş gelir; sunucu hemen iletir ve push servisinin cevabını döner. */
+api.post("/push/dene", async (c) => {
+  if (!pushAcik()) return c.json({ error: "Bildirimler sunucuda yapılandırılmamış" }, 503);
+  const uid = c.get("user").id;
+  if (rateLimited(`push-dene:${uid}`, 5, 5 * 60_000)) return c.json({ error: "Çok fazla deneme, biraz sonra tekrar dene" }, 429);
+  const b = await c.req.json().catch(() => null);
+  if (!b || typeof b.govde !== "string" || !B64U.test(b.govde) || b.govde.length > 5000) return c.json({ error: "geçersiz gövde" }, 400);
+  const a = await db.get<{ id: number; endpoint: string }>("SELECT id, endpoint FROM push_abonelik WHERE id=? AND user_id=?", Number(b.abonelik_id), uid);
+  if (!a) return c.json({ error: "abonelik bulunamadı" }, 404);
+  const durum = await pushIlet(a.endpoint, b.govde, 600).catch(() => 0);
+  if (durum === 404 || durum === 410) await db.run("DELETE FROM push_abonelik WHERE id=?", a.id);
+  else if (durum >= 200 && durum < 300) await db.run("UPDATE push_abonelik SET son_basari=? WHERE id=?", nowLocal(), a.id);
+  return c.json({ durum });
+});
+
 app.route("/api", api);
 
 /* Yasal sayfalar (Faz 28) — GUARD'IN DIŞINDA ve SPA'nın dışında bilinçli olarak duruyorlar:
@@ -1553,6 +1639,7 @@ app.get("*", serveApp);
 const runScheduledJobs = () => {
   refreshAll().catch(() => {});
   purgeStaleEmailTokens().catch(() => {}); // tüketilmiş/süresi geçmiş aktivasyon-sıfırlama token'ları
+  bildirimleriGonder().catch((e) => console.warn("[bildirim] tur hatası:", e)); // Faz 44 — aynı turda, ayrı uyanma yok
 };
 
 /* Piyasa geçmişi bakımı günde bir: referansları tazeler ve YENİ alınan sembollerin geçmişini

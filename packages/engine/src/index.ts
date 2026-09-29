@@ -19,3 +19,4 @@ export * from "./benchmarks.js";
 export * from "./corporate.js";
 export * from "./makro.js";
 export * from "./takvim.js";
+export * from "./bildirim.js";

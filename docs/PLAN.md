@@ -481,6 +481,44 @@ sökmediğinden "açıldı" bayrağı önceki hesaptan dolu kalıyordu ve çık�
 yeni oturuma taşınıyordu. Bayrak kullanıcıya bağlandı, çıkış Özet'e döner (E2E'de eski kodla
 tekrarlandı, düzeltmeyle geçti).
 
+## Faz 44 — Ödeme bildirimleri ✅ (yerelde doğrulandı, 2026-09-29)
+
+Pazara çıkış sırasının ikinci adımı (sihirbazdan sonra). Bildirim, E2EE ile çelişiyor GİBİ
+görünüyordu: sunucu kira tutarını göremiyorsa "3 gün sonra kira, ₺25.000" diyemez. Çözüm
+sorumlulukları ayırmak oldu: **hesabı istemci yapar, şifreyi istemci kapatır, sunucu yalnız
+zamanında iletir.** Web Push içeriği zaten cihazın anahtarıyla şifrelenir (RFC 8291); normalde bu
+şifrelemeyi sunucu yapar, burada tarayıcı yapıyor — anahtarlar tarayıcıda da var.
+
+Kullanıcı kararları: olay başına ayrı bildirim (günlük özet değil), yalnız 3 gün önce, tutar
+görünsün, kart için hem kesim hem son ödeme. "İzinsiz gönderelim" önerisi tarayıcı kuralı
+olduğu için mümkün değil — izin kurulum sihirbazının sonunda, bağlamda istenir.
+
+Kararlar:
+- **Plan projeksiyonun olaylarından** (`Day.ev`) — ikinci bir "kira ne zaman" kuralı yok. Bunun
+  için `DayEv.r` (kaynak kayıt) eklendi; tekrar gönderim anahtarı `r + gün`.
+- **Bayatlık tasarımı gerekmedi**: veritabanı yalnız uygulama açıkken değişiyor, her açılış
+  planı baştan kuruyor. (Tasarım konuşmasında "7 gün sonra tutarsız varyanta düş" fikri vardı;
+  yapının bunu gereksiz kıldığı görülünce bırakıldı.)
+- **Ayrı cron yok**: 30 dk turuna eklendi (Neon kotası). Bedeli 30 dakikalık gecikme.
+- **Çıkışta cihaz aboneliği silinir** ve Hesabım'da cihaz listesi var — tutar göründüğü için
+  satılan telefona bildirim gitmemeli.
+- **SSRF süzgeci**: abonelik adresi yalnız bilinen push servisleri.
+
+Doğrulama: RFC 8291 Ek A vektörü bayt bayt; `finans_e2ee_test` üzerinde yeni kullanıcıyla
+sihirbaz → "Bildirimleri aç" → başsız Chrome gerçek FCM aboneliği aldı → plan (3 öğe: iki
+taksit + kira; geçmiş hatırlatma, gelir ve harcamasız kesim doğru biçimde yok) şifreli kuyrukta,
+düz metin taraması 0 → deneme bildirimi cihaza ulaştı → zamanı gelmiş bir öğeyi cron açılış
+turu gönderdi ve cihazda "Taşıt kredisi taksiti · 3 gün sonra / 19 Ekim Pazartesi · ₺9.100 ·
+bu taksitten sonra 17 kalıyor" olarak çözülüp göründü → plan yeniden yüklenince giden öğe
+kuyruğa geri girmedi. Test sırasında izin geri alındığında push servisi 410 döndü ve sunucu
+aboneliği sildi (istenen davranış; tetikleyen CDP izninin bağlantıyla düşmesiydi). Bulunan ve
+düzeltilen: kredi metni "kalan 1 taksit" ilk taksitte son taksit gibi okunuyordu. Kullanıcının
+denemesinde: Vite geliştirme sunucusunda (:5173) servis çalışanı yok ve `serviceWorker.ready`
+hiç çözülmediği için "Bu cihazda aç" "…"da asılı kalıyordu — bekleme 8 sn ile sınırlandı ve ne
+olduğunu söylüyor; izin isteği de ilk satıra alındı (Safari izni yalnız dokunuşa doğrudan bağlı
+çağrıda açar). Kullanıcının Mac'inde push Chrome'a ulaştı (`chrome://gcm-internals`) ama macOS
+göstermedi — işletim sistemi ayarı; uçtan uca gösterim prod'da denenecek.
+
 ## Doğrulama
 `pnpm build` temiz, 57 engine testi yeşil. Kota sıfırlandıktan sonra `returns-by-date` tasarımı gerçek veride **tam** doğrulandı:
 - **Tek istekte 3489 fon fiyatı** toplandı (`prices` + aynı gün `price_history`'de tam senkron) — tahmin edilenin (~150-160) çok üzerinde, TEFAS'ta pay sınıfı/alt kategori dahil gerçekten binlerce fon var.

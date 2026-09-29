@@ -15,6 +15,9 @@ async function j<T>(r: Response): Promise<T> {
   if (!r.ok) throw new ApiError(r.status, ((await r.json().catch(() => ({}))) as any).error || r.statusText);
   return r.json();
 }
+/** Bildirim durumu: sunucuda VAPID var mı + bu kullanıcının bildirim alan cihazları */
+export type PushAbonelik = { id: number; endpoint: string; p256dh: string; auth: string; cihaz: string | null; created_at: string; son_basari: string | null };
+export type PushDurum = { acik: boolean; publicKey: string | null; abonelikler: PushAbonelik[] };
 /** `e2ee`: /auth/me'den gelir — veri tamamen şifreli mi (göç bitti mi). Giriş yanıtında yoktur. */
 export type SessionUser = { id: number; email: string; e2ee?: boolean };
 /** Kayıt/sıfırlama/yükseltmede sunucuya giden sıfır bilgi malzemesi (bkz. features/auth/e2ee.ts) */
@@ -130,6 +133,15 @@ export const api = {
   e2eeSatirlar: (satirlar: { tablo: ZarfliTablo; anahtar: Record<string, unknown>; enc: string }[]) =>
     yazJ<{ guncellenen: number }>("PUT", "/e2ee/satirlar", { satirlar }),
   e2eeTamam: () => yazJ("POST", "/e2ee/tamam", {}),
+  /* ---- bildirimler (Faz 44) — yalnız src/bildirim/ çağırır. Plan ve deneme gövdeleri İSTEMCİDE
+     push anahtarıyla şifrelenmiş opak baytlardır (RFC 8291); DEK zarfı gerekmez, boru hattından
+     değişmeden geçer (zarf katmanı bu rotaları tanımaz). ---- */
+  pushDurum: () => fetch("/api/push/durum").then((r) => j<PushDurum>(r)),
+  pushAbone: (b: { endpoint: string; p256dh: string; auth: string; cihaz: string }) => yazJ<{ id: number }>("POST", "/push/abonelik", b),
+  pushAboneSil: (id: number) => fetch(`/api/push/abonelik/${id}`, { method: "DELETE" }).then(j),
+  pushPlan: (surum: number, ogeler: { abonelik_id: number; anahtar: string; zaman: string; bitis: string; govde: string }[]) =>
+    yazJ<{ kuyruk: number }>("PUT", "/push/plan", { surum, ogeler }),
+  pushDene: (abonelik_id: number, govde: string) => yazJ<{ durum: number }>("POST", "/push/dene", { abonelik_id, govde }),
   /* ---- auth (Faz 5.1) ---- */
   me: () => fetch("/api/auth/me").then((r) => j<{ user: SessionUser | null }>(r)),
   /* ---- sıfır bilgi girişi (E2EE aşama 3b) ----

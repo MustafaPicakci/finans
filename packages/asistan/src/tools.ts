@@ -373,4 +373,8 @@ export const SKIPPED: { route: string; reason: string }[] = [
   { route: "POST /ai/plans/:id/undone", reason: "asistanın kendi ucu: geri alma işareti" },
   { route: "PUT /ai/conversations/:id", reason: "asistanın kendi ucu: sohbetin adını kullanıcı koyar, modelin kendi konuşmasını yeniden adlandırması istenmez" },
   { route: "DELETE /ai/conversations/:id", reason: "asistanın kendi ucu: sohbeti silmek kullanıcı eylemidir, modelin kendi geçmişini silmesi istenmez" },
+  { route: "POST /push/abonelik", reason: "bildirim aboneliği tarayıcının izin penceresinden gelir; model cihaza abone olamaz" },
+  { route: "DELETE /push/abonelik/:id", reason: "bildirim cihazını kaldırmak Hesabım'dan yapılır" },
+  { route: "PUT /push/plan", reason: "bildirim planını uygulama açılışta kendisi kurar (istemcide şifreli); modelin işi değil" },
+  { route: "POST /push/dene", reason: "deneme bildirimi Hesabım'daki düğmeden" },
 ];

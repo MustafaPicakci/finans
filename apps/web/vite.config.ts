@@ -62,6 +62,9 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ["**/*.{js,css,html,svg,png,ico}"],
+        /* Faz 44 — push dinleyicisi ayrı dosyada (public/push-sw.js): generateSW'dan injectManifest'e
+           geçmek tüm önbellek yapılandırmasını elle yazmayı gerektirirdi, iki olay dinleyicisi için değmez. */
+        importScripts: ["push-sw.js"],
         /* Yasal sayfalar SPA değildir; servis çalışanının varsayılan navigasyon yedeği bu
            adreslere de index.html döndürür ve sayfa yerine uygulama açılır. Bir kez PWA'yı
            yüklemiş kullanıcıda (ve Google'ın bağlantıyı denetlediği tarayıcıda) gizlilik

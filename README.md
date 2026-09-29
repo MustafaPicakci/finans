@@ -197,6 +197,26 @@ Seçilen model **function calling** desteklemek zorundadır (asistanın tek işi
 - Sohbet geçmişi sunucuda **şifreli** saklanır (başka cihazdan devam edilebilir); sunucu içeriğini okuyamaz.
 - Bir plan yalnız **bir kez** uygulanabilir (plan kimliği tek kullanımlıktır) — ağ hatasından sonraki tekrar denemesi çift kayıt yazmaz.
 
+## Bildirimler (Faz 44)
+
+Düzenli giderlerden, kredi taksitlerinden, ekstre kesiminden ve son ödemesinden **3 gün önce**, tutarıyla telefon/tarayıcı bildirimi. Kullanıcı Hesabım'dan (ya da kurulum sihirbazının sonundan) cihaz başına açar; "Deneme gönder" zinciri uçtan uca sınar.
+
+**Kurulum (bir kez):** VAPID anahtar çifti üret ve env'e yaz:
+
+```bash
+node -e "const c=require('crypto');const k=c.generateKeyPairSync('ec',{namedCurve:'P-256'});const j=k.privateKey.export({format:'jwk'});console.log('VAPID_PUBLIC_KEY='+Buffer.concat([Buffer.from([4]),Buffer.from(j.x,'base64url'),Buffer.from(j.y,'base64url')]).toString('base64url')+'\nVAPID_PRIVATE_KEY='+j.d)"
+```
+
+Anahtarları **değiştirme**: değişirse tüm cihaz abonelikleri geçersiz olur, kullanıcılar bildirimi yeniden açmak zorunda kalır. Anahtar yoksa özellik kapalıdır, uygulamanın geri kalanı etkilenmez.
+
+**Sunucu içeriği görmez.** Plan uygulama açılınca tarayıcıda kurulur; her bildirim cihazın push anahtarıyla tarayıcıda şifrelenir (RFC 8291), sunucu yalnız zamanı gelince kapalı zarfı Google/Apple/Mozilla'nın push servisine iletir. Sunucunun ve push servisinin gördüğü tek şey gönderim zamanı ve boyut.
+
+**Dürüst kısıtlar:**
+- **Gönderimi 30 dakikalık cron turu yapar**: 09:00 bildirimi 09:00-09:30 arasında gider. Süreç uyursa (Render ücretsiz katmanı) tur da durur; bildirim olay günü bitene kadar kuyrukta bekler, süreç uyanınca gider.
+- **Plan son açılıştaki veriyi taşır.** Veri zaten yalnız uygulama açıkken değiştiği için bu bir bayatlık değildir; ama uygulama 60 günden uzun açılmazsa planın ufku biter.
+- **iPhone'da** yalnız ana ekrana eklenmiş uygulamada çalışır (iOS 16.4+); tarayıcı sekmesinde Hesabım bunu söyler.
+- Tarayıcı izni **zorunludur** (Chrome/Safari kuralı), izinsiz bildirim gönderilemez. Kullanıcı izni geri alırsa push servisi aboneliği düşürür, sunucu da siler.
+
 ## Soğuk başlangıç ve uptime izleme
 
 Render'ın ücretsiz katmanı **15 dakika gelen istek olmazsa** süreci uyutur; sonraki ilk istek 30-60 saniye bekler. Panel için katlanılır, ama "harcama SMS'ini paylaş → kaydet" akışını kullanılamaz hâle getirir. İki katmanlı çözüm:

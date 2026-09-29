@@ -22,7 +22,11 @@ import { totalCash } from "./accounts.js";
     (ada bakıp "ekstresi" ile bitiyorsa kart demek gibi) aynı kuralın ikinci, kırılgan kopyası
     olurdu. `takvim.ts` bunu okur, `nakit` sekmesi görmezden gelir. */
 export type EvTur = "duzenli" | "kredi" | "ekstre" | "plan";
-export type DayEv = { n: string; a: number; t: EvTur };
+/** `r`: olayın KAYNAK kaydı — "r:<recurring>" | "l:<loan>" | "e:<card>" (ekstre) | "o:<oneoff>".
+    Bildirim planının (bildirim.ts) tekrar gönderim anahtarı bundan kurulur: adı değişen kalem
+    aynı olay kalmalı, aynı adlı iki kalem ayrı olay. Sunucu bu kimlikleri ve tarihleri zaten düz
+    görür (FK/tarih kolonları), yani anahtar yeni bir bilgi taşımaz. */
+export type DayEv = { n: string; a: number; t: EvTur; r?: string };
 export type Day = { date: Date; k: string; net: number; bal: number; assets: number; cashFunds: number; deposits: number; total: number; debt: number; worth: number; ev: DayEv[] };
 
 /** Nakit projeksiyonu (hepsi TRY). `rates` USD-doğal varlıkları TRY'ye çevirmek için — verilmezse USD çevrilmez.
@@ -38,7 +42,7 @@ export function project(data: AllData, months: number, rates: Rates = { usdTry: 
   const oneMap = new Map<string, DayEv[]>();
   data.oneoffs.forEach((o) => {
     if (!oneMap.has(o.date)) oneMap.set(o.date, []);
-    oneMap.get(o.date)!.push({ n: o.name, a: o.amount, t: "plan" });
+    oneMap.get(o.date)!.push({ n: o.name, a: o.amount, t: "plan", r: `o:${o.id}` });
   });
   /* güncel fiyat haritası; geçmiş günlerde de bugünkü fiyatla değerlenir (fiyat geçmişi tutulmuyor) */
   const priceMap = new Map(data.prices.map((p) => [`${p.asset_type}:${p.symbol}`, p.price]));
@@ -80,7 +84,7 @@ export function project(data: AllData, months: number, rates: Rates = { usdTry: 
       cardDebt += s.amount;
       const k = keyOf(s.due);
       if (!stmtMap.has(k)) stmtMap.set(k, []);
-      stmtMap.get(k)!.push({ n: `${ci.card.name} ekstresi`, a: -s.amount, t: "ekstre" });
+      stmtMap.get(k)!.push({ n: `${ci.card.name} ekstresi`, a: -s.amount, t: "ekstre", r: `e:${ci.card.id}` });
     });
   });
   const days: Day[] = [];
@@ -90,12 +94,12 @@ export function project(data: AllData, months: number, rates: Rates = { usdTry: 
     data.recurring.forEach((r) => {
       if (recActiveOn(r, d) && hits(d, r.day) && !realized.has(`${r.id}:${ym}`)) {
         const a = recAmountOn(amountIdx.get(r.id), ym); // tutarı tanımsız kalem event üretmez
-        if (a != null) ev.push({ n: r.name, a: r.kind === "income" ? a : -a, t: "duzenli" });
+        if (a != null) ev.push({ n: r.name, a: r.kind === "income" ? a : -a, t: "duzenli", r: `r:${r.id}` });
       }
     });
     data.loans.forEach((l) => {
       if (loanActiveOn(l, d) && hits(d, loanPayDay(l)))
-        ev.push({ n: `${l.name} (kalan ${loanRemaining(l, d)})`, a: -l.amount, t: "kredi" });
+        ev.push({ n: `${l.name} (kalan ${loanRemaining(l, d)})`, a: -l.amount, t: "kredi", r: `l:${l.id}` });
     });
     /* ekstre ödemesi aynı gün hem nakitten çıkar hem borçtan düşer (a negatif) */
     (stmtMap.get(keyOf(d)) || []).forEach((e) => { ev.push(e); cardDebt += e.a; });

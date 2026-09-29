@@ -18,6 +18,7 @@ import { Kartlar } from "./features/kart";
 import { Portfoy } from "./features/portfoy";
 import { Kayitlar } from "./features/kayitlar";
 import { Kurulum } from "./features/kurulum";
+import { planYukle, bildirimKapat, abonelikDegisti } from "./bildirim";
 import { Asistan, clearChat } from "./features/asistan";
 import { anahtarYukle, anahtarSil } from "./yazim/anahtar";
 import { ZAYIF_PAROLA_KEY } from "./features/auth/e2ee";
@@ -108,7 +109,11 @@ export default function App() {
      (başka cihazdan devam edilebilsin diye). Temizlenen yalnız bu cihazın "en son şu
      sohbetteydim" işaretçisi + Faz 22-33'ün artık okunmayan localStorage sohbeti —
      ortak cihazda sonraki kullanıcı öncekinin konuşmasının açıldığını görmesin. */
+  /* Çıkışta bu cihaz bildirimlerden çıkarılır (oturum kapanmadan ÖNCE — silme oturum ister):
+     satılan ya da başkasına verilen telefona tutarlı bildirim gitmeye devam etmesin. Beklemesi
+     sınırlı: ağ yoksa çıkış takılmamalı. */
   const logout = useCallback(async () => {
+    await Promise.race([bildirimKapat().catch(() => {}), new Promise((r) => setTimeout(r, 3000))]);
     await api.logout().catch(() => {}); await anahtarSil(); clearChat(); setUser(null); setData(null);
     // sonraki giriş (belki başka hesap) öncekinin ekranında açılmasın — Özet'ten başlasın
     setTab("ozet", true);
@@ -216,6 +221,17 @@ export default function App() {
     try { sonra = localStorage.getItem(kurulumSonraKey(user.id)) === "1"; } catch { /* depolama yoksa sor */ }
     if (tab === "ozet" && !sonra && kurulumGerekli(data)) setTab("kurulum", true);
   }, [data, user, tab, setTab]);
+  /* Faz 44 — bildirim planı: veri her değiştiğinde yeniden kurulup (şifreli) yüklenir. Gecikme,
+     açılıştaki otomatik kayıtların ve art arda gelen reload()'ların tek yüklemede toplanması için;
+     aynı plan ikinci kez gitmez (parmak izi, bildirim/index.ts). Hata sessizdir: bildirim yan iştir,
+     ekranı bozmamalı. */
+  const [bildirimTik, setBildirimTik] = useState(0); // abonelik değişince plan hemen yüklensin
+  useEffect(() => abonelikDegisti(() => setBildirimTik((t) => t + 1)), []);
+  useEffect(() => {
+    if (!data || !user) return;
+    const t = setTimeout(() => { planYukle(data, days).catch((e) => console.warn("[bildirim] plan yüklenemedi:", e)); }, 2500);
+    return () => clearTimeout(t);
+  }, [data, days, user, bildirimTik]);
   const kurulumBitir = useCallback(() => {
     if (user) try { localStorage.setItem(kurulumSonraKey(user.id), "1"); } catch { /* yalnız bu oturum */ }
     setTab("ozet");

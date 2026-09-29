@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   num, parseD, fmtD, todayStr, ilkProjeksiyon, balancesByAccount, loanRemaining, recAmountOn, ACCOUNT_KIND_LABEL,
   type AllData, type AccountKind, type Day, type Recurring,
@@ -6,6 +6,7 @@ import {
 import { api } from "../../api";
 import { T, css, tl } from "../../theme";
 import { Field, AmountField, Row, SilDugmesi, Empty, Aciklama } from "../../ui";
+import { pushDestekli, buCihaz, bildirimAc } from "../../bildirim";
 
 /* ————— Kurulum sihirbazı —————
    Uygulamanın değeri ("ay sonunda elimde ne kalacak") ancak hesaplar, gelir, kartlar, düzenli
@@ -324,8 +325,36 @@ function Sonuc({ data, days }: { data: AllData; days: Day[] }) {
         {tarih(p.enDusuk.k)} günü nakdin eksiye düşüyor. Nakit Akışı sekmesinde o güne hangi ödemelerin denk geldiğini görebilirsin.
       </div>
     )}
+    <BildirimDaveti />
     <div style={{ fontSize: 13, color: T.mut, marginTop: 12, lineHeight: 1.55 }}>
       Bundan sonra harcamalarını <b>+ Ekle</b> düğmesiyle girersin. Yanlış görünen bir rakamı ilgili sekmeden düzeltebilirsin.
     </div>
   </>);
+}
+
+/* Bildirim izni BURADA istenir (Faz 44): ilk açılışta sormak bağlamsız bir izin penceresi olurdu
+   ve "Engelle" denirse sayfa bir daha soramaz. Burada kullanıcı az önce kira/kart/kredi günlerini
+   girdi — "bunlardan 3 gün önce haber vereyim mi" sorusunun anlamı ekranda duruyor. */
+function BildirimDaveti() {
+  const [durum, setDurum] = useState<"soru" | "mesgul" | "tamam" | "yok">(() => pushDestekli() && Notification.permission !== "denied" ? "soru" : "yok");
+  const [mesaj, setMesaj] = useState<string | null>(null);
+  useEffect(() => { buCihaz().then((s) => { if (s) setDurum("tamam"); }).catch(() => {}); }, []);
+  if (durum === "yok") return null;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 12, padding: "12px 14px", borderRadius: 12, border: `1px solid ${T.line}` }}>
+      <div style={{ flex: 1, minWidth: 190, fontSize: 13 }}>
+        {durum === "tamam" ? "Ödemelerden 3 gün önce bildirim alacaksın." : "Kira, taksit ve ekstre günlerinden 3 gün önce haber vereyim mi?"}
+        {mesaj && <div style={{ fontSize: 12, color: T.neg, marginTop: 4 }}>{mesaj}</div>}
+      </div>
+      {durum !== "tamam" && (
+        /* ikincil stil: bu adımda "sıradaki eylem" Özet'e git'tir (mor ona ayrılmış, Faz 24 kural 2);
+           bildirim isteğe bağlı bir davet */
+        <button style={css.ghost} disabled={durum === "mesgul"} onClick={async () => {
+          setDurum("mesgul"); setMesaj(null);
+          const r = await bildirimAc().catch((e) => ({ ok: false, mesaj: e instanceof Error ? e.message : String(e) }));
+          setDurum(r.ok ? "tamam" : "soru"); if (!r.ok) setMesaj(r.mesaj);
+        }}>{durum === "mesgul" ? "…" : "Bildirimleri aç"}</button>
+      )}
+    </div>
+  );
 }

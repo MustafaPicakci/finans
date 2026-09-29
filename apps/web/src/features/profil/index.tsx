@@ -3,6 +3,7 @@ import { api, type AllData } from "../../api";
 import { T, css } from "../../theme";
 import { parolaKaniti, parolaDegistir, parolaSorunu, PAROLA_MIN, ZAYIF_PAROLA_KEY } from "../auth/e2ee";
 import { ApiError } from "../../api";
+import { BildirimKarti } from "./BildirimKarti";
 
 /* ————— HESABIM (KULLANICI hesabı) —————
    Bu ekran "Hesaplar" sekmesinden AYRI ve bu bilinçli: orada "hesap" = banka/nakit/aracı
@@ -76,6 +77,8 @@ export function Profil({ user, data, reload, onDeleted }: {
         Asistan açık
       </label>
     </div>
+
+    <BildirimKarti />
 
     <ParolaKarti email={user.email} />
 
