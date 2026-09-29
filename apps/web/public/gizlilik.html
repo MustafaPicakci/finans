@@ -33,7 +33,7 @@
 <div class="wrap">
   <div class="brand">₺ finans</div>
   <h1>Gizlilik Politikası</h1>
-  <p class="lead">Son güncelleme: 30 Ağustos 2026</p>
+  <p class="lead">Son güncelleme: 29 Eylül 2026</p>
 
   <p>Finans, kişisel finans takibi için yapılmış bir web uygulamasıdır. Bu sayfa, uygulamanın
   hangi verileri topladığını, bunları nerede sakladığını, kimlerle paylaştığını ve bu veriler
@@ -45,6 +45,7 @@
     <tr><td>E-posta adresin</td><td>Hesabının kimliği; giriş, hesap aktivasyonu ve şifre sıfırlama için</td></tr>
     <tr><td>Parolan</td><td>Yalnızca <strong>scrypt</strong> ile geri döndürülemez biçimde özetlenmiş (hash) hâlde saklanır. Parolanın kendisi hiçbir zaman kaydedilmez.</td></tr>
     <tr><td>Girdiğin finansal kayıtlar</td><td>Uygulamanın işlevi: hesaplar ve bakiyeler, gelir/gider işlemleri, kredi kartı harcamaları, krediler, mevduatlar, düzenli gelir-giderler, hesaplar arası virmanlar, portföy işlemleri</td></tr>
+    <tr><td>Asistan sohbetlerin</td><td>Yalnız Asistan sekmesini kullanırsan: yazdığın mesajlar, asistanın yanıtları ve onayına sunulan işlem planları, başka cihazdan devam edebilmen için sunucuda saklanır. Bir sohbeti sildiğinde mesajları da silinir.</td></tr>
     <tr><td>Oturum kaydı</td><td>Giriş yaptığında sunucuda tutulan oturum jetonu (30 gün geçerli, çıkış yapınca iptal edilir)</td></tr>
   </table>
 
@@ -57,9 +58,9 @@
 
   <h2>2. Çerezler</h2>
   <p>Yalnızca <strong>oturum çerezi</strong> kullanılır — giriş yapmış olduğunu hatırlamak için.
-  Reklam veya izleme çerezi yoktur. Ayrıca bazı görüntü tercihleri (tema, seçili para birimi,
-  asistan sohbeti) yalnızca <strong>kendi tarayıcının belleğinde</strong> (localStorage) tutulur;
-  sunucuya gönderilmez. Asistan sohbeti çıkış yaptığında tarayıcından silinir.</p>
+  Reklam veya izleme çerezi yoktur. Bazı görüntü tercihleri (tema, seçili para birimi) yalnızca
+  <strong>kendi tarayıcının belleğinde</strong> (localStorage) tutulur, sunucuya gönderilmez.
+  Asistan sohbetlerin tarayıcıda değil sunucuda durur (madde 1).</p>
 
   <h2>3. Verinin saklandığı yer</h2>
   <p>Veriler PostgreSQL veri tabanında, uygulamanın barındırıldığı bulut sağlayıcısında saklanır.
@@ -74,7 +75,7 @@
     <tr><td>Bulut barındırma ve veri tabanı</td><td>Uygulamanın tüm verisi (barındırma sağlayıcısı olarak)</td></tr>
     <tr><td>E-posta sağlayıcısı</td><td>E-posta adresin ve gönderilen mesajın içeriği — yalnız aktivasyon ve şifre sıfırlama postaları için</td></tr>
     <tr><td>Fiyat sağlayıcıları</td><td>Yalnızca <strong>varlık sembolleri</strong> (ör. THYAO, BTC). Kim olduğun, kaç adet tuttuğun veya bakiyen gönderilmez.</td></tr>
-    <tr><td>Yapay zekâ sağlayıcısı <em>(yalnız Asistan sekmesini kullanırsan)</em></td><td>Yazdığın mesaj ve tanım kayıtların (hesap/kart/kategori/portföy adları, tutulan semboller). Sorduğun soruya göre ilgili işlem kayıtların da gönderilebilir. Asistanı hiç kullanmazsan bu servise hiçbir veri gitmez.</td></tr>
+    <tr><td>Yapay zekâ sağlayıcısı <em>(yalnız Asistan sekmesini kullanırsan)</em></td><td>Yazdığın mesaj, sohbetin önceki mesajları ve tanım kayıtların (hesap/kart/kategori/portföy adları, hesap bakiyeleri, tutulan semboller). Sorduğun soruya göre ilgili işlem kayıtların ya da hesaplanmış özetler (ör. aylık harcama toplamı) de gönderilebilir. Asistanı hiç kullanmazsan bu servise hiçbir veri gitmez.</td></tr>
   </table>
   <p>Ayrıca yasal bir yükümlülük doğduğunda (mahkeme kararı vb.) veri paylaşılabilir.</p>
 
@@ -99,7 +100,7 @@
   <p>KVKK kapsamındaki haklarını uygulama içinden, kimseye başvurmadan kullanabilirsin.
   <strong>Hesabım</strong> sayfasında:</p>
   <ul>
-    <li><strong>Verilerimi indir</strong> — tüm kayıtlarını makine okunur biçimde dışa aktarır (erişim ve taşınabilirlik hakkı).</li>
+    <li><strong>Verilerimi indir</strong> — asistan sohbetlerin dahil tüm kayıtlarını makine okunur biçimde dışa aktarır (erişim ve taşınabilirlik hakkı).</li>
     <li><strong>Hesabımı sil</strong> — parola onayıyla hesabını ve bağlı tüm verini kalıcı olarak siler (silme hakkı).</li>
     <li>Her kaydı uygulama içinden düzeltebilir veya silebilirsin (düzeltme hakkı).</li>
   </ul>
