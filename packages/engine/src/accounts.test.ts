@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { accountLedger, ledgerDrift, ledgerSummary, reconcileDiff, reconStatus, entriesSinceRecon, accountKindOf } from "./accounts.js";
+import { accountLedger, accountBalance, balancesByAccount, totalCash, ledgerSummary, reconcileDiff, reconStatus, entriesSinceRecon, accountKindOf } from "./accounts.js";
 import type { Account, AccountEntry } from "./types.js";
 
 const e = (id: number, account_id: number, date: string, amount: number, note = ""): AccountEntry => ({
@@ -40,14 +40,43 @@ describe("accountLedger", () => {
   });
 });
 
-describe("ledgerDrift", () => {
-  it("defter bakiyeyi açıklıyorsa 0 verir", () => {
+/* `ledgerDrift` testleri KALDIRILDI ve yerine türetme testleri geldi (Faz 42):
+   bakiye artık `account_entries`'ten türediği için "defter ile bakiye ayrıştı" diye bir
+   durum yok — fark tanım gereği 0. Test edilecek şey değişti: kolon ile defterin
+   uyuşması değil, türetmenin kendisi. */
+describe("bakiye türetme (Faz 42)", () => {
+  it("hesabın bakiyesi = o hesabın hareketlerinin toplamı", () => {
     const entries = [e(1, 1, "2026-01-01", 1000), e(2, 1, "2026-01-05", -250)];
-    expect(ledgerDrift(entries, { id: 1, name: "A", balance: 750 })).toBe(0);
+    expect(accountBalance(entries, 1)).toBe(750);
   });
 
-  it("açıklanamayan fark varsa onu verir (sessizce düzeltmez)", () => {
-    expect(ledgerDrift([e(1, 1, "2026-01-01", 1000)], { id: 1, name: "A", balance: 1200 })).toBe(200);
+  it("başka hesabın hareketleri karışmaz", () => {
+    const entries = [e(1, 1, "2026-01-01", 1000), e(2, 2, "2026-01-05", 500)];
+    expect(accountBalance(entries, 1)).toBe(1000);
+    expect(accountBalance(entries, 2)).toBe(500);
+  });
+
+  it("hiç hareketi olmayan hesap 0 verir (undefined değil)", () => {
+    expect(accountBalance([e(1, 1, "2026-01-01", 1000)], 99)).toBe(0);
+  });
+
+  it("balancesByAccount tek geçişte hepsini verir ve accountBalance ile aynı sonucu üretir", () => {
+    const entries = [e(1, 1, "2026-01-01", 1000), e(2, 2, "2026-01-02", 500), e(3, 1, "2026-01-03", -250)];
+    const m = balancesByAccount(entries);
+    expect(m.get(1)).toBe(750);
+    expect(m.get(2)).toBe(500);
+    for (const id of [1, 2]) expect(m.get(id)).toBe(accountBalance(entries, id));
+  });
+
+  it("totalCash tüm hesapların toplamıdır — hesap başına türetmenin toplamıyla aynı", () => {
+    const entries = [e(1, 1, "2026-01-01", 1000), e(2, 2, "2026-01-02", 500), e(3, 1, "2026-01-03", -250)];
+    expect(totalCash(entries)).toBe(1250);
+    expect(totalCash(entries)).toBeCloseTo(accountBalance(entries, 1) + accountBalance(entries, 2), 10);
+  });
+
+  it("açılış hareketi de sıradan bir harekettir (bakiyeye dahil)", () => {
+    const acilis: AccountEntry = { id: 1, account_id: 1, date: "2020-01-01", amount: 5000, kind: "acilis", source_table: null, source_id: null, note: "Açılış bakiyesi", created_at: "" };
+    expect(accountBalance([acilis, e(2, 1, "2026-01-01", -1000)], 1)).toBe(4000);
   });
 });
 
@@ -59,12 +88,13 @@ describe("ledgerSummary", () => {
 });
 
 describe("mutabakat (Faz 16)", () => {
-  const acc = (o: Partial<Account> = {}): Account => ({ id: 1, name: "A", balance: 1000, ...o });
+  const acc = (o: Partial<Account> = {}): Account => ({ id: 1, name: "A", ...o });
+  const BAKIYE = 1000; // eskiden acc().balance idi; bakiye artık kolonda değil, çağrana parametre
 
   it("fark = gerçek − kayıtlı; eksik harcama negatif çıkar", () => {
-    expect(reconcileDiff(acc(), 950)).toBe(-50);
-    expect(reconcileDiff(acc(), 1075.25)).toBeCloseTo(75.25, 10);
-    expect(reconcileDiff(acc(), 1000)).toBe(0);
+    expect(reconcileDiff(BAKIYE, 950)).toBe(-50);
+    expect(reconcileDiff(BAKIYE, 1075.25)).toBeCloseTo(75.25, 10);
+    expect(reconcileDiff(BAKIYE, 1000)).toBe(0);
   });
 
   it("hiç mutabakat yapılmamışsa 'hic'", () => {

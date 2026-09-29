@@ -2,7 +2,7 @@ import React, { useRef, useState } from "react";
 import {
   fmtD, num, todayStr,
   depositMaturity, depositValueOn, depositMaturityValue, depositNetInterest, depositAccruedInterest, depositDaysRemaining, depositMatured,
-  accountLedger, ledgerDrift, ledgerSummary,
+  accountLedger, accountBalance, balancesByAccount, totalCash, ledgerSummary,
   reconcileDiff, reconStatus, entriesSinceRecon, accountKindOf, ACCOUNT_KIND_LABEL,
   type Account, type AccountEntry, type AccountKind, type AllData,
 } from "@finans/engine";
@@ -20,7 +20,11 @@ import { EditSheet, type EditTarget } from "../../EditSheet";
 export function Hesaplar({ data, reload }: { data: AllData; reload: () => void }) {
   const [editing, setEditing] = useState<EditTarget | null>(null);
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const cash = data.accounts.reduce((s, a) => s + a.balance, 0);
+  /* Bakiye artık kolonda değil defterde (Faz 42). Tek geçişte hepsi çıkarılır:
+     hesap başına `accountBalance` çağırmak liste render'ında N×M gezinti olurdu. */
+  const bakiyeler = balancesByAccount(data.account_entries);
+  const bakiye = (id: number) => bakiyeler.get(id) ?? 0;
+  const cash = totalCash(data.account_entries);
   const depositsValue = data.deposits.reduce((s, d) => s + depositValueOn(d, today), 0);
   const total = cash + depositsValue;
 
@@ -104,6 +108,9 @@ const KIND_HINT: Record<AccountKind, string> = {
 };
 
 function VadesizHesaplar({ data, reload }: { data: AllData; reload: () => void }) {
+  // bakiye kolonda değil defterde (Faz 42); tek geçişte hepsi
+  const bakiyeler = balancesByAccount(data.account_entries);
+  const bakiye = (id: number) => bakiyeler.get(id) ?? 0;
   const [acc, setAcc] = useState({ name: "", balance: "", kind: "banka" as AccountKind });
   const [shown, setShown] = useState<number | null>(null); // hareketleri açık hesap
   const [recon, setRecon] = useState<number | null>(null); // mutabakat paneli açık hesap
@@ -165,11 +172,11 @@ function VadesizHesaplar({ data, reload }: { data: AllData; reload: () => void }
                 {open ? "Hareketleri gizle" : "Hareketler"}
               </button>
               {/* row-amount: satır mobilde sarmalanınca tutar hangi satıra düşerse sağa yaslanır */}
-              <span className="row-amount" style={{ ...css.mono, minWidth: 100, textAlign: "right", fontSize: 14 }}>{tl.format(Math.round(a.balance))}</span>
+              <span className="row-amount" style={{ ...css.mono, minWidth: 100, textAlign: "right", fontSize: 14 }}>{tl.format(Math.round(bakiye(a.id)))}</span>
               {/* Uygulamanın en yıkıcı silmesi: hesabın TÜM hareket defteri CASCADE ile gider */}
               <SilDugmesi ad={a.name} title="Hesabı sil"
                 onSil={async () => { await api.del("accounts", a.id); reload(); }}
-                sonuc={<>Bu hesabın <b>tüm hareket geçmişi</b> silinir ve {tl.format(Math.round(a.balance))} bakiye net varlığından düşer. Hesaba bağlı işlemler kayıtsız kalır.</>} />
+                sonuc={<>Bu hesabın <b>tüm hareket geçmişi</b> silinir ve {tl.format(Math.round(bakiye(a.id)))} bakiye net varlığından düşer. Hesaba bağlı işlemler kayıtsız kalır.</>} />
             </Row>
             {reconOpen && <Mutabakat data={data} account={a} reload={reload} onDone={() => setRecon(null)} />}
             {open && <HesapHareketleri data={data} account={a} />}
@@ -212,7 +219,10 @@ function Mutabakat({ data, account, reload, onDone }: {
   /* 0 ve eksi geçerli olduğundan `num`'ın "çözemedim → 0" davranışına güvenilemez:
      "abc" yazılıp onaylanırsa bakiye sessizce 0'a çekilirdi. Girdi sayısal görünmeli. */
   const entered = /^-?\s*[\d.,]+$/.test(real.trim());
-  const diff = entered ? reconcileDiff(account, num(real)) : 0;
+  /* Kayıtlı bakiye defterden türetilir (Faz 42). Buradaki fark yalnız önizlemedir —
+     sunucu farkı kendi defterinden yeniden hesaplar, istemcinin rakamına güvenmez. */
+  const mevcut = accountBalance(data.account_entries, account.id);
+  const diff = entered ? reconcileDiff(mevcut, num(real)) : 0;
   /* SLICE KALDIRILDI: liste `slice(0, 8)` ile kesiliyordu ama etiket kesilmiş uzunluğu
      yazıyordu — 30 hareket varken "8 hareket" diyordu. Kullanıcı eksik kaydı ararken tam da
      bu sayıya bakıyor, yani rakam yalnız eksik değil YANLIŞTI. Sayım tam liste üzerinden,
@@ -229,7 +239,7 @@ function Mutabakat({ data, account, reload, onDone }: {
     <div style={{ background: T.panel2, borderRadius: 12, padding: "12px 14px", margin: "2px 0 10px" }}>
       <div style={{ fontSize: 12, color: T.mut, marginBottom: 8 }}>
         <b>{account.name}</b> hesabında <b>şu an gerçekte</b> ne kadar var? Uygulamadaki kayıt:{" "}
-        <span style={css.mono}>{tl.format(Math.round(account.balance))}</span>
+        <span style={css.mono}>{tl.format(Math.round(mevcut))}</span>
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
         {/* serbest: gerçek bakiye 0 olabilir (boşalmış cüzdan) ve eksi olabilir (KMH) */}
@@ -274,14 +284,14 @@ function Mutabakat({ data, account, reload, onDone }: {
    Hesabın bakiyesini açıklayan defter: her satır bir hareket + o hareketten sonraki bakiye.
    Hareketler sunucuda yazılır (bakiyeyi oynatan her akış), burada yalnız gösterilir — bu yüzden
    ekranda silme/düzenleme yok: hareket kaynağından (işlem, portföy işlemi, mevduat) düzenlenir.
-   `ledgerDrift` 0 değilse defter bakiyeyi açıklamıyordur; sessizce düzeltmek yerine görünür yapılır. */
+   Eskiden burada bir `ledgerDrift` uyarısı vardı; Faz 42'de bakiye defterden TÜRETİLİR
+   olunca fark tanım gereği 0'a düştü, yani uyaracak bir şey kalmadı. */
 const KIND_LABEL: Record<AccountEntry["kind"], string> = {
   islem: "işlem", portfoy: "portföy", mevduat: "vadeli", duzeltme: "düzeltme", acilis: "açılış", virman: "transfer",
 };
 function HesapHareketleri({ data, account }: { data: AllData; account: AllData["accounts"][number] }) {
   const rows = accountLedger(data.account_entries, account.id);
   const s3 = useSayfalama(rows, 20);
-  const drift = ledgerDrift(data.account_entries, account);
   const sum = ledgerSummary(rows);
   const shown = s3.gorunen;
   return (
@@ -291,11 +301,6 @@ function HesapHareketleri({ data, account }: { data: AllData; account: AllData["
         <span>giren <span style={{ ...css.mono, color: T.pos }}>{tl.format(Math.round(sum.in))}</span></span>
         <span>çıkan <span style={{ ...css.mono, color: T.neg }}>{tl.format(Math.round(sum.out))}</span></span>
       </div>
-      {drift !== 0 && (
-        <div style={{ fontSize: 12, color: T.warn, marginBottom: 8 }}>
-          Uyarı: defter bakiyeyi açıklamıyor — fark <span style={css.mono}>{tl.format(Math.round(drift))}</span>.
-        </div>
-      )}
       {rows.length === 0 && <Empty>Bu hesapta hareket yok.</Empty>}
       {shown.map((r) => (
         <div key={r.entry.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: `1px solid ${T.line}` }}>

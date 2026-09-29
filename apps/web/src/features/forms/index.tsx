@@ -4,7 +4,7 @@ import {
   depositMaturity, depositGrossInterest, depositNetInterest, depositMaturityValue,
   type AllData, type AssetType, type CardTx, type Currency, type Deposit, type OneOff, type Recurring,
   type Trade, type Transaction, type Transfer, type Loan,
-  dripAcikMi, dripToggle, bedelliPlan, openPositions,
+  dripAcikMi, dripToggle, bedelliPlan, openPositions, balancesByAccount,
 } from "@finans/engine";
 import { api } from "../../api";
 import { KategoriAlani } from "./KategoriAlani";
@@ -568,6 +568,9 @@ export function TransferForm({ data, reload, onClose, edit }: FormProps & { edit
     }
     : { date: todayStr(), from_account_id: "", to_account_id: "", amount: "", note: "" });
   const amountRef = useRef<HTMLInputElement>(null);
+  // bakiye kolonu yok, defterden türetilir (Faz 42)
+  const bakiyeler = balancesByAccount(data.account_entries);
+  const bakiye = (id: number) => bakiyeler.get(id) ?? 0;
   const from = f.from_account_id ? data.accounts.find((a) => a.id === +f.from_account_id) : null;
   const to = f.to_account_id ? data.accounts.find((a) => a.id === +f.to_account_id) : null;
   const amount = num(f.amount);
@@ -597,7 +600,7 @@ export function TransferForm({ data, reload, onClose, edit }: FormProps & { edit
         <Field label="Nereden" flex={2}>
           <select autoFocus style={css.input} value={f.from_account_id} onChange={(e) => setF({ ...f, from_account_id: e.target.value })}>
             <option value="">— seç —</option>
-            {data.accounts.map((a) => <option key={a.id} value={a.id}>{a.name} · {fmtMoney(a.balance, "TRY", true)}</option>)}
+            {data.accounts.map((a) => <option key={a.id} value={a.id}>{a.name} · {fmtMoney(bakiye(a.id), "TRY", true)}</option>)}
           </select>
         </Field>
         <button type="button" onClick={swap} title="Yönü değiştir"
@@ -605,7 +608,7 @@ export function TransferForm({ data, reload, onClose, edit }: FormProps & { edit
         <Field label="Nereye" flex={2}>
           <select style={css.input} value={f.to_account_id} onChange={(e) => setF({ ...f, to_account_id: e.target.value })}>
             <option value="">— seç —</option>
-            {data.accounts.map((a) => <option key={a.id} value={a.id}>{a.name} · {fmtMoney(a.balance, "TRY", true)}</option>)}
+            {data.accounts.map((a) => <option key={a.id} value={a.id}>{a.name} · {fmtMoney(bakiye(a.id), "TRY", true)}</option>)}
           </select>
         </Field>
       </div>
@@ -617,10 +620,10 @@ export function TransferForm({ data, reload, onClose, edit }: FormProps & { edit
       </div>
       {ok && from && to && (
         <div style={{ fontSize: 12, color: T.mut, marginTop: 10, background: T.panel2, borderRadius: 8, padding: "10px 12px", display: "grid", gap: 4 }}>
-          <div><b>{from.name}</b> <span style={{ color: T.neg }}>−{fmtMoney(amount, "TRY", true)}</span> → <span style={{ ...css.mono }}>{fmtMoney(from.balance - amount, "TRY", true)}</span></div>
-          <div><b>{to.name}</b> <span style={{ color: T.pos }}>+{fmtMoney(amount, "TRY", true)}</span> → <span style={{ ...css.mono }}>{fmtMoney(to.balance + amount, "TRY", true)}</span></div>
+          <div><b>{from.name}</b> <span style={{ color: T.neg }}>−{fmtMoney(amount, "TRY", true)}</span> → <span style={{ ...css.mono }}>{fmtMoney(bakiye(from.id) - amount, "TRY", true)}</span></div>
+          <div><b>{to.name}</b> <span style={{ color: T.pos }}>+{fmtMoney(amount, "TRY", true)}</span> → <span style={{ ...css.mono }}>{fmtMoney(bakiye(to.id) + amount, "TRY", true)}</span></div>
           <div style={{ color: T.mut3 }}>Net varlığın değişmez; gelir/gider defterine gelir/gider olarak girmez.</div>
-          {from.balance - amount < 0 && <div style={{ color: T.neg }}>Uyarı: {from.name} bakiyesi eksiye düşüyor.</div>}
+          {bakiye(from.id) - amount < 0 && <div style={{ color: T.neg }}>Uyarı: {from.name} bakiyesi eksiye düşüyor.</div>}
         </div>
       )}
       <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} editing={!!edit} />

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { project, positions, cardInfos, stmtKey, loanRemaining, portfolioValueTry, depositValueOn, convert, type Currency } from "@finans/engine";
+import { project, positions, cardInfos, stmtKey, loanRemaining, portfolioValueTry, depositValueOn, totalCash, convert, type Currency } from "@finans/engine";
 import { api, ApiError, type SessionUser } from "./api";
 import { T, css, fmtMoney, fiyatYasi, FIYAT_YASI_IPUCU, themeCSS, THEME_KEY, CCY_KEY, type ThemeMode } from "./theme";
 import { Center } from "./ui";
@@ -92,7 +92,8 @@ export default function App() {
   const rates = useMemo(() => ({ usdTry: Number(data?.settings.fx_usd_try || 0) }), [data]);
   const days = useMemo(() => (data ? project(data, Number(data.settings.horizon || 6), rates) : []), [data, rates]);
   const pos = useMemo(() => (data ? positions(data.trades, data.prices) : []), [data]);
-  const cash = useMemo(() => (data ? data.accounts.reduce((s, a) => s + a.balance, 0) : 0), [data]);
+  // bakiye kolonu yok; nakit defterden türetilir (Faz 42)
+  const cash = useMemo(() => (data ? totalCash(data.account_entries) : 0), [data]);
   /* Fiyat boru hattının yaşı — "Fiyatları yenile"nin yanında durur, çünkü cevabı olduğu soru
      ("yenilemem gerekiyor mu?") o düğmeye basmadan önce sorulur.
      EN YENİ otomatik damga alınır, en eskisi değil: tek bir sembol çekilemediğinde (fon

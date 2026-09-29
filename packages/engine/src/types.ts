@@ -7,8 +7,11 @@ import type { CorporateAction } from "./corporate.js";
 export type AccountKind = "banka" | "nakit" | "araci" | "fon";
 /** `last_recon_*`: son mutabakat (Faz 16) — kullanıcının "gerçek bakiye buydu" dediği an ve tutar.
     Fark çıkmışsa 'duzeltme' hareketi yazılır, yani mutabakat sonrası defter her zaman tutar. */
+/** `balance` alanı YOK ve bu bilinçli (Faz 42): bakiye `account_entries`'ten
+    türetilir (`accountBalance`/`balancesByAccount`/`totalCash`). Tipte bırakılsaydı
+    kolonu okuyan bir çağrı yeri derlemeden geçer ve sessizce bayat rakam gösterirdi. */
 export type Account = {
-  id: number; name: string; balance: number; kind?: AccountKind;
+  id: number; name: string; kind?: AccountKind;
   last_recon_date?: string | null; last_recon_balance?: number | null;
 };
 /** Virman (Faz 16) — kendi hesapların arasında para hareketi. TEK kayıt, İKİ hareket satırı

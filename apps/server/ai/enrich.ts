@@ -52,7 +52,13 @@ export const ENRICHERS: Record<string, Enricher> = {
 
   /* Mutabakat: defterdeki bakiye ile bildirilen gerçek bakiye arasındaki fark */
   async hesap_mutabakat(uid, a) {
-    const acc = await db.get<{ balance: number }>("SELECT balance FROM accounts WHERE id=? AND user_id=?", Number(a.id), uid);
+    /* Bakiye defterden türetilir (Faz 42); kolon yok. Önizleme SALT OKUNURDUR, yani buradaki
+       toplam yalnız onay kartındaki cümleyi üretir — uygulama anında farkı mutabakat ucu
+       aynı sorguyla yeniden hesaplar. */
+    const acc = await db.get<{ balance: number }>(
+      `SELECT COALESCE(SUM(e.amount), 0) AS balance
+         FROM accounts a LEFT JOIN account_entries e ON e.account_id = a.id AND e.user_id = a.user_id
+        WHERE a.id = ? AND a.user_id = ? GROUP BY a.id`, Number(a.id), uid);
     if (!acc) return null;
     const diff = Number(a.balance) - acc.balance;
     if (!Number.isFinite(diff)) return null;
