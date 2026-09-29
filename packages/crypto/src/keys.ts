@@ -26,6 +26,18 @@ export type KdfParams = { alg: "PBKDF2-SHA256"; iter: number };
 /** OWASP 2023 eşiği. `kdf_params` ile saklanır, yani ileride artırmak/Argon2'ye geçmek göç gerektirmez. */
 export const VARSAYILAN_KDF: KdfParams = { alg: "PBKDF2-SHA256", iter: 600_000 };
 
+/** Sunucudan (prelogin) gelen parametreyi kullanmadan ÖNCE denetler. Sunucu kayıtta bu alt
+    sınırı zaten zorluyor; ama giriş anında parametreyi yine sunucu söylüyor ve istemci ona
+    körü körüne uysaydı `iter: 1` diyen bir yanıt, gönderilen auth_token'ı ucuzca kırılabilir
+    kılardı. Alt sınır `parolaTuret`'in içinde DEĞİL, çünkü testler hızlı parametreyle türetir. */
+export function kdfDenetle(p: unknown): KdfParams {
+  const k = p as Partial<KdfParams> | null;
+  if (k?.alg !== "PBKDF2-SHA256" || !Number.isInteger(k.iter) || k.iter! < VARSAYILAN_KDF.iter) {
+    throw new Error("Sunucudan gelen şifreleme ayarı güvenli değil, giriş durduruldu");
+  }
+  return { alg: k.alg, iter: k.iter! };
+}
+
 const enc = new TextEncoder();
 const BILGI = { kek: "finans/kek/v1", auth: "finans/auth/v1", rk: "finans/rk/v1" } as const;
 

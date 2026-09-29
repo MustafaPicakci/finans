@@ -222,3 +222,27 @@ Göç iki kattır ve ikisi de deploy'da kendiliğinden işler:
 - **İptal akışı yok.** Göç kullanıcı başına ve birkaç yüz satırda saniyenin altında bitiyor; yarıda kalması zararsız (iki biçim yan yana okunur).
 
 **Prod kopyasında doğrulandı**: 1a'dan 6'ya zincir tek açılışta (sunucu katı) + legacy hesapla gerçek arayüzden giriş → v2 yükseltme → kurtarma kodu → tarayıcı göçü; 217 satır alan alan sıfır fark, türetilen bakiyeler eski kolonla birebir.
+
+---
+
+## 9. Park edilen güvenlik konuları (2026-09-29)
+
+Merge öncesi yapılan zayıflık turunun sonucu. Karara bağlananlar ve bekleyenler burada, ayrıntılı gerekçeler o günkü konuşmada.
+
+**Yapıldı**
+- İstemci KDF alt sınırı: `kdfDenetle()` ([keys.ts](../packages/crypto/src/keys.ts)). Prelogin'den gelen parametre PBKDF2-SHA256 ve ≥600k değilse giriş durur; önceden sunucunun söylediği iterasyon sorgusuz kullanılıyordu.
+
+**Karara bağlandı, yapılmayacak**
+- Kurtarma kodu **tek ve değişmez**: yenileme ucu ve "kod hâlâ sende mi" hatırlatması yok. Kodu kaybeden hesabı kaybeder; bedeli, sızmış bir kodun kapatılamaması.
+- Açık cihaz kilidi ve tek bozuk satırda salt okunur açılış: yok (2026-09-28, bkz. [E2EE-ANLATIM.md](E2EE-ANLATIM.md) §9.5, §9.7).
+- Aktif kötü niyetli sunucu ve aynı kullanıcının satır takası: kapsam dışı (§1, §6).
+
+**Bekleyen, karar verilmedi** (önerilen sırayla)
+1. **Tedarik zinciri**: pnpm `minimumReleaseAge`, Render'da `--frozen-lockfile`, CSP'ye `base-uri 'none'` + `form-action 'self'` + `frame-ancestors 'none'`, Trusted Types denemesi. Aynı origin'de koşan her paket DEK'i *kullanabilir* (baytlarını alamaz ama `decrypt` çağırabilir).
+2. **Sunucu biberi**: `KEK = HKDF(master ‖ HMAC(ENV_SECRET, user_id))`, biber girişten sonra verilir. Yalnız veritabanı dökümüyle çevrimdışı parola denemesini imkânsız kılar. Bedel: `ENV_SECRET` kaybolursa parolayla giriş gider (kurtarma kodu yolu biberli olmaz, o çalışır).
+3. **DEK yenileme**: zarfa anahtar kimliği (`v2:<kid>:…`), `user_keys` tablosu, göç desenini izleyen devam ettirilebilir yeniden şifreleme, yenilemede tüm oturumlar kapanır. Kurtarma kodu değişmeden iki yol:
+   - **B** (önerilen): yalnız parola değişiminde, kurtarma kodu o an sorulur. Tamamen simetrik kalır.
+   - **A**: asimetrik kurtarma anahtarı (ECDH P-256), periyodik yenilemeyi mümkün kılar. `rk_acik` DEK ile AES-GCM'de saklanmak ZORUNDA, yoksa veritabanına yazabilen biri kendi açık anahtarını koyup sonraki DEK'i alır. A seçilecekse merge'den önce yapılmalı (sonra her kullanıcıdan kodu bir kez istemek gerekir).
+4. **Meta veri denetimi**: sunucunun artık kullanmadığı düz kolonlar zarfa (`recurring.day`/`kind`, `cards.statement_day`/`due_day`, `categories.kind`/`color`, `accounts.kind`, `ai_actions.tool`); dolgu kovası 32 → 64 bayt.
+5. **Asistan sağlayıcısı**: ücretsiz katman içeriği model eğitiminde kullanabiliyor; kullanılan katman kontrol edilmeli, gerekirse gizlilik metni düzeltilmeli.
+6. **Geçiş dönemi** (merge sonrası): giriş yapmayan hesaplar `p1` (düz) ve `legacy` hash'le kalır; `DROP COLUMN` eski veriyi diskten silmez (göç sonrası tabloyu yeniden yazmak gerekir), eski yedekler düz metindir.

@@ -1,6 +1,6 @@
 import {
   parolaTuret, yeniSalt, yeniDek, dekSar, dekAc, dekAnahtari, yeniKurtarmaKodu, kurtarmaSarici,
-  VARSAYILAN_KDF, type KdfParams, type Bayt,
+  VARSAYILAN_KDF, kdfDenetle, type Bayt,
 } from "@finans/crypto";
 import { api, ApiError, type SessionUser } from "../../api";
 import { anahtarKur } from "../../yazim/anahtar";
@@ -74,7 +74,7 @@ export async function girisYap(email: string, parola: string): Promise<GirisSonu
     kek = m.kek;
     r = await api.login(email, { password: parola, upgrade: m.govde });
   } else {
-    const t = await parolaTuret(parola, pre.salt, pre.params as KdfParams);
+    const t = await parolaTuret(parola, pre.salt, kdfDenetle(pre.params));
     kek = t.kek;
     r = await api.login(email, { auth_token: t.authToken });
   }
@@ -127,7 +127,7 @@ export async function kurtarmaIleSifirla(token: string, kod: string, yeniParola:
 export async function parolaDegistir(email: string, eski: string, yeni: string): Promise<void> {
   const pre = await api.prelogin(email);
   if (pre.kdf !== "v2") throw new ApiError(409, "Önce çıkış yapıp yeniden giriş yap");
-  const e = await parolaTuret(eski, pre.salt, pre.params as KdfParams);
+  const e = await parolaTuret(eski, pre.salt, kdfDenetle(pre.params));
   const { dek_wrapped_pw } = await api.parolaPaketi(e.authToken);
   if (!dek_wrapped_pw) throw new ApiError(409, "Hesabın şifreleme anahtarı bulunamadı");
   const dekHam = await dekAc(dek_wrapped_pw, e.kek, "pw");
@@ -143,5 +143,5 @@ export async function parolaDegistir(email: string, eski: string, yeni: string):
 export async function parolaKaniti(email: string, parola: string): Promise<{ password?: string; auth_token?: string }> {
   const pre = await api.prelogin(email);
   if (pre.kdf === "legacy") return { password: parola };
-  return { auth_token: (await parolaTuret(parola, pre.salt, pre.params as KdfParams)).authToken };
+  return { auth_token: (await parolaTuret(parola, pre.salt, kdfDenetle(pre.params))).authToken };
 }

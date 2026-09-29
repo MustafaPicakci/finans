@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { sar, ac, sifreliMi, b64u, unb64u, type Bayt } from "./aead.js";
 import {
   parolaTuret, yeniSalt, yeniDek, dekAnahtari, dekSar, dekAc,
-  yeniKurtarmaKodu, kurtarmaKoduCoz, kurtarmaSarici, VARSAYILAN_KDF, type KdfParams,
+  yeniKurtarmaKodu, kurtarmaKoduCoz, kurtarmaSarici, VARSAYILAN_KDF, kdfDenetle, type KdfParams,
 } from "./keys.js";
 
 /* Testler hızlı kalsın diye düşük iterasyon; GERÇEK parametre (600k) yalnız altın vektörde
@@ -91,6 +91,16 @@ describe("parolaTuret", () => {
 
   it("desteklenmeyen KDF açıkça reddedilir", async () => {
     await expect(parolaTuret("x", salt, { alg: "MD5" } as unknown as KdfParams)).rejects.toThrow(/desteklenmeyen/);
+  });
+
+  it("sunucudan gelen zayıf ya da bozuk KDF parametresi reddedilir", () => {
+    expect(kdfDenetle({ alg: "PBKDF2-SHA256", iter: 600_000 })).toEqual(VARSAYILAN_KDF);
+    expect(kdfDenetle({ alg: "PBKDF2-SHA256", iter: 1_200_000 }).iter).toBe(1_200_000);
+    for (const kotu of [
+      { alg: "PBKDF2-SHA256", iter: 1 }, { alg: "PBKDF2-SHA256", iter: 599_999 },
+      { alg: "PBKDF2-SHA256", iter: "600000" }, { alg: "PBKDF2-SHA256", iter: 6e5 + 0.5 },
+      { alg: "MD5", iter: 600_000 }, {}, null, undefined,
+    ]) expect(() => kdfDenetle(kotu)).toThrow(/güvenli değil/);
   });
 
   it("varsayılan KDF OWASP eşiğinin altına düşmemiş", () => {
