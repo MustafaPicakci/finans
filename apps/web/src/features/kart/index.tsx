@@ -208,7 +208,7 @@ export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => 
             )}
             {/* otomatik ödeme talimatı: hesap seçiliyse vadesi gelen ekstre cron ile o hesaptan ödenir */}
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, fontSize: 12, color: T.mut }}>
-              <span title="Vade günü geldiğinde ekstre seçili hesaptan kendiliğinden ödenir (bakiye düşer, gider kaydı oluşur)">
+              <span title="Vade günü geldiğinde ekstre seçili hesaptan kendiliğinden ödenir (bakiye düşer, gider kaydı oluşur). Talimat verildiği günden önceki ekstrelere dokunulmaz.">
                 {ci.card.pay_account_id ? <span style={{ color: T.acc }}>⚡</span> : null} otomatik ödeme:
               </span>
               <select style={{ ...css.input, width: "auto", padding: "4px 8px", fontSize: 12 }} value={ci.card.pay_account_id ?? ""}

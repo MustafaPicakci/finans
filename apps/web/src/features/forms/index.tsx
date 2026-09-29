@@ -327,7 +327,7 @@ export function RecurringForm({ data, reload, onClose, edit }: FormProps & { edi
       {rec.target && (
         <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, fontSize: 13, color: T.text, cursor: "pointer" }}>
           <input type="checkbox" checked={rec.auto} onChange={(e) => setRec({ ...rec, auto: e.target.checked })} />
-          Otomatik gerçekleştir — günü gelince kendiliğinden {rec.target.startsWith("card:") ? "ekstreye" : "hesaba"} işlensin
+          Otomatik gerçekleştir — günü gelince kendiliğinden {rec.target.startsWith("card:") ? "ekstreye" : "hesaba"} işlensin (işaretlendiği günden itibaren)
         </label>
       )}
       <div style={{ fontSize: 12, color: T.mut, marginTop: 8, background: T.panel2, borderRadius: 8, padding: "8px 12px" }}>

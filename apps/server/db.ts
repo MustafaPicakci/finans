@@ -352,6 +352,11 @@ ALTER TABLE recurring ADD COLUMN IF NOT EXISTS category_id integer REFERENCES ca
 ALTER TABLE recurring ADD COLUMN IF NOT EXISTS auto boolean NOT NULL DEFAULT false;
 -- Faz 8.2: kart otomatik ödeme talimatı — doluysa vadesi gelen ekstre cron ile bu hesaptan ödenir
 ALTER TABLE cards ADD COLUMN IF NOT EXISTS pay_account_id integer REFERENCES accounts(id) ON DELETE SET NULL;
+-- Faz 42: otomatik talimatların BAŞLANGIÇ günü ('YYYY-MM-DD'). Cron bu günden önceki vadelere/
+-- occurrence'lara dokunmaz — sabit 10/45 günlük telafi penceresinin yerini aldı. Talimat pasiften
+-- aktife geçtiğinde sunucu damgalar, kapanınca NULL'lanır (index.ts talimatDamgasi).
+ALTER TABLE cards ADD COLUMN IF NOT EXISTS pay_since text;
+ALTER TABLE recurring ADD COLUMN IF NOT EXISTS auto_since text;
 -- Faz 39: kart harcamasının kategorisi. ON DELETE SET NULL (transactions.category_id ile aynı
 -- kural): kategori silinmesi harcamayı SİLMEZ, yalnız kategorisiz bırakır. Mevcut satırlar NULL
 -- kalır, yani "kategorisi girilmemiş" — geriye dönük bir tahmin YAPILMAZ (adından kategori
@@ -524,6 +529,18 @@ CREATE INDEX IF NOT EXISTS account_entries_source ON account_entries (source_tab
     }
     await pool.query("INSERT INTO settings (key, value) VALUES ('ai_actions_archived', $1) ON CONFLICT (key) DO NOTHING", [nowLocal()]);
   }
+
+  /* Faz 42 — başlangıç günü kolonlarından ÖNCE açılmış talimatların gerçek başlangıç günü
+     bilinmiyor. Eski kuralın (10 gün ekstre / 45 gün kalem) bu an hâlâ yakalayacağı en eski gün
+     yazılır: göç anında davranış birebir aynı kalır — sonrasında sınır sabittir, pencere gibi
+     kaymaz. Yalnız AKTİF ve damgasız satırlara dokunur; yeni yazmalar hep damgalandığından
+     sonraki açılışlarda no-op. */
+  const gunOnce = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+  await pool.query("UPDATE cards SET pay_since=$1 WHERE pay_account_id IS NOT NULL AND pay_since IS NULL", [gunOnce(10)]);
+  await pool.query(
+    "UPDATE recurring SET auto_since=$1 WHERE auto AND (account_id IS NOT NULL OR card_id IS NOT NULL) AND auto_since IS NULL",
+    [gunOnce(45)],
+  );
 
   /* Faz 15 — hareket defterini mevcut veriden bir kez doldur. Defterin kuralı balance = Σ entries
      olduğundan, geçmişten üretilebilen hareketler (hesaba bağlı işlemler, TRY portföy işlemleri,
