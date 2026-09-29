@@ -515,7 +515,8 @@ export default function App() {
 /* Açılışta ya da yeniden yüklemede API cevap vermediğinde tüm uygulamanın yerini alan ekran.
    Eskiden ham hatayı ve bir geliştirici talimatını basıyordu ("Error: Sunucu hatası. Sunucu
    çalışıyor mu? (npm run dev)") — prod'da kullanıcıya hiçbir şey söylemeyen bir metin (Faz 41.6,
-   Neon kotası bitince görüldü). Hata üç cinse indirilir çünkü kullanıcının yapabileceği şey
+   Neon kotası bitince görüldü). Ham hata metni hiçbir ortamda basılmaz (geliştirici için
+   tarayıcı konsolu ve sunucu log'u var). Hata üç cinse indirilir çünkü kullanıcının yapabileceği şey
    cinse göre değişir; 503'ü sunucu yalnız DB'ye ULAŞILAMADIĞINDA döner (bkz. index.ts onError). */
 function HataEkrani({ err, onRetry }: { err: unknown; onRetry: () => void }) {
   const status = err instanceof ApiError ? err.status : 0; // 0 = istek hiç cevap almadı (ağ)
@@ -524,14 +525,12 @@ function HataEkrani({ err, onRetry }: { err: unknown; onRetry: () => void }) {
     : status >= 500 ? ["Bir sorun oluştu", "Sunucu isteği tamamlayamadı. Verilerin güvende — biraz sonra tekrar dene."]
     : status ? ["Bir sorun oluştu", "İstek tamamlanamadı. Sayfayı yeniden deneyebilirsin."]
     : ["Sunucuya ulaşılamadı", "İnternet bağlantını kontrol edip tekrar dene."];
-  const yerel = ["localhost", "127.0.0.1"].includes(window.location.hostname);
   return (
     <Center>
       <style>{themeCSS}</style>{/* erken dönüş: kabuğun <style>'ı henüz render edilmedi (Auth'taki gibi) */}
       <div style={{ maxWidth: 360, display: "grid", gap: 12, justifyItems: "center" }}>
         <div style={{ color: T.text, fontSize: 18, fontWeight: 640 }}>{baslik}</div>
         <div style={{ fontSize: 14, lineHeight: 1.5 }}>{metin}</div>
-        {yerel && <div style={{ fontSize: 12, fontFamily: T.mono }}>{String(err)} — API sunucusu çalışıyor mu? (pnpm dev)</div>}
         <button style={css.btn} onClick={onRetry}>Tekrar dene</button>
       </div>
     </Center>
