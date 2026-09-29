@@ -414,6 +414,48 @@ oluştu", `fetch`'in kendisi patladıysa → "bağlantını kontrol et"; hepsind
 düğmesi (eskiden tek çare sayfayı yenilemekti). `npm run dev` ipucu yalnız localhost'ta kalıyor
 — orada hâlâ doğru ipucu o.
 
+## Faz 42 — Şifreleme dalından main'e alınanlar ✅
+
+`e2ee` dalı (sıfır bilgi şifreleme, henüz birleştirilmedi) şifrelemeden bağımsız da işe yarayan
+değişiklikler biriktirmişti. Birleştirme kararı açık dururken bunlar main'e ayrıca alındı; hiçbiri
+şifreleme iddiası taşımıyor.
+
+- **Bakiye kolondan değil defterden** (e2ee `711f62b` + `963244e`). `accounts.balance` Faz 15'ten
+  beri defterin ikinci kopyasıydı ve tek işi `applyEntry`/`revertEntries`'in onu eşit tutmasıydı.
+  Kolon kalktı, bakiye `accountBalance`/`totalCash` ile türüyor; `ledgerDrift` tanım gereği 0
+  olduğundan silindi. Düşürme koşullu: `initDb` önce "kolon = Σ hareketler"i 1e-9 eşiğiyle ölçer,
+  temiz değilse kolonu bırakıp ayrışan hesapları loglar. Mutabakat farkı artık hep sunucuda,
+  defterden hesaplanıyor (istemcinin gönderdiği `diff` yok sayılır).
+- **Otomatik talimatın sınırı başlangıç günü** (e2ee `67fb9de`'nin sunucu cron'una uyarlaması).
+  `cards.pay_since` / `recurring.auto_since` — sunucu damgalar (`talimatDamgasi`): pasif→aktif
+  bugün, aktif kalırken dokunulmaz, pasif NULL, FK silinmesiyle pasifleşip yeniden açılan satır
+  taze damga alır. Cron talimattan sonraki HER vadeyi yazar, öncesine dokunmaz. Sabit 10/45 günlük
+  pencere iki yönden yanlıştı: sunucu (Render uykusu, 41.6'daki Neon kesintisi gibi) pencereden
+  uzun kapalı kalırsa vade bir daha yazılmıyor ve bakiye sessizce şişik kalıyordu; talimatı yeni
+  veren kullanıcının pencere içindeki eski vadeleri ise geriye dönük ödeniyordu. Göç: mevcut
+  talimatlara eski kuralın o gün yakalayacağı en eski gün yazıldı (bugün−10 / bugün−45), yani
+  geçiş anında davranış aynı. Zaten yazılmış vadeler önden tek sorguyla elenir — her 30 dakikalık
+  tur talimatın bütün geçmişini yeniden denemesin.
+- **Asistan onay beklerken "kaydedildi" demiyor** (e2ee `d236374`'ün asistan yarısı). Prompt kuralı
+  + araç sonucunda "HENÜZ UYGULANMADI" + deterministik emniyet `tamamlandiDiyor` (4 test).
+- **Gizlilik politikasındaki yanlış**: Faz 34'ten beri sunucuda duran asistan sohbeti hâlâ
+  "yalnızca tarayıcının belleğinde tutulur, sunucuya gönderilmez" diye yazıyordu. Düzeltildi;
+  sohbetler toplanan veriler tablosuna girdi, yapay zekâ satırına bakiyelerin ve sohbet
+  geçmişinin de gittiği eklendi.
+- **Açılış sayfası metni sadeleşti** (e2ee `024078f`'in şifreleme dışı kısmı): şifreleme bölümü,
+  rozeti ve üç SSS maddesi alınmadı; "Parolamı unutursam" ve "Verilerim nerede" main'in gerçeğine
+  göre yazıldı.
+- **Hata ekranı** ham hata metnini localhost'ta da basmıyor (e2ee `d451475`).
+
+**Doğrulama**: `pnpm build` temiz; 330 engine + 33 sunucu testi yeşil. `finans_prod` kopyasından
+açılan kum havuzunda (`finans_main`): kolon drift'siz düştü ve dört gerçek hesabın bakiyesi
+kolondakiyle birebir; göç damgaları bugün−10/−45; talimatı geriye çekilen kartta pencerenin
+dışında kalan vade (eski kuralın kaçıracağı) ödendi, talimattan önceki vadelere dokunulmadı.
+Uçtan: damga yedi geçişte doğru (açma, hesap A→B, ad değişimi, kapama, yeniden açma, FK silme
+sonrası yeniden açma, yok olan kayıt 404); işlem ekle/düzenle/sil bakiyeyi defterle doğru
+oynatıyor; mutabakat istemcinin `diff`'ini yok sayıp farkı kendisi hesaplıyor. Hesaplar, Özet
+ve Kartlar gerçek sunucuda açıldı (masaüstü + 390px): konsol hatası ve taşma yok.
+
 ---
 
 ## Doğrulama
@@ -1147,7 +1189,7 @@ denetlenemezdi.
 
 ## Sıralama
 
-Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Faz 0–41 tamamlandı (Faz 5 yayına, 10–13 ürün derinleşmesine, 21+ asistan ve portföy derinleşmesine kadar); yukarıdaki nota bakın — 22-33'ün günlüğü burada değil, CLAUDE.md/README'de.
+Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Faz 0–42 tamamlandı (Faz 5 yayına, 10–13 ürün derinleşmesine, 21+ asistan ve portföy derinleşmesine kadar); yukarıdaki nota bakın — 22-33'ün günlüğü burada değil, CLAUDE.md/README'de.
 
 **Sıradaki iş — numaralı faz değil, açık kalan kalemler (öncelik sırasıyla):**
 1. ~~E-posta teslim edilebilirliği~~ — **çözüldü (Faz 28)**: gönderim yolu `MAIL_PROVIDER` ile
