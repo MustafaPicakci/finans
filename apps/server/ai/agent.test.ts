@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { agentLoop, executeActions, planGecerli, konusmaBasligi, formatResults, type AgentDeps, type PendingAction } from "./index.js";
+import { agentLoop, executeActions, planGecerli, konusmaBasligi, formatResults, tamamlandiDiyor, type AgentDeps, type PendingAction } from "./index.js";
 import { AiError, withKeyFallback, type AiProvider, type ChatRequest, type ChatResult, type ToolCall } from "./provider.js";
 import { ROUTE_TOOLS } from "./tools.js";
 
@@ -74,6 +74,36 @@ describe("agentLoop — yazma araçları yalnız planlanır", () => {
     // modele "planlandı" denmeli — "uygulandı" DEĞİL (yoksa model işi bitmiş sanır)
     const result = p.seen[1].messages.find((m) => m.role === "tool")!.result as any;
     expect(result.durum).toContain("onayı bekleniyor");
+  });
+
+  it("plan varken işi BİTMİŞ gibi anlatan yanıt nötr cümleyle değiştirilir", async () => {
+    const p = fakeProvider([
+      { toolCalls: [call("islem_ekle", { date: "2026-08-12", name: "Market", amount: -850 })] },
+      { text: "Garanti hesabından Migros'a 850 TL harcama kaydedildi." },
+    ]);
+    const res = await agentLoop(deps(p), [{ role: "user", content: "markete 850 harcadım" }]);
+    expect(res.pending).toHaveLength(1);
+    expect(res.reply).toBe("Aşağıdaki işlemleri hazırladım, onaylarsan uygulayayım.");
+  });
+  it("plan varken doğru kipteki yanıt olduğu gibi kalır", async () => {
+    const p = fakeProvider([
+      { toolCalls: [call("islem_ekle", { date: "2026-08-12", name: "Market", amount: -850 })] },
+      { text: "Migros harcamasını hazırladım, onaylarsan kaydedeceğim." },
+    ]);
+    expect((await agentLoop(deps(p), [{ role: "user", content: "markete 850 harcadım" }])).reply)
+      .toBe("Migros harcamasını hazırladım, onaylarsan kaydedeceğim.");
+  });
+  it("plan YOKSA geçmiş zaman serbesttir (geçmiş bir kaydı anlatmak doğrudur)", async () => {
+    const p = fakeProvider([{ text: "12 Ağustos'ta Migros'a 850 TL harcama kaydedilmiş." }]);
+    expect((await agentLoop(deps(p), [{ role: "user", content: "markete ne zaman harcamıştım" }])).reply).toContain("kaydedilmiş");
+  });
+  it("tamamlandiDiyor: gözlenen gerçek yanıtları yakalar, plan kipini yakalamaz", () => {
+    expect(tamamlandiDiyor("Axess kartınızın ekstresi (400 TL) Ana Hesap üzerinden ödendi olarak kaydedildi.")).toBe(true);
+    expect(tamamlandiDiyor("Cüzdan'dan Ana Hesap'a 200 TL virman kaydedildi.")).toBe(true);
+    expect(tamamlandiDiyor("20 TL fark için düzeltme kaydı oluşturuldu.")).toBe(true);
+    expect(tamamlandiDiyor("THYAO alımını ekledim.")).toBe(true);
+    expect(tamamlandiDiyor("İki işlemi hazırladım, onayına sunuyorum.")).toBe(false);
+    expect(tamamlandiDiyor("Onaylarsan kaydedeceğim.")).toBe(false);
   });
 
   it("eksik zorunlu alanı plana almaz, modele hata olarak döndürür", async () => {

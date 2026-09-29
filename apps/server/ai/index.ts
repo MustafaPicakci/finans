@@ -67,10 +67,13 @@ function systemPrompt(ctx: UserContext): string {
     "  hangisini kastettiğini sor ya da o alanı boş bırak.",
     "- Kullanıcı bir işlemi anlattığında onay isteme cümlesi kurma; doğrudan ilgili aracı çağır.",
     "  Onayı sistem kullanıcıdan kendisi alır (araç çağrıların 'planlandı' olarak döner, bu normaldir).",
+    "- Yazma aracı çağırdıysan işlem HENÜZ YAPILMADI: kullanıcı onay kartında onaylayınca uygulanacak.",
+    "  Yanıtında 'kaydedildi / eklendi / ödendi / oluşturuldu / yapıldı' gibi GEÇMİŞ ZAMAN KULLANMA.",
+    "  Doğru biçim: 'Şunu hazırladım, onaylarsan kaydedeceğim' ya da 'Onayına sundum'.",
     "- Bir cümlede birden fazla olay varsa (örn. fon sattım + kart ekstresini ödedim) her biri için ayrı araç çağır.",
     "- Zorunlu bir bilgi eksikse (tutar, tarih, hangi kart) araç çağırmak yerine kısa bir soru sor.",
     "- Aynı olayı iki kez kaydetme. Emin değilsen önce okuma araçlarıyla (kayit_ara, pozisyonlar, kart_ekstreleri) bak.",
-    "- Yanıtların kısa ve net olsun: ne yapıldığını/ne planlandığını bir iki cümlede özetle.",
+    "- Yanıtların kısa ve net olsun: neyi hazırladığını (onay bekleyen) bir iki cümlede özetle.",
     "",
     "SORU SORULURSA (rakam isteyen sorular)",
     "- TOPLAMI KENDİN HESAPLAMA. Kayıt listelerini toplayarak rakam üretmek yasak: listeler kesilir",
@@ -208,7 +211,7 @@ export async function agentLoop(deps: AgentDeps, history: ChatTurn[]): Promise<{
         else {
           const summary = await deps.summarize(write, call.args);
           pending.push({ tool: write.name, args: call.args, summary });
-          result = { durum: "planlandı, kullanıcının onayı bekleniyor", ozet: summary };
+          result = { durum: "planlandı, kullanıcının onayı bekleniyor — HENÜZ UYGULANMADI", ozet: summary };
         }
       } else {
         result = { hata: "böyle bir araç yok" };
@@ -216,8 +219,24 @@ export async function agentLoop(deps: AgentDeps, history: ChatTurn[]): Promise<{
       messages.push({ role: "tool", callId: call.id, name: call.name, result });
     }
   }
-  if (!reply) reply = pending.length ? "Aşağıdaki işlemleri hazırladım, onaylarsan uygulayayım." : "Bunu anlayamadım, biraz daha açar mısın?";
+  /* Emniyet: plan varken yanıt işi BİTMİŞ gibi anlatıyorsa ("ekstre ödendi olarak kaydedildi")
+     yanıt nötr cümleyle değiştirilir. Prompt bunu zaten yasaklıyor ama modele uyması garanti
+     değil — ve onay kartının hemen üstünde "kaydedildi" yazmak, kullanıcıya onaylamasına gerek
+     olmadığını söyler (ölçüldü: dört gerçek akışın dördünde de böyle yazdı). Kaybolan bir şey
+     yok: işlemlerin kendisi onay kartında satır satır duruyor. */
+  if (pending.length && tamamlandiDiyor(reply)) reply = PLAN_YANITI;
+  if (!reply) reply = pending.length ? PLAN_YANITI : "Bunu anlayamadım, biraz daha açar mısın?";
   return { reply, pending };
+}
+
+const PLAN_YANITI = "Aşağıdaki işlemleri hazırladım, onaylarsan uygulayayım.";
+
+/** Metin bir işlemi TAMAMLANMIŞ gibi mi anlatıyor? (edilgen ve birinci tekil geçmiş zaman)
+    Kök listesi bilinçli dar: yalnız kayıt anlamındaki fiiller — "baktım", "hesapladım" gibi
+    okuma fiilleri planla birlikte gelebilir ve doğrudur. */
+export function tamamlandiDiyor(metin: string): boolean {
+  return /(kaydedil|kaydett|eklendi|ekledim|ödendi|ödedim|oluşturuldu|oluşturdum|yapıldı|gerçekleştirildi|gerçekleştirdim|işlendi|işledim|aktarıldı|aktardım|güncellendi|güncelledim|silindi|sildim|tamamlandı|tamamladım|girildi|girdim)/i
+    .test(metin.toLocaleLowerCase("tr"));
 }
 
 /** Gerçek bağımlılıkları (model + kullanıcının verisi) bağlar ve döngüyü çalıştırır. */
