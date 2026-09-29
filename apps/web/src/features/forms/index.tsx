@@ -680,8 +680,13 @@ export function TradeForm({ data, reload, onClose, edit, prefill }: FormProps & 
       amount: prefill?.amount != null ? String(prefill.amount) : "",
       /* Öneriden gelen fiyat KAZANIR: temettüde bu "hisse başına tutar"dır, sembolün güncel
          piyasa fiyatı değil — priceOf'a düşseydi ₺0,23 yerine ₺312 yazardı. */
+      /* Güncel fiyat yalnız bugün ya da ileri tarihli öneride dolar ("fon boz": en geç şu
+         gün sat → bugünkü NAV en iyi tahmin). GEÇMİŞ tarihte dolmaz: fiyatı bilinmeyen DRIP
+         geri yatırımı (Faz 36) bugünkü fiyatla adet türetip motorun bilerek kaçındığı
+         "geçmişi bugünün fiyatıyla yazma" hatasını formda sessizce yapıyordu. */
       price: prefill?.price != null ? String(prefill.price)
-        : prefill ? String(priceOf(data, prefill.symbol, prefill.asset_type) ?? "") : "",
+        : prefill && (prefill.date ?? todayStr()) >= todayStr()
+          ? String(priceOf(data, prefill.symbol, prefill.asset_type) ?? "") : "",
       fee: "", currency: defaultCcy(prefill?.asset_type ?? "BIST") as Currency,
       account_id: prefill?.account_id != null ? String(prefill.account_id) : "",
       // portföy grubu: son kullanılan grup varsayılan gelir (art arda giriş)
@@ -735,6 +740,9 @@ export function TradeForm({ data, reload, onClose, edit, prefill }: FormProps & 
   };
   const ok = !!f.symbol && qty > 0 && (isBonus || price > 0) && !!f.date;
   const reason = !f.symbol ? "Sembol gerekli"
+    /* tutar modunda adet fiyattan türer: fiyat boşken "tutar 0'dan büyük olmalı" demek, dolu
+       tutar alanını suçlayıp asıl eksiği saklıyordu */
+    : (!isBonus && !isDividend && mode === "tutar" && !(num(f.price) > 0)) ? "Birim fiyat gerekli"
     : !(qty > 0) ? (isDividend ? "Temettü ödenen hisse adedi gerekli"
       : isBonus ? "Gelen bedelsiz hisse adedi gerekli"
         : mode === "tutar" ? "Tutar 0'dan büyük olmalı (komisyonu aşmalı)" : "Adet/miktar 0'dan büyük olmalı")
@@ -864,7 +872,10 @@ export function TradeForm({ data, reload, onClose, edit, prefill }: FormProps & 
                 : `Hesaptan çıkacak (${f.currency === "USD" ? "$" : "TL"})`} />
         )}
         {!isBonus && !(isDividend && mode === "tutar") && (
-          <AmountField label={isDividend ? `Hisse başına net (${f.currency === "USD" ? "$" : "TL"})` : `Birim fiyat (${f.currency === "USD" ? "$" : "TL"})`}
+          /* Temettüde bu alan BRÜTTÜR: nakit = adet × bu − stopaj (`cashDelta`). Etiket eskiden
+             "net" diyordu — ona güvenip net tutarı yazan ve stopajı da giren kullanıcının
+             stopajı iki kez düşülürdü; kurumsal öneri de buraya brüt tutarı dolduruyor. */
+          <AmountField label={isDividend ? `Hisse başına brüt (${f.currency === "USD" ? "$" : "TL"})` : `Birim fiyat (${f.currency === "USD" ? "$" : "TL"})`}
             value={f.price} onChange={(v) => setF({ ...f, price: v })} ccy={f.currency} />
         )}
         {!isBonus && (
@@ -945,8 +956,12 @@ export function TradeForm({ data, reload, onClose, edit, prefill }: FormProps & 
               <div style={{ marginTop: 4, color: T.mut3 }}>Toplam maliyet ve pozisyon değeri değişmez — yalnız aynı para daha çok hisseye dağılır.</div>
             </>);
           })() : (<>
-            {isDividend ? "Toplam temettü: " : "İşlem tutarı: "}
+            {isDividend ? "Brüt temettü: " : "İşlem tutarı: "}
             <span style={{ ...css.mono, color: T.text }}>{fmtMoney(qty * price, f.currency, true)}</span>
+            {isDividend && fee > 0 && (<>
+              {" · stopaj sonrası net: "}
+              <span style={{ ...css.mono, color: T.text }}>{fmtMoney(cashDelta({ side: f.side, qty, price, fee }), f.currency, true)}</span>
+            </>)}
             {isDividend && <div style={{ marginTop: 4, color: T.mut3 }}>Adedin ve ortalama maliyetin değişmez; tutar gerçekleşen getiriye yazılır.</div>}
             {f.currency === "TRY" && f.account_id && (() => {
               const acc = data.accounts.find((a) => a.id === +f.account_id);

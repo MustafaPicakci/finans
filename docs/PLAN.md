@@ -458,6 +458,40 @@ ve Kartlar gerçek sunucuda açıldı (masaüstü + 390px): konsol hatası ve ta
 
 ---
 
+## Faz 42.1 — Kurumsal olay akışının uçtan uca denemesi ✅
+
+Faz 36'nın akışı (Özet kartı → önden dolu form → kayıt, DRIP, bedelli) ilk kez tarayıcıda, prod
+kopyası üzerinde (`finans_kurumsal`) baştan sona sürüldü. Motor, sunucu ve veri çekimi doğruydu —
+10 kayıtsız temettü önerildi, bedelsiz önerilmedi (11 bölünmenin hepsi ilk alımdan önce; doğru).
+Bulunan kusurlar akışın kenarlarındaydı:
+
+- **Bütün modallar Times ile, koyu temada siyah metinle çiziliyordu.** Yazı tipi ve renk yalnız
+  App kökünde inline; `Modal` `createPortal` ile `body`'ye çıkıyor (Faz 24 kural 5) ve kökten
+  miras almıyor. `body` kuralı `themeCSS`'e eklendi.
+- **₺ glifi £ gibi çiziliyordu** — body düzeltmesi bunu modallara da taşıdı (Times ₺'yi doğru
+  çiziyordu). Kök neden Schibsted Grotesk'in kendi glifi: Google'ın latin-ext alt kümesi U+20BA'yı
+  kapsadığını bildirdiği için tarayıcı başka yazı tipine düşmüyor. Aynı aileye yalnız ₺'yi
+  kapsayan yüzler eklendi (IBM Plex Mono'nun latin-ext dosyası). Ağırlıklar Google'ınkilerle
+  birebir olmak zorunda — aralık yazınca Chrome yüzü hiç yüklemedi (ölçüldü). Eski "tutarı
+  `css.mono` ile yaz" kuralı bir koruma değil bir alışkanlıktı; unutulan her yer sessizce £ basıyordu.
+- **Temettü formunda "Hisse başına net" etiketi yanlıştı**: alan brüttür (`nakit = adet × bu −
+  stopaj`), öneri de brütü dolduruyor. Etikete güvenip net yazan kullanıcının stopajı iki kez
+  düşülürdü. Etiket "brüt" oldu, stopaj girilince net ayrıca yazılıyor.
+- **DRIP açık ama ödeme gününün fiyatı yoksa kart hiçbir şey demiyordu** — `reinvest: null`,
+  "DRIP kapalı" ile "fiyat yok"u ayırmıyordu. Öneri `drip` alanı taşıyor; kart açıklama yazıp
+  "Geri yatır"ı yine sunuyor, form tutar modunda açılıyor (adet uydurulmuyor). Sunucunun kapalı
+  kaldığı günlerde (Neon kesintisi) gerçekten oluşan bir durum.
+- **Form geçmiş tarihli öneride bugünkü fiyatı dolduruyordu**: fiyat vermeyen öneri
+  `priceOf()`'a düşüyordu — "fon boz" (bugün/ileri tarih) için doğru, 22 Eylül'ün geri yatırımı
+  için motorun bilerek kaçındığı hata. Güncel fiyat artık yalnız bugün/ileri tarihte dolar.
+  Tutar modunda fiyat boşken "Tutar 0'dan büyük olmalı" yerine "Birim fiyat gerekli" yazıyor.
+- **Kurumsal kartın kenarlığı/başlığı/sayacı hâlâ mordu.** Faz 37'nin yorumu "yalnız Kaydet mor
+  kaldı" diyordu ama o commit yalnız ikincil düğmeyi sadeleştirmişti. Nötr yapıldı.
+
+Kapsam dışı kalan iki gözlem: TEFAS'ın 0 döndürdüğü fonlar **tahtası durdurulmuş** fonlardır
+(kullanıcı açıkladı; −%100 görünür, değerleme kararı kullanıcıda bekliyor) ve −%93,8 görünen
+KONTR'da kaçırılmış bedelsiz yok — alış fiyatı piyasanın ~10 katı, olası yazım hatası.
+
 ## Doğrulama
 `pnpm build` temiz, 57 engine testi yeşil. Kota sıfırlandıktan sonra `returns-by-date` tasarımı gerçek veride **tam** doğrulandı:
 - **Tek istekte 3489 fon fiyatı** toplandı (`prices` + aynı gün `price_history`'de tam senkron) — tahmin edilenin (~150-160) çok üzerinde, TEFAS'ta pay sınıfı/alt kategori dahil gerçekten binlerce fon var.

@@ -154,6 +154,22 @@ describe("kurumsalOneriler — temettü", () => {
     if (t.kind !== "temettu") throw new Error();
     expect(t.amount).toBeCloseTo(35.19, 2);
     expect(t.reinvest).toBeNull();
+    /* ...ama DRIP'in açık olduğu SÖYLENİR: `reinvest: null` tek başına "DRIP kapalı" ile
+       "fiyat yok"u ayırt etmiyordu ve arayüz ikinci durumda hiçbir şey göstermiyordu —
+       DRIP'i açan kullanıcı özelliği bozuk sanıyordu. */
+    expect(t.drip).toBe(true);
+  });
+
+  it("DRIP kapalıysa drip:false (fiyat olsa bile)", () => {
+    const o = kurumsalOneriler(
+      [trade({ id: 1, date: "2026-01-05", qty: 150, price: 300 })],
+      [tem()],
+      { priceHistory: [ph("2026-03-10", 400)] },
+    );
+    const t = o[0];
+    if (t.kind !== "temettu") throw new Error();
+    expect(t.drip).toBe(false);
+    expect(t.reinvest).toBeNull();
   });
 
   it("DRIP listesi TYPE:SYM biçimini de kabul eder", () => {
