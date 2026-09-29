@@ -1176,6 +1176,13 @@ api.post("/transactions", async (c) => {
    Ya hepsi yazılır ya hiçbiri — yarım kalmış import bakiyeyi tutarsız bırakmasın. Hesap/kategori
    id'leri kullanıcıya ait mi diye önden doğrulanır (crud'un tenant-scope garantisinin eşdeğeri). */
 const IMPORT_MAX = 500;
+/** Toplu uçlarda gövdedeki FK'lerin hepsi bu kullanıcının mı (tablo adı sabit, kullanıcıdan gelmez) */
+const hepsiSahibin = async (uid: number, table: "accounts" | "categories" | "cards", ids: number[]) => {
+  if (ids.length === 0) return true;
+  const set = new Set((await db.all<{ id: number }>(`SELECT id FROM ${table} WHERE user_id=?`, uid)).map((x) => x.id));
+  return ids.every((i) => set.has(i));
+};
+const farkliIdler = (rows: any[], alan: string) => [...new Set(rows.map((r) => r[alan]).filter((x) => x != null))] as number[];
 api.post("/transactions/bulk", async (c) => {
   const b = await c.req.json().catch(() => null);
   const rows = b && Array.isArray(b.rows) ? b.rows : null;
@@ -1189,15 +1196,7 @@ api.post("/transactions/bulk", async (c) => {
       return c.json({ error: "her satırda tarih ve işlem zarfı zorunlu" }, 400);
     }
   }
-  const own = async (table: string, ids: number[]) => {
-    if (ids.length === 0) return true;
-    const rows2 = await db.all<{ id: number }>(`SELECT id FROM ${table} WHERE user_id=?`, uid);
-    const set = new Set(rows2.map((x) => x.id));
-    return ids.every((i) => set.has(i));
-  };
-  const accIds = [...new Set(rows.map((r: any) => r.account_id).filter((x: any) => x != null))] as number[];
-  const catIds = [...new Set(rows.map((r: any) => r.category_id).filter((x: any) => x != null))] as number[];
-  if (!(await own("accounts", accIds)) || !(await own("categories", catIds))) {
+  if (!(await hepsiSahibin(uid, "accounts", farkliIdler(rows, "account_id"))) || !(await hepsiSahibin(uid, "categories", farkliIdler(rows, "category_id")))) {
     return c.json({ error: "geçersiz hesap veya kategori" }, 400);
   }
   await db.tx(async (t) => {
@@ -1210,6 +1209,32 @@ api.post("/transactions/bulk", async (c) => {
     }
   });
   console.log(`[audit] Toplu içe aktarma: ${rows.length} kayıt (id:${uid})`);
+  return c.json({ inserted: rows.length });
+});
+/* Faz 45 — kart ekstresini içe aktarma: aynı sözleşme, hedef kart harcamaları. Bakiye yan etkisi
+   YOK (kart harcaması hesaba değil ekstreye düşer), yani tek iş atomik ekleme + sahiplik. Tek tek
+   `POST /cardtxs` göndermek yarıda kesilince ekstrenin bir kısmını yazılmış bırakırdı. */
+api.post("/cardtxs/bulk", async (c) => {
+  const b = await c.req.json().catch(() => null);
+  const rows = b && Array.isArray(b.rows) ? b.rows : null;
+  if (!rows) return c.json({ error: "geçersiz gövde" }, 400);
+  if (rows.length === 0) return c.json({ error: "kayıt yok" }, 400);
+  if (rows.length > IMPORT_MAX) return c.json({ error: `Tek seferde en fazla ${IMPORT_MAX} kayıt` }, 400);
+  const uid = c.get("user").id;
+  for (const r of rows) {
+    if (!r || typeof r !== "object" || !r.date || !Number.isInteger(r.card_id) || !zarfGecerli(r.enc)) {
+      return c.json({ error: "her satırda kart, tarih ve harcama zarfı zorunlu" }, 400);
+    }
+  }
+  if (!(await hepsiSahibin(uid, "cards", farkliIdler(rows, "card_id"))) || !(await hepsiSahibin(uid, "categories", farkliIdler(rows, "category_id")))) {
+    return c.json({ error: "geçersiz kart veya kategori" }, 400);
+  }
+  await db.tx(async (t) => {
+    for (const r of rows) {
+      await t.run("INSERT INTO card_txs (card_id,date,enc,category_id,user_id) VALUES (?,?,?,?,?)", r.card_id, r.date, r.enc, r.category_id ?? null, uid);
+    }
+  });
+  console.log(`[audit] Toplu kart harcaması: ${rows.length} kayıt (id:${uid})`);
   return c.json({ inserted: rows.length });
 });
 /* Düzenleme (Faz 14): sil+ekle yerine tek atomik güncelleme. Bakiye etkisi "eskisini geri al,

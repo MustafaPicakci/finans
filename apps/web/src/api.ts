@@ -60,6 +60,8 @@ export const api = {
   setTradePortfolio: (tradeId: number, portfolio_id: number | null) => yazJ("PUT", `/trades/${tradeId}/portfolio`, { portfolio_id }),
   /* ---- toplu içe aktarma (ekstre yapıştırma) ---- */
   bulkTransactions: (rows: { date: string; name: string; amount: number; category_id: number | null; account_id: number | null }[]) => yazJ<{ inserted: number }>("POST", "/transactions/bulk", { rows }),
+  /** Faz 45 — kart ekstresi içe aktarma: `amount` kart harcaması işaretiyle (+ harcama, − iade) */
+  bulkCardTxs: (rows: { card_id: number; date: string; name: string; amount: number; installments: number; category_id: number | null }[]) => yazJ<{ inserted: number }>("POST", "/cardtxs/bulk", { rows }),
   /* ---- düzenli kalem tutar zaman çizelgesi (Faz 9) ---- */
   setRecurringAmount: (id: number, body: { amount: number; from_month: string | null }) => yazJ("POST", `/recurring/${id}/amount`, body),
   delRecurringAmount: (id: number, from_month: string) =>

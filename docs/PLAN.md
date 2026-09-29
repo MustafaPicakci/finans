@@ -539,9 +539,16 @@ Doğrulama: başsız Chrome'da üretilen örnek ekstre PDF'i + aynı dosyanın A
 yanlış parola uyarısı; kayıtlar `v1:` zarflı; aynı dosya ikinci kez verilince 5 satır "olası kopya";
 sunucunun CSP'si altında ihlal ve konsol hatası yok.
 
-Dilim 2 (bekliyor — gerçek banka e-ekstresi örnekleri gerek): kart ekstresini **kart
-harcamalarına** (`card_txs`) aktarmak (bugün yalnız hesap işlemlerine yazılıyor; toplu uç yok),
-taksit satırları ("3/6"), banka başına ayrıştırma ince ayarı.
+Dilim 2a (yerelde doğrulandı): kart ekstresini **kart harcamalarına** aktarmak. Formda "Nereye"
+seçici (hesap / kart / yalnız defter), `POST /cardtxs/bulk` (atomik, sahiplik doğrulamalı, asistana
+kapalı). Kart ekstresi ters işaret dilinde okunur; karta para giren satır (ödeme/iade) kilitli gelir
+— ödeme "Ödedim" ile kaydedildiği için burada da yazılsa iki kez sayılırdı. Doğrulama: kart düzeninde
+örnek PDF (harcamalar işaretsiz, ödeme eksi) → 3 harcama seçili, ödeme kilitli; 3 `card_txs` satırı
+doğru karta `v1:` zarflı, Kart sekmesinde artı tutarlarla; CSP ihlali yok.
+
+Dilim 2b (bekliyor — gerçek banka e-ekstresi örnekleri gerek): taksit satırları ("3/6": tarih çoğu
+zaman ilk alışın tarihi, tutar bu ayın taksidi — tek seferlik aktarılırsa yanlış ekstreye düşebilir),
+banka başına ayrıştırma ince ayarı.
 
 ## Doğrulama
 `pnpm build` temiz, 57 engine testi yeşil. Kota sıfırlandıktan sonra `returns-by-date` tasarımı gerçek veride **tam** doğrulandı:

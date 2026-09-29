@@ -18,7 +18,16 @@ type Draft = ParsedRow & { include: boolean; category_id: string; dup: boolean }
 export function ImportForm({ data, reload, onClose }: { data: AllData; reload: () => void; onClose: () => void }) {
   const [text, setText] = useState("");
   const [defaultSign, setDefaultSign] = useState<"gider" | "gelir">("gider");
-  const [accountId, setAccountId] = useState(data.accounts[0] ? String(data.accounts[0].id) : "");
+  /* Hedef (Faz 45): "a:<hesap>" gerçekleşen işlem (+bakiye), "c:<kart>" kart harcaması, "" yalnız defter.
+     Kart ekstresinin doğru yeri kart harcamalarıdır: hesaba yazılsa harcamalar karttan değil
+     hesaptan çıkmış gibi olur ve ekstre ödemesiyle birlikte iki kez sayılırdı. */
+  const [hedef, setHedef] = useState(data.accounts[0] ? `a:${data.accounts[0].id}` : "");
+  const accountId = hedef.startsWith("a:") ? hedef.slice(2) : "";
+  const cardId = hedef.startsWith("c:") ? +hedef.slice(2) : null;
+  const kart = cardId != null ? data.cards.find((c) => c.id === cardId) : undefined;
+  /** Kart hedefinde karta para GİREN satır (ekstre ödemesi, iade) aktarılmaz: ödeme Kart sekmesinde
+      "Ödedim" ile kaydedilir (burada da yazılsa iki kez sayılırdı) ve kart harcaması modelinde iade yok. */
+  const kartaGiren = (r: ParsedRow) => cardId != null && r.amount > 0;
   const [drafts, setDrafts] = useState<Draft[] | null>(null);
   const [skipped, setSkipped] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -37,16 +46,23 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
     return hit?.category_id ?? null;
   };
   /** aynı gün + aynı tutar + aynı ad zaten defterde varsa büyük olasılıkla ikinci kez aktarılıyor */
-  const isDup = (r: ParsedRow) =>
-    data.transactions.some((t) => t.date === r.date && Math.abs(t.amount - r.amount) < 0.005 && normName(t.name) === normName(r.name));
+  const isDup = (r: ParsedRow) => cardId != null
+    ? data.card_txs.some((t) => t.card_id === cardId && t.date === r.date && Math.abs(t.amount + r.amount) < 0.005 && normName(t.name) === normName(r.name))
+    : data.transactions.some((t) => t.date === r.date && Math.abs(t.amount - r.amount) < 0.005 && normName(t.name) === normName(r.name));
 
   const analyze = (metin = text) => {
-    const { rows, skipped } = parseStatement(metin, defaultSign);
+    /* Kart ekstresi TERS işaret dilindedir: harcama işaretsiz/artı (borç artar), ödeme eksi.
+       Ayrıştırıcı belgenin kendi dilinde okur (işaretsiz = artı), sonra önizlemenin diline
+       (− = harcama) çevrilir. Banka bunun tersini yazıyorsa "işaretleri çevir" tek dokunuş. */
+    const kartMi = cardId != null;
+    const cozum = parseStatement(metin, kartMi ? "gelir" : defaultSign);
+    const rows = kartMi ? cozum.rows.map((r) => ({ ...r, amount: -r.amount })) : cozum.rows;
+    const { skipped } = cozum;
     setSkipped(skipped);
     setDrafts(rows.map((r) => {
       const dup = isDup(r);
       const cat = guessCategory(r.name);
-      return { ...r, include: !dup, dup, category_id: cat != null ? String(cat) : "" };
+      return { ...r, include: !dup && !kartaGiren(r), dup, category_id: cat != null ? String(cat) : "" };
     }));
     setErr(null);
   };
@@ -76,7 +92,9 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
     const amount = -r.amount;
     const kat = data.categories.find((c) => String(c.id) === r.category_id);
     const tutar = !kat || kat.kind === (amount < 0 ? "expense" : "income");
-    return { ...r, amount, category_id: tutar ? r.category_id : "" };
+    const yeni = { ...r, amount, category_id: tutar ? r.category_id : "" };
+    // kart hedefinde aktarılamaz hâle gelen satır seçimden düşer, aktarılabilir olan (kopya değilse) seçilir
+    return { ...yeni, include: kartaGiren(yeni) ? false : kartaGiren(r) ? !r.dup : r.include };
   }));
 
   const chosen = drafts?.filter((d) => d.include) ?? [];
@@ -86,11 +104,19 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
     if (chosen.length === 0) return;
     setBusy(true); setErr(null);
     try {
-      await api.bulkTransactions(chosen.map((d) => ({
-        date: d.date, name: d.name, amount: d.amount,
-        category_id: d.category_id ? +d.category_id : null,
-        account_id: accountId ? +accountId : null,
-      })));
+      if (cardId != null) {
+        // önizleme hesap diliyle (− = harcama) konuşur; kart harcaması tutarı artıdır
+        await api.bulkCardTxs(chosen.map((d) => ({
+          card_id: cardId, date: d.date, name: d.name, amount: -d.amount, installments: 1,
+          category_id: d.category_id ? +d.category_id : null,
+        })));
+      } else {
+        await api.bulkTransactions(chosen.map((d) => ({
+          date: d.date, name: d.name, amount: d.amount,
+          category_id: d.category_id ? +d.category_id : null,
+          account_id: accountId ? +accountId : null,
+        })));
+      }
       reload();
       onClose();
     } catch (e) {
@@ -129,16 +155,25 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
           style={{ ...css.input, resize: "vertical", lineHeight: 1.5, fontSize: 12.5 }}
         />
         <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-          <Field label="İşaretsiz tutarlar">
+          {cardId == null && <Field label="İşaretsiz tutarlar">
             <select style={css.input} value={defaultSign} onChange={(e) => setDefaultSign(e.target.value as "gider" | "gelir")}>
               <option value="gider">Gider (−) sayılsın</option>
               <option value="gelir">Gelir (+) sayılsın</option>
             </select>
-          </Field>
-          <Field label="Hesap" flex={2}>
-            <select style={css.input} value={accountId} onChange={(e) => setAccountId(e.target.value)}>
-              <option value="">— (bakiyeye işleme)</option>
-              {data.accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </Field>}
+          <Field label="Nereye" flex={2}>
+            <select style={css.input} value={hedef} onChange={(e) => setHedef(e.target.value)}>
+              {data.accounts.length > 0 && (
+                <optgroup label="Hesap dökümü → hesap">
+                  {data.accounts.map((a) => <option key={a.id} value={`a:${a.id}`}>{a.name}</option>)}
+                </optgroup>
+              )}
+              {data.cards.length > 0 && (
+                <optgroup label="Kart ekstresi → kart harcaması">
+                  {data.cards.map((c) => <option key={c.id} value={`c:${c.id}`}>{c.name}</option>)}
+                </optgroup>
+              )}
+              <option value="">Yalnız gelir/gider defteri (bakiyeye işleme)</option>
             </select>
           </Field>
         </div>
@@ -146,7 +181,8 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
           Sekmeli (Excel kopyası), noktalı virgüllü/virgüllü CSV ve boşlukla hizalanmış metin tanınır.
           Tarih <b>gg.aa.yyyy</b> veya <b>yyyy-aa-gg</b>, tutar <b>1.234,56</b> biçiminde olabilir.
           Eksi işareti olan satırlar gider, bakiye sütunu varsa yön bakiyeden çıkarılır. Belgede
-          yalnız bazı satırlar eksi işaretliyse işaretsiz olanlar gelir sayılır.
+          yalnız bazı satırlar eksi işaretliyse işaretsiz olanlar gelir sayılır. Kart ekstresinde işaretsiz
+          tutar harcamadır.
         </div>
         {err && <div style={{ color: T.neg, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
         <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
@@ -182,7 +218,7 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
             borderTop: i === 0 ? "none" : `1px solid ${T.line}`, opacity: d.include ? 1 : 0.45,
             background: d.dup ? "color-mix(in srgb, var(--neg) 7%, transparent)" : "transparent",
           }}>
-            <input type="checkbox" checked={d.include} onChange={(e) => upd(i, { include: e.target.checked })} />
+            <input type="checkbox" checked={d.include} disabled={kartaGiren(d)} onChange={(e) => upd(i, { include: e.target.checked })} />
             <span style={{ ...css.mono, fontSize: 11.5, color: T.mut3, flexShrink: 0 }}>{d.date.slice(5)}</span>
             <input style={{ ...css.input, padding: "5px 8px", fontSize: 12.5, flex: "1 1 120px", minWidth: 0 }}
               value={d.name} onChange={(e) => upd(i, { name: e.target.value })} />
@@ -203,8 +239,13 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
       {skipped.length > 0 && (
         <Hint>{skipped.length} satır atlandı (tarih veya tutar bulunamadı): <span style={css.mono}>{skipped.slice(0, 2).join(" / ").slice(0, 90)}…</span></Hint>
       )}
+      {drafts.some(kartaGiren) && (
+        <Hint>Karta para giren {drafts.filter(kartaGiren).length} satır (ekstre ödemesi ya da iade) aktarılmaz: ekstre ödemesi Kart sekmesinde "Ödedim" ile kaydedilir.</Hint>
+      )}
       <div style={{ fontSize: 12, color: T.mut, marginTop: 10, background: T.panel2, borderRadius: 8, padding: "8px 12px" }}>
-        {accountId
+        {kart
+          ? <>Seçili satırlar <b>{kart.name}</b> kartına harcama olarak yazılır ve tarihlerine göre ilgili ekstreye düşer. Taksitli satırlar tek seferlik harcama olarak aktarılır.</>
+          : accountId
           ? <>Seçili satırlar gerçekleşen kayıt olarak yazılır ve <b>{data.accounts.find((a) => a.id === +accountId)?.name}</b> bakiyesine toplam <span style={{ ...css.mono, color: sum < 0 ? T.neg : T.pos }}>{fmtMoney(sum, "TRY", true)}</span> işler.</>
           : "Hesap seçilmedi — kayıtlar yalnız gelir/gider defterine girer, bakiyeye dokunmaz."}
       </div>

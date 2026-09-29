@@ -265,6 +265,13 @@ const OZEL: Isleyici[] = [
       return { ...kalan, enc: zarfKur("transactions", { name, amount }), entry_enc: hareket(sayi(amount), String(name ?? "")) };
     }),
   }) },
+  /* Faz 45 — kart ekstresi: bakiye yan etkisi yok, yalnız satır zarfı */
+  { method: "POST", yol: /^\/cardtxs\/bulk$/, fn: (_, b) => ({
+    rows: (b.rows as Satir[]).map((r) => {
+      const { name, amount, installments, ...kalan } = r;
+      return { ...kalan, enc: zarfKur("card_txs", { name, amount, installments: installments ?? 1 }) };
+    }),
+  }) },
 ];
 
 /** Gövdenin hassas alanlarını zarfa taşır. `data`: kısmi güncellemede eksik alanların ve

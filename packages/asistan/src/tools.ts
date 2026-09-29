@@ -340,6 +340,7 @@ export const SKIPPED: { route: string; reason: string }[] = [
   { route: "POST /prices/refresh", reason: "arayüzdeki 'Fiyatları yenile' düğmesi; kota tüketir" },
   { route: "POST /prices/backfill", reason: "bakım işi (yılda bir): N sembol × dış istek; kullanıcının kaydını değil GLOBAL piyasa geçmişini yazar" },
   { route: "POST /transactions/bulk", reason: "toplu ekstre içe aktarma arayüzden yapılır (önizleme + düzeltme akışı gerekir)" },
+  { route: "POST /cardtxs/bulk", reason: "kart ekstresi içe aktarma arayüzden yapılır (önizleme + düzeltme akışı gerekir)" },
   { route: "PUT /accounts/:id", reason: "bakiye düzeltmesi için hesap_mutabakat aracı var (izli); ad/tür değişikliği arayüzden" },
   { route: "DELETE /accounts/:id", reason: "yıkıcı: hesabın tüm hareket geçmişi cascade siler" },
   { route: "PUT /transfers/:id", reason: "düzenleme arayüzden; asistan yeni virman ekler" },
