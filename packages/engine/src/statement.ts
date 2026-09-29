@@ -112,6 +112,10 @@ export function parseStatement(text: string, defaultSign: "gider" | "gelir" = "g
   /** iki sayısal hücre varsa ikincisi (en sağdaki) bakiye kabul edilir */
   const hasBalanceCol = lines.filter((l) => split(l, sep).filter((c) => parseAmount(c) !== null).length >= 3).length > lines.length / 2;
   let prevBalance: number | null = null; // bakiye sütunu varsa işaret bakiyenin yönünden çıkarılır
+  /* İşareti belirsiz satırlar (açık +/− yok, bakiyeden de çıkmıyor) sona bırakılır: belge işaret
+     kullanıyorsa onun dilinde karar verilir (aşağıda). */
+  const belirsiz: ParsedRow[] = [];
+  let eksiVar = false, artiVar = false;
   for (const line of lines) {
     const cells = split(line, sep).filter((c) => c !== "");
     if (cells.length === 0) continue;
@@ -132,14 +136,24 @@ export function parseStatement(text: string, defaultSign: "gider" | "gelir" = "g
     const byBalance = balance != null && prevBalance != null && Math.abs(balance - prevBalance) > 1e-9
       ? balance > prevBalance : null;
     if (balance != null) prevBalance = balance;
-    const positive = explicitNeg ? false : explicitPos ? true : byBalance ?? (defaultSign === "gelir");
-    const amount = positive ? Math.abs(parsed) : -Math.abs(parsed);
     const name = cells
       .filter((_, i) => i !== dateIdx && i !== amtIdx)
       .filter((c) => parseAmount(c) === null && parseDate(c) === null)
       .sort((a, b) => b.length - a.length)[0] ?? "İşlem";
-    if (amount === 0) { skipped.push(line); continue; }
-    rows.push({ date, name: name.slice(0, 120), amount });
+    if (parsed === 0) { skipped.push(line); continue; }
+    if (explicitNeg) eksiVar = true;
+    if (explicitPos) artiVar = true;
+    const positive = explicitNeg ? false : explicitPos ? true : byBalance;
+    const row = { date, name: name.slice(0, 120), amount: positive === false ? -Math.abs(parsed) : Math.abs(parsed) };
+    rows.push(row);
+    if (positive === null) belirsiz.push(row);
   }
+  /* Belirsiz satırın işareti: belgede YALNIZ eksi işareti kullanılıyorsa işaretsiz olan artıdır
+     (ör. hesap dökümü: harcamalar "-450,25", iade/ödeme "5.000,00"); yalnız artı kullanılıyorsa
+     eksidir. Belge hiç işaret kullanmıyorsa (ya da ikisini birden) karar kullanıcının seçtiği
+     varsayılandır. Önceden varsayılan her zaman uygulanıyordu ve işaretli bir belgedeki ödeme
+     satırı harcama gibi eksi okunuyordu (testli). */
+  const artiSay = eksiVar && !artiVar ? true : artiVar && !eksiVar ? false : defaultSign === "gelir";
+  for (const r of belirsiz) r.amount = artiSay ? Math.abs(r.amount) : -Math.abs(r.amount);
   return { rows, skipped };
 }

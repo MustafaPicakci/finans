@@ -4,9 +4,11 @@ import { api } from "../../api";
 import { T, css, fmtMoney } from "../../theme";
 import { Field, Hint } from "../../ui";
 import { kalemSuggestions, normName } from "./recall";
+import { pdfSatirlari, PdfParolaGerekli } from "./pdfOku";
 
-/* ————— TOPLU İÇE AKTARMA (EKSTRE YAPIŞTIRMA) —————
-   Banka/aracı kurum ekstresini ya da Excel tablosunu olduğu gibi yapıştır → satırlar
+/* ————— TOPLU İÇE AKTARMA (EKSTRE YAPIŞTIRMA / PDF) —————
+   Banka/aracı kurum ekstresini ya da Excel tablosunu olduğu gibi yapıştır — ya da e-ekstre
+   PDF'ini seç (Faz 45: tarayıcıda okunur, metni bu kutuya yazılır; bkz. pdfOku.ts) → satırlar
    `parseStatement` (engine, testli) ile ayrıştırılır → önizleme tablosunda düzeltilir →
    tek istekte (`POST /api/transactions/bulk`, atomik) deftere yazılır.
    Kategori tahmini geçmiş kayıtlardan yapılır; olası kopyalar önden işaretsiz gelir. */
@@ -21,6 +23,9 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
   const [skipped, setSkipped] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  /* PDF: dosya parolalıysa elde tutulur, parola sorulur. Parola yalnız bu cihazda PDF'i açmak için. */
+  const [pdf, setPdf] = useState<{ dosya: File; parolaIste: boolean; yanlis: boolean; okunuyor: boolean } | null>(null);
+  const [parola, setParola] = useState("");
 
   const sugs = useMemo(() => kalemSuggestions(data), [data]);
   /** geçmişte aynı/benzer adla girilmiş kaydın kategorisi (en sık kullanılan eşleşme) */
@@ -35,8 +40,8 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
   const isDup = (r: ParsedRow) =>
     data.transactions.some((t) => t.date === r.date && Math.abs(t.amount - r.amount) < 0.005 && normName(t.name) === normName(r.name));
 
-  const analyze = () => {
-    const { rows, skipped } = parseStatement(text, defaultSign);
+  const analyze = (metin = text) => {
+    const { rows, skipped } = parseStatement(metin, defaultSign);
     setSkipped(skipped);
     setDrafts(rows.map((r) => {
       const dup = isDup(r);
@@ -46,8 +51,33 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
     setErr(null);
   };
 
+  const pdfOku = async (dosya: File, sifre?: string) => {
+    // yeni PDF kutudakinin yerini alır: önceki metin kalsa parola sorulurken eski belge çözülebilirdi
+    setPdf({ dosya, parolaIste: false, yanlis: false, okunuyor: true }); setErr(null); setText("");
+    try {
+      const metin = (await pdfSatirlari(dosya, sifre)).join("\n");
+      setPdf(null); setParola("");
+      if (!metin.trim()) { setErr("Bu PDF'te okunabilir metin yok (taranmış bir kâğıt olabilir)."); return; }
+      setText(metin);
+      analyze(metin);
+    } catch (e) {
+      if (e instanceof PdfParolaGerekli) { setPdf({ dosya, parolaIste: true, yanlis: e.yanlis, okunuyor: false }); return; }
+      setPdf(null);
+      setErr(e instanceof Error ? e.message : "PDF okunamadı");
+    }
+  };
+
   const upd = (i: number, patch: Partial<Draft>) =>
     setDrafts((d) => d!.map((r, k) => (k === i ? { ...r, ...patch } : r)));
+  /* Belgenin işaret dili bizimkinin tersi olabilir: kart ekstresinde harcama ARTI, ödeme eksi
+     yazılır. Tek dokunuşla hepsi çevrilir; türü artık tutmayan kategori boşaltılır (gelir
+     kategorisi gidere yazılmasın). */
+  const isaretCevir = () => setDrafts((d) => d!.map((r) => {
+    const amount = -r.amount;
+    const kat = data.categories.find((c) => String(c.id) === r.category_id);
+    const tutar = !kat || kat.kind === (amount < 0 ? "expense" : "income");
+    return { ...r, amount, category_id: tutar ? r.category_id : "" };
+  }));
 
   const chosen = drafts?.filter((d) => d.include) ?? [];
   const sum = chosen.reduce((s, d) => s + d.amount, 0);
@@ -74,7 +104,25 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
   if (drafts === null) {
     return (
       <div>
-        <div style={{ ...css.label, marginBottom: 6 }}>Ekstreyi / tabloyu yapıştır</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+          <label style={{ ...css.ghost, display: "inline-flex", alignItems: "center", cursor: pdf?.okunuyor ? "wait" : "pointer" }}>
+            {pdf?.okunuyor ? "PDF okunuyor…" : "E-ekstre PDF'i seç"}
+            <input type="file" accept="application/pdf,.pdf" hidden disabled={pdf?.okunuyor}
+              onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) pdfOku(f); }} />
+          </label>
+          <span style={{ fontSize: 12, color: T.mut }}>Dosya bu cihazda okunur, hiçbir yere gönderilmez.</span>
+        </div>
+        {pdf?.parolaIste && (
+          <form onSubmit={(e) => { e.preventDefault(); if (parola) pdfOku(pdf.dosya, parola); }}
+            style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 10 }}>
+            <Field label={pdf.yanlis ? "Parola yanlış, tekrar dene" : "Bu PDF parolalı"} flex={2}>
+              <input type="password" autoFocus style={css.input} value={parola} onChange={(e) => setParola(e.target.value)}
+                placeholder="Bankanın bildirdiği parola" autoComplete="off" />
+            </Field>
+            <button type="submit" style={{ ...css.btn, opacity: parola ? 1 : 0.4 }} disabled={!parola}>Aç</button>
+          </form>
+        )}
+        <div style={{ ...css.label, marginBottom: 6 }}>ya da ekstreyi / tabloyu yapıştır</div>
         <textarea
           autoFocus value={text} onChange={(e) => setText(e.target.value)} rows={9}
           placeholder={"12.03.2026\tMIGROS ATASEHIR\t-450,25\n13.03.2026\tBENZIN\t-1.200,00"}
@@ -97,10 +145,12 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
         <div style={{ fontSize: 12, color: T.mut, marginTop: 10, background: T.panel2, borderRadius: 8, padding: "8px 12px" }}>
           Sekmeli (Excel kopyası), noktalı virgüllü/virgüllü CSV ve boşlukla hizalanmış metin tanınır.
           Tarih <b>gg.aa.yyyy</b> veya <b>yyyy-aa-gg</b>, tutar <b>1.234,56</b> biçiminde olabilir.
-          Eksi işareti olan satırlar gider, bakiye sütunu varsa yön bakiyeden çıkarılır.
+          Eksi işareti olan satırlar gider, bakiye sütunu varsa yön bakiyeden çıkarılır. Belgede
+          yalnız bazı satırlar eksi işaretliyse işaretsiz olanlar gelir sayılır.
         </div>
+        {err && <div style={{ color: T.neg, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
         <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-          <button type="button" style={{ ...css.btn, opacity: text.trim() ? 1 : 0.4 }} disabled={!text.trim()} onClick={analyze}>Satırları çöz</button>
+          <button type="button" style={{ ...css.btn, opacity: text.trim() ? 1 : 0.4 }} disabled={!text.trim()} onClick={() => analyze()}>Satırları çöz</button>
           <button type="button" style={css.ghost} onClick={onClose}>Vazgeç</button>
         </div>
       </div>
@@ -115,25 +165,30 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
           <b style={{ color: T.text }}>{drafts.length}</b> satır çözüldü · <b style={{ color: T.text }}>{chosen.length}</b> seçili
           {drafts.some((d) => d.dup) && <> · <span style={{ color: T.neg }}>{drafts.filter((d) => d.dup).length} olası kopya</span></>}
         </div>
-        <div style={{ fontSize: 13, color: T.mut }}>
-          net: <span style={{ ...css.mono, color: sum < 0 ? T.neg : T.pos }}>{fmtMoney(sum, "TRY", true)}</span>
+        <div style={{ fontSize: 13, color: T.mut, display: "flex", alignItems: "center", gap: 10 }}>
+          <button type="button" onClick={isaretCevir} title="Gider ↔ gelir: belgede harcama artı yazılıyorsa"
+            style={{ background: "none", border: "none", padding: 0, color: T.acc, fontSize: 12.5, cursor: "pointer", minHeight: 0 }}>
+            işaretleri çevir
+          </button>
+          <span>net: <span style={{ ...css.mono, color: sum < 0 ? T.neg : T.pos }}>{fmtMoney(sum, "TRY", true)}</span></span>
         </div>
       </div>
 
       <div style={{ maxHeight: "42vh", overflowY: "auto", border: `1px solid ${T.line}`, borderRadius: 10 }}>
         {drafts.map((d, i) => (
           <div key={i} style={{
-            display: "flex", alignItems: "center", gap: 8, padding: "7px 10px",
+            /* sarılır: 390px'te beş kontrol tek satıra sığmıyor, kategori seçici ekrandan taşıyordu */
+            display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", flexWrap: "wrap",
             borderTop: i === 0 ? "none" : `1px solid ${T.line}`, opacity: d.include ? 1 : 0.45,
             background: d.dup ? "color-mix(in srgb, var(--neg) 7%, transparent)" : "transparent",
           }}>
             <input type="checkbox" checked={d.include} onChange={(e) => upd(i, { include: e.target.checked })} />
             <span style={{ ...css.mono, fontSize: 11.5, color: T.mut3, flexShrink: 0 }}>{d.date.slice(5)}</span>
-            <input style={{ ...css.input, padding: "5px 8px", fontSize: 12.5, flex: 2, minWidth: 90 }}
+            <input style={{ ...css.input, padding: "5px 8px", fontSize: 12.5, flex: "1 1 120px", minWidth: 0 }}
               value={d.name} onChange={(e) => upd(i, { name: e.target.value })} />
             <input style={{ ...css.input, padding: "5px 8px", fontSize: 12.5, width: 92, flexShrink: 0, color: d.amount < 0 ? T.neg : T.pos }}
               value={String(d.amount)} onChange={(e) => upd(i, { amount: Number(e.target.value.replace(",", ".")) || 0 })} />
-            <select style={{ ...css.input, padding: "5px 8px", fontSize: 12, width: 110, flexShrink: 0 }}
+            <select style={{ ...css.input, padding: "5px 8px", fontSize: 12, flex: "0 1 130px", minWidth: 0 }}
               value={d.category_id} onChange={(e) => upd(i, { category_id: e.target.value })}>
               <option value="">Kategorisiz</option>
               {data.categories.filter((c) => c.kind === (d.amount < 0 ? "expense" : "income")).map((c) => (

@@ -70,6 +70,23 @@ describe("parseStatement", () => {
     expect(parseStatement("12.03.2026\tMaaş\t450", "gelir").rows[0].amount).toBe(450);
   });
 
+  it("belge yalnız eksi işareti kullanıyorsa işaretsiz satır artıdır — varsayılan 'gider' olsa bile", () => {
+    const txt = "12.03.2026\tMIGROS\t-450,25\n14.03.2026\tÖDEME - TEŞEKKÜRLER\t5.000,00";
+    expect(parseStatement(txt, "gider").rows.map((r) => r.amount)).toEqual([-450.25, 5000]);
+  });
+
+  it("belge yalnız artı işareti kullanıyorsa işaretsiz satır eksidir", () => {
+    const txt = "12.03.2026\tMAAS\t+35.000,00\n14.03.2026\tMIGROS\t450,25";
+    expect(parseStatement(txt, "gelir").rows.map((r) => r.amount)).toEqual([35000, -450.25]);
+  });
+
+  it("belge iki işareti de kullanıyorsa ya da hiç kullanmıyorsa işaretsiz satırda karar varsayılanındır", () => {
+    const ikisi = "12.03.2026\tA\t-1\n13.03.2026\tB\t+2\n14.03.2026\tC\t3";
+    expect(parseStatement(ikisi, "gider").rows.map((r) => r.amount)).toEqual([-1, 2, -3]);
+    expect(parseStatement(ikisi, "gelir").rows.map((r) => r.amount)).toEqual([-1, 2, 3]);
+    expect(parseStatement("12.03.2026\tA\t1\n13.03.2026\tB\t2", "gider").rows.map((r) => r.amount)).toEqual([-1, -2]);
+  });
+
   it("tarihi veya tutarı olmayan satırları atlar", () => {
     const { rows, skipped } = parseStatement("12.03.2026\tMigros\t-450\nara toplam\nNOT: bilgilendirme");
     expect(rows).toHaveLength(1);

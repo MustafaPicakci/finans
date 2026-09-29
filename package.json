@@ -17,6 +17,9 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild"
+    ],
+    "ignoredOptionalDependencies": [
+      "@napi-rs/canvas"
     ]
   }
 }

@@ -62,6 +62,9 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ["**/*.{js,css,html,svg,png,ico}"],
+        /* Faz 45 — pdf.js (~480 KB + ~1,2 MB işçi) yalnız ekstre PDF'i seçilince yüklenir; önbelleğe
+           alınsa PDF'i hiç kullanmayan herkes kurulumda indirirdi. Ağ zaten gerekli (içe aktarma yazar). */
+        globIgnores: ["**/pdf-*.js", "**/pdf.worker*"],
         /* Faz 44 — push dinleyicisi ayrı dosyada (public/push-sw.js): generateSW'dan injectManifest'e
            geçmek tüm önbellek yapılandırmasını elle yazmayı gerektirirdi, iki olay dinleyicisi için değmez. */
         importScripts: ["push-sw.js"],

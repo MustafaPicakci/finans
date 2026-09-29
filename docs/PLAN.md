@@ -519,6 +519,30 @@ olduğunu söylüyor; izin isteği de ilk satıra alındı (Safari izni yalnız 
 çağrıda açar). Kullanıcının Mac'inde push Chrome'a ulaştı (`chrome://gcm-internals`) ama macOS
 göstermedi — işletim sistemi ayarı; uçtan uca gösterim prod'da denenecek.
 
+## Faz 45 — Ekstre PDF'i içe aktarma 🚧 (dilim 1 yerelde doğrulandı, 2026-09-29)
+
+Pazara çıkış sırasının üçüncü adımı. İlk konuşmada "e-postaya PDF gönder, OCR ile işle"
+diye geçiyordu; iki ayrı soruya ayrıldı. **E-posta kutusu** E2EE'de gerçek bir taviz (posta
+sunucuya düz gelir) — ertelendi. **Okuma yöntemi**: OCR mu PDF metni mi tartışıldı; OCR en geniş
+kapsam (ekran görüntüsü) ama rakamda hata yapar, tarayıcıda ~10-15 MB'tır ve PDF'i OCR'lamak için
+bile önce pdf.js gerekir. Kullanıcı kararı: **PDF ile başla**, OCR yok.
+
+Dilim 1 (bu): var olan içe aktarma ekranına "E-ekstre PDF'i seç". PDF tarayıcıda okunur, satırlar
+yapıştırılmış metin gibi aynı ayrıştırıcıya gider, kayıtlar aynı yoldan şifreli yazılır — yeni
+uç ve yeni yazma yolu yok. Tedarik zinciri kararları CLAUDE.md'de (tam sabit sürüm, tembel
+yükleme, önbellek dışı). Denemede bulunan ve düzeltilen: işaretli dökümde işaretsiz ödeme satırı
+gider okunuyordu (belgenin işaret dili kuralı + "işaretleri çevir"); önizleme satırı 390px'te
+taşıyordu (mevcut kusur, PDF'le mobilde daha çok kullanılacak).
+
+Doğrulama: başsız Chrome'da üretilen örnek ekstre PDF'i + aynı dosyanın AES-256 parolalı kopyası,
+`finans_e2ee_test` üzerinde: 317 ms'de 5 satır doğru işaretle, başlık/dipnot satırları atlandı;
+yanlış parola uyarısı; kayıtlar `v1:` zarflı; aynı dosya ikinci kez verilince 5 satır "olası kopya";
+sunucunun CSP'si altında ihlal ve konsol hatası yok.
+
+Dilim 2 (bekliyor — gerçek banka e-ekstresi örnekleri gerek): kart ekstresini **kart
+harcamalarına** (`card_txs`) aktarmak (bugün yalnız hesap işlemlerine yazılıyor; toplu uç yok),
+taksit satırları ("3/6"), banka başına ayrıştırma ince ayarı.
+
 ## Doğrulama
 `pnpm build` temiz, 57 engine testi yeşil. Kota sıfırlandıktan sonra `returns-by-date` tasarımı gerçek veride **tam** doğrulandı:
 - **Tek istekte 3489 fon fiyatı** toplandı (`prices` + aynı gün `price_history`'de tam senkron) — tahmin edilenin (~150-160) çok üzerinde, TEFAS'ta pay sınıfı/alt kategori dahil gerçekten binlerce fon var.
