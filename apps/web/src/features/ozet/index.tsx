@@ -194,13 +194,16 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAcc
           ayrılmıştır (Faz 24 kural 2) → tek birincil eylem ("Kaydet") mor kaldı, tür rozeti
           kendi rengini aldı, ikincil eylem sade ghost. */}
     {gorunenOlaylar.length > 0 && (
-      <div style={{ ...css.card, padding: 14, borderColor: T.acc }}>
+      /* Kenarlık/başlık/sayaç NÖTR (kurulum kartıyla aynı dil). Yukarıdaki not Faz 37'de
+         yazıldı ama o commit yalnız ikincil düğmeyi sadeleştirmişti; üç mor öğe kalmıştı ve
+         "Kaydet" yine öne çıkmıyordu. */
+      <div style={{ ...css.card, padding: 14 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-          <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: T.acc }}>
+          <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: T.mut3 }}>
             Defterinde eksik kayıt
           </span>
           <span style={{
-            ...css.mono, fontSize: 11, fontWeight: 700, color: T.acc, background: T.accSoft,
+            ...css.mono, fontSize: 11, fontWeight: 700, color: T.mut, background: T.panel2,
             borderRadius: 20, padding: "1px 7px", lineHeight: 1.6,
           }}>{gorunenOlaylar.length}</span>
         </div>
@@ -239,15 +242,27 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAcc
                     geri yatırım: <b>{fmtAdet(o.reinvest.qty)}</b> adet @ {fmtMoney(o.reinvest.price, o.currency, true)}
                   </span>
                 )}
+                {/* DRIP açık ama ödeme gününün fiyatı yok (sunucu o gün kapalıydı / geçmiş
+                    doldurulamadı): adet UYDURULMAZ, ama sessiz de kalınmaz — yoksa DRIP'i açan
+                    kullanıcı özelliği bozuk sanıyordu. */}
+                {!bedelsiz && o.drip && !o.reinvest && (
+                  <span style={{ display: "block", color: T.mut3 }}>
+                    geri yatırım: o günün fiyatı yok — alışı tutarla gir, adedi fiyattan hesaplanır
+                  </span>
+                )}
               </div>
               <div style={{ flexBasis: "100%", display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap", marginTop: 2 }}>
-                {!bedelsiz && o.reinvest && (
+                {!bedelsiz && o.drip && (
                   <button style={{ ...css.ghost, padding: "6px 12px", fontSize: 12 }}
                     title="Temettü tutarıyla aynı hisseden alış kaydı aç (önce temettüyü kaydet)"
-                    onClick={() => onKurumsalOlay({
-                      asset_type: o.asset_type, symbol: o.symbol, side: "ALIŞ",
-                      qty: o.reinvest!.qty, price: o.reinvest!.price, date: o.date,
-                    })}>Geri yatır</button>
+                    onClick={() => onKurumsalOlay(o.reinvest
+                      ? {
+                        asset_type: o.asset_type, symbol: o.symbol, side: "ALIŞ",
+                        qty: o.reinvest.qty, price: o.reinvest.price, date: o.date,
+                      }
+                      /* fiyat yok → qty VERİLMEZ, form tutar modunda açılır (TradeForm'un
+                         `prefill.qty == null` kuralı); adedi kullanıcının girdiği fiyattan türer */
+                      : { asset_type: o.asset_type, symbol: o.symbol, side: "ALIŞ", amount: o.amount, date: o.date })}>Geri yatır</button>
                 )}
                 <button style={{ ...css.ghost, padding: "6px 12px", fontSize: 12, color: T.acc, borderColor: T.acc }}
                   onClick={() => onKurumsalOlay(bedelsiz

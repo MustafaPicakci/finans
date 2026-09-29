@@ -55,6 +55,8 @@ export type TemettuOneri = OneriBase & {
   qty: number;
   /** qty × perShare (brüt) */
   amount: number;
+  /** bu sembolde DRIP açık mı — `reinvest` null iken "kapalı" ile "fiyat yok"u ayırır */
+  drip: boolean;
   /** DRIP açıksa geri yatırım önerisi; fiyat bilinmiyorsa (ya da DRIP kapalıysa) null */
   reinvest: { price: number; qty: number } | null;
 };
@@ -149,10 +151,11 @@ export function kurumsalOneriler(
         /* Geri yatırım fiyatı ÖDEME GÜNÜNÜN fiyatıdır, bugünkü değil — parayı o gün almışsın,
            bugünkü fiyatla adet türetmek geçmişi bugüne göre yeniden yazardı (benchmarks.ts'in
            "o günün kuru" kuralının aynısı). Fiyat yoksa öneri tutarı verir, adedi vermez. */
-        const px = dripAcik(a) ? priceAt.get(`${a.asset_type}:${a.symbol}:${a.date}`) : undefined;
+        const drip = dripAcik(a);
+        const px = drip ? priceAt.get(`${a.asset_type}:${a.symbol}:${a.date}`) : undefined;
         out.push({
           kind: "temettu", symbol: a.symbol, asset_type: a.asset_type, date: a.date, currency,
-          perShare: a.value, qty: qtyBefore, amount,
+          perShare: a.value, qty: qtyBefore, amount, drip,
           reinvest: px != null && px > 0 ? { price: px, qty: amount / px } : null,
         });
       }

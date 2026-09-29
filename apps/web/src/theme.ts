@@ -74,6 +74,26 @@ export const themeCSS = `
     --shadow: 0 2px 6px rgba(0,0,0,.4), 0 16px 40px -18px rgba(0,0,0,.6);
     --shadow-sm: 0 1px 2px rgba(0,0,0,.4);
   }
+  /* Yazı tipi ve metin rengi BODY'de de tanımlı olmalı: App kökü ikisini inline veriyor ama
+     \`Modal\` \`createPortal\` ile body'ye çıkıyor (Faz 24 kural 5) ve kökten miras almıyor —
+     her form tarayıcı varsayılanı Times ile, koyu temada da SİYAH metinle (#16161C zemin
+     üstünde) çiziliyordu. Portal kullanan her yeni katman bunu buradan alır. */
+  body { font-family: 'Schibsted Grotesk', system-ui, sans-serif; color: var(--ink); }
+  /* Schibsted Grotesk'in ₺ glifi £'ye benziyor ("₺52,34" → "£52,34"). Google'ın latin-ext
+     alt kümesi U+20BA'yı kapsadığını SÖYLEDİĞİ için tarayıcı başka yazı tipine düşmüyor.
+     Aynı aileye YALNIZ ₺'yi kapsayan bir yüz eklenir: çakışan unicode-range'de SONRA
+     tanımlanan yüz önce denenir (CSS Fonts 4), yani ₺ IBM Plex Mono'dan gelir, gerisi
+     Schibsted'den. Dosyalar index.html'deki Plex Mono'nun latin-ext'i (Türkçe harfler için
+     zaten iniyor). Ağırlıklar index.html'dekilerle BİREBİR aynı olmalı: aralık ("100 450") yazınca
+     Chrome yüzü aynı birleşik yazı tipine katmıyor ve hiç yüklemiyordu (ölçüldü). URL bir gün
+     değişirse Schibsted'in kendi glifine düşülür — eski davranış.
+     Eskiden kural "tutarı css.mono ile yaz"dı; tek bir unutulan yer (modal önizlemeleri,
+     kurumsal kart) sessizce £ gösteriyordu. */
+  @font-face { font-family: 'Schibsted Grotesk'; font-weight: 400; font-display: swap; unicode-range: U+20BA; src: url(https://fonts.gstatic.com/s/ibmplexmono/v20/-F63fjptAgt5VM-kVkqdyU8n1iEq131nj-otFQ.woff2) format('woff2'); }
+  @font-face { font-family: 'Schibsted Grotesk'; font-weight: 500; font-display: swap; unicode-range: U+20BA; src: url(https://fonts.gstatic.com/s/ibmplexmono/v20/-F6qfjptAgt5VM-kVkqdyU8n3twJwl5FgsAXHNlYzg.woff2) format('woff2'); }
+  @font-face { font-family: 'Schibsted Grotesk'; font-weight: 600; font-display: swap; unicode-range: U+20BA; src: url(https://fonts.gstatic.com/s/ibmplexmono/v20/-F6qfjptAgt5VM-kVkqdyU8n3vAOwl5FgsAXHNlYzg.woff2) format('woff2'); }
+  @font-face { font-family: 'Schibsted Grotesk'; font-weight: 700; font-display: swap; unicode-range: U+20BA; src: url(https://fonts.gstatic.com/s/ibmplexmono/v20/-F6qfjptAgt5VM-kVkqdyU8n3vAOwl5FgsAXHNlYzg.woff2) format('woff2'); }
+  @font-face { font-family: 'Schibsted Grotesk'; font-weight: 800; font-display: swap; unicode-range: U+20BA; src: url(https://fonts.gstatic.com/s/ibmplexmono/v20/-F6qfjptAgt5VM-kVkqdyU8n3vAOwl5FgsAXHNlYzg.woff2) format('woff2'); }
 `;
 
 export type ThemeMode = "light" | "dark";
