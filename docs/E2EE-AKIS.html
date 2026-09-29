@@ -1,0 +1,695 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Finans E2EE Akışı</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --ground:#F1F4F3; --surface:#FFFFFF; --ink:#14201C; --muted:#586761; --line:#C4CFCB;
+  --key:#0A7A63; --key-bg:#DCEFE9; --key-zone:#E8F3EF;
+  --ciph:#9A5B0C; --ciph-bg:#F7EAD7;
+  --plain:#AE3552; --plain-bg:#F8E1E7;
+  --srv:#E6E9EE; --code-bg:#E9EEEC;
+  --sans:"Schibsted Grotesk", "Segoe UI", system-ui, sans-serif;
+  --mono:"JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --ground:#0D1311; --surface:#141C19; --ink:#E1EAE6; --muted:#90A29B; --line:#34443E;
+    --key:#43C9A6; --key-bg:#113329; --key-zone:#10231D;
+    --ciph:#E6A854; --ciph-bg:#382812;
+    --plain:#F27C98; --plain-bg:#3B1A24;
+    --srv:#191F26; --code-bg:#1A2320;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --ground:#0D1311; --surface:#141C19; --ink:#E1EAE6; --muted:#90A29B; --line:#34443E;
+  --key:#43C9A6; --key-bg:#113329; --key-zone:#10231D;
+  --ciph:#E6A854; --ciph-bg:#382812;
+  --plain:#F27C98; --plain-bg:#3B1A24;
+  --srv:#191F26; --code-bg:#1A2320;
+}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);font:16px/1.6 var(--sans);margin:0}
+.wrap{max-width:1060px;margin:0 auto;padding:40px 20px 80px}
+header{display:grid;gap:14px;margin-bottom:28px}
+.eyebrow{font:500 12px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--key)}
+h1{font-weight:700;font-size:clamp(30px,5vw,44px);line-height:1.1;margin:0;text-wrap:balance;letter-spacing:-.01em}
+.lede{max-width:66ch;color:var(--muted);margin:0;font-size:17px}
+.lede b{color:var(--ink);font-weight:600}
+.legend{display:flex;flex-wrap:wrap;gap:8px 18px;font:12.5px var(--mono);color:var(--muted);margin-top:4px}
+.legend span{display:inline-flex;align-items:center;gap:8px}
+.sw{width:22px;height:12px;border-radius:3px;border:1.5px solid}
+.sw.k{background:var(--key-bg);border-color:var(--key)}
+.sw.c{background:var(--ciph-bg);border-color:var(--ciph)}
+.sw.p{background:var(--plain-bg);border-color:var(--plain);border-style:dashed}
+.sw.s{background:var(--srv);border-color:var(--line)}
+nav.toc{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 8px}
+nav.toc a{font:13px var(--sans);color:var(--ink);text-decoration:none;padding:4px 10px;border:1px solid var(--line);border-radius:999px;background:var(--surface)}
+nav.toc a:hover,nav.toc a:focus-visible{border-color:var(--key);color:var(--key);outline:none}
+section{margin-top:52px;display:grid;gap:14px}
+h2{font-size:24px;font-weight:700;margin:0;text-wrap:balance;letter-spacing:-.005em}
+h3{font-size:16px;font-weight:600;margin:0}
+p{margin:0;max-width:68ch}
+.muted{color:var(--muted)}
+code,.mono{font-family:var(--mono);font-size:.86em}
+code{background:var(--code-bg);padding:1px 5px;border-radius:4px}
+figure{margin:0;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px 16px 14px}
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+figure svg{display:block;width:100%;height:auto;min-width:780px;color:var(--ink)}
+figcaption{font-size:14px;color:var(--muted);margin-top:12px;max-width:80ch}
+figcaption b{color:var(--ink);font-weight:600}
+
+/* SVG çizim sınıfları — hepsi tema belirteçlerinden */
+svg text{font-family:var(--sans)}
+.zk{fill:var(--key-zone);stroke:var(--key);stroke-opacity:.45;stroke-width:1.2}
+.zs{fill:var(--srv);stroke:var(--line);stroke-width:1.2}
+.bx{fill:var(--surface);stroke:var(--ink);stroke-width:1.2}
+.bk{fill:var(--surface);stroke:var(--key);stroke-width:1.8}
+.bc{fill:var(--ciph-bg);stroke:var(--ciph);stroke-width:1.5}
+.bp{fill:var(--plain-bg);stroke:var(--plain);stroke-width:1.5;stroke-dasharray:5 3}
+.nk{fill:var(--key-bg);stroke:var(--key);stroke-width:1}
+.ns{fill:var(--srv);stroke:var(--line);stroke-width:1}
+.fr{fill:none;stroke:var(--muted);stroke-width:1;stroke-dasharray:4 3}
+.t{fill:var(--ink);font-size:13.5px;font-weight:600}
+.tn{fill:var(--ink);font-size:12.5px}
+.ts{fill:var(--muted);font-family:var(--mono)!important;font-size:10.5px}
+.zl{fill:var(--muted);font-family:var(--mono)!important;font-size:11px;letter-spacing:.08em}
+.zl.k{fill:var(--key)}
+.l{fill:var(--ink);font-family:var(--mono)!important;font-size:11px}
+.l.c{fill:var(--ciph)} .l.k{fill:var(--key)} .l.p{fill:var(--plain)} .l.m{fill:var(--muted)}
+.ln{fill:none;stroke:var(--ink);stroke-width:1.3}
+.ln.c{stroke:var(--ciph);stroke-width:1.9}
+.ln.k{stroke:var(--key);stroke-width:1.6}
+.ln.p{stroke:var(--plain);stroke-width:1.7;stroke-dasharray:6 4}
+.ln.m{stroke:var(--muted);stroke-width:1}
+.life{stroke:var(--line);stroke-width:1.2;stroke-dasharray:3 4}
+.bd{stroke:var(--muted);stroke-width:1.4;stroke-dasharray:7 5}
+.mk{fill:var(--ink)} .mk.c{fill:var(--ciph)} .mk.k{fill:var(--key)} .mk.p{fill:var(--plain)} .mk.m{fill:var(--muted)}
+
+/* HTML boru hattı */
+.lanes{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media (max-width:760px){.lanes{grid-template-columns:1fr}}
+.lane{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px 16px;display:grid;gap:0;align-content:start}
+.lane h3{margin-bottom:12px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.lane h3 .mono{color:var(--muted);font-weight:400}
+.step{display:grid;grid-template-columns:28px 1fr;gap:10px;position:relative;padding-bottom:16px}
+.step:last-child{padding-bottom:0}
+.step::before{content:"";position:absolute;left:13px;top:28px;bottom:0;width:2px;background:var(--line)}
+.step:last-child::before{display:none}
+.dot{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font:600 12px var(--mono);border:1.8px solid var(--ink);background:var(--surface);z-index:1}
+.step.k .dot{border-color:var(--key);color:var(--key);background:var(--key-bg)}
+.step.c .dot{border-color:var(--ciph);color:var(--ciph);background:var(--ciph-bg)}
+.step.s .dot{border-color:var(--muted);color:var(--muted);background:var(--srv)}
+.step .who{font:11px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.step .what{font-weight:600}
+.step .why{font-size:14px;color:var(--muted)}
+pre.payload{margin:6px 0 0;font:12px/1.5 var(--mono);background:var(--code-bg);border-radius:6px;padding:8px 10px;overflow-x:auto;white-space:pre}
+pre.payload .c{color:var(--ciph)} pre.payload .k{color:var(--key)} pre.payload .m{color:var(--muted)}
+.branch{margin-top:6px;font-size:13.5px;border-left:3px solid var(--plain);padding:2px 0 2px 10px;color:var(--ink)}
+
+/* Parola yolları */
+.paths{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+@media (max-width:860px){.paths{grid-template-columns:1fr}}
+.path{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px;display:grid;gap:10px;align-content:start}
+.path .tag{font:11px var(--mono);letter-spacing:.06em;text-transform:uppercase}
+.path.ok .tag{color:var(--key)} .path.loss .tag{color:var(--plain)} .path.chg .tag{color:var(--ciph)}
+.path ol{margin:0;padding-left:20px;display:grid;gap:6px;font-size:14.5px}
+.path .res{font-size:14px;font-weight:600;border-top:1px solid var(--line);padding-top:10px}
+.path.ok .res{color:var(--key)} .path.loss .res{color:var(--plain)} .path.chg .res{color:var(--ciph)}
+
+/* Sunucunun gördüğü satır */
+.dbrow{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:12px}
+table{border-collapse:collapse;width:100%;min-width:720px;font:13px var(--mono);font-variant-numeric:tabular-nums}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{font-weight:500;color:var(--muted);font-size:11.5px;letter-spacing:.04em}
+td.enc{color:var(--ciph);background:var(--ciph-bg)}
+tr:last-child td{border-bottom:0}
+.seen{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media (max-width:700px){.seen{grid-template-columns:1fr}}
+.seen div{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.seen ul{margin:8px 0 0;padding-left:18px;display:grid;gap:4px;font-size:14.5px}
+.seen h3.v{color:var(--muted)} .seen h3.h{color:var(--key)}
+
+.gates{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}
+.gate{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px;display:grid;gap:6px;align-content:start}
+.gate .mono{color:var(--key);font-size:12px}
+.gate p{font-size:14px;color:var(--muted)}
+footer{margin-top:56px;font-size:13px;color:var(--muted);border-top:1px solid var(--line);padding-top:16px}
+@media (max-width:480px){.wrap{padding:28px 16px 60px}}
+</style>
+</head>
+<body>
+
+<!-- Ortak ok uçları (belge kapsamlı id'ler) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="ac" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk c" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk k" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk p" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="am" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk m" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+</svg>
+
+<div class="wrap">
+<header>
+  <div class="eyebrow">e2ee branch'i · aşama 0–6</div>
+  <h1>Finans uçtan uca şifreleme akışı</h1>
+  <p class="lede">Operatör veritabanında duran <b>tutarları, adları ve asistan sohbetlerini okuyamaz</b>. Parola tarayıcıdan çıkmaz, veri anahtarı (DEK) yalnız cihazda açılır. Sunucuya giden her hassas alan AES-256-GCM ile şifrelenmiş bir zarfın içindedir. Tarihler, FK'ler, türler ve semboller düz kalır; fiyat cron'u sembolden çalışmaya devam eder.</p>
+  <div class="legend" aria-label="Renk anahtarı">
+    <span><i class="sw k"></i>cihazda kalan sır / düz metin</span>
+    <span><i class="sw c"></i>şifreli, sunucuda durur</span>
+    <span><i class="sw p"></i>sunucudan düz geçen tek yol</span>
+    <span><i class="sw s"></i>sunucu tarafı</span>
+  </div>
+  <nav class="toc" aria-label="Bölümler">
+    <a href="#harita">Genel harita</a><a href="#anahtar">Anahtar zinciri</a><a href="#giris">Giriş</a><a href="#yazma">Yazma ve okuma</a><a href="#goc">Göç</a><a href="#parola">Parola unutma</a><a href="#gorulen">Sunucu ne görür</a><a href="#kapi">Derleme kapıları</a>
+  </nav>
+</header>
+
+<!-- ============ 1. GENEL HARİTA ============ -->
+<section id="harita">
+  <h2>Genel harita: güven sınırından ne geçer</h2>
+  <p class="muted">Kesikli dikey çizgi güven sınırıdır. Soldaki kutuların hiçbiri sınırı düz hâliyle geçmez. Sağa giden her şey ya türetilmiş bir jetondur ya da şifreli bir pakettir. Tek istisna asistan mesajıdır.</p>
+  <figure>
+    <div class="scroll">
+    <svg viewBox="0 0 1000 470" role="img" aria-label="Tarayıcı, sunucu ve Postgres arasındaki veri akışı. Parola ve DEK tarayıcıda kalır; sunucuya yalnız auth_token ve v1 şifreli zarflar gider; asistan mesajı röleden düz geçer.">
+      <!-- bölgeler -->
+      <rect class="zk" x="16" y="36" width="432" height="418" rx="12"/>
+      <text class="zl k" x="34" y="60">TARAYICI · ANAHTAR BURADA</text>
+      <rect class="zs" x="512" y="36" width="236" height="418" rx="12"/>
+      <text class="zl" x="528" y="60">SUNUCU · HONO</text>
+      <rect class="zs" x="770" y="36" width="214" height="320" rx="12"/>
+      <text class="zl" x="786" y="60">POSTGRES</text>
+      <line class="bd" x1="480" y1="28" x2="480" y2="462"/>
+      <text class="l m" x="480" y="20" text-anchor="middle">güven sınırı</text>
+
+      <!-- tarayıcı sol sütun -->
+      <rect class="bk" x="36" y="84" width="190" height="44" rx="7"/>
+      <text class="t" x="131" y="103" text-anchor="middle">Parola</text>
+      <text class="ts" x="131" y="119" text-anchor="middle">cihazdan çıkmaz</text>
+
+      <rect class="bk" x="36" y="168" width="190" height="44" rx="7"/>
+      <text class="t" x="131" y="187" text-anchor="middle">KEK</text>
+      <text class="ts" x="131" y="203" text-anchor="middle">PBKDF2 600k → HKDF</text>
+
+      <rect class="bk" x="36" y="252" width="190" height="52" rx="7"/>
+      <text class="t" x="131" y="273" text-anchor="middle">DEK</text>
+      <text class="ts" x="131" y="291" text-anchor="middle">IndexedDB, dışa aktarılamaz</text>
+
+      <rect class="bk" x="36" y="334" width="190" height="44" rx="7"/>
+      <text class="t" x="131" y="353" text-anchor="middle">AllData + engine</text>
+      <text class="ts" x="131" y="369" text-anchor="middle">düz metin, yalnız bellekte</text>
+
+      <rect class="bk" x="36" y="394" width="190" height="44" rx="7"/>
+      <text class="t" x="131" y="413" text-anchor="middle">Asistan döngüsü</text>
+      <text class="ts" x="131" y="429" text-anchor="middle">araçlar tarayıcıda koşar</text>
+
+      <!-- tarayıcı sağ sütun -->
+      <rect class="bk" x="270" y="222" width="160" height="44" rx="7"/>
+      <text class="t" x="350" y="241" text-anchor="middle">yaz()</text>
+      <text class="ts" x="350" y="257" text-anchor="middle">tutar → zarf → mühür</text>
+
+      <rect class="bk" x="270" y="300" width="160" height="44" rx="7"/>
+      <text class="t" x="350" y="319" text-anchor="middle">veriAc()</text>
+      <text class="ts" x="350" y="335" text-anchor="middle">çöz + AAD denetle</text>
+
+      <!-- tarayıcı içi oklar -->
+      <line class="ln k" x1="131" y1="128" x2="131" y2="166" marker-end="url(#ak)"/>
+      <text class="l k" x="139" y="152">türetir</text>
+      <line class="ln k" x1="131" y1="212" x2="131" y2="250" marker-end="url(#ak)"/>
+      <text class="l k" x="139" y="236">sarılı DEK'i açar</text>
+      <line class="ln k" x1="226" y1="268" x2="268" y2="248" marker-end="url(#ak)"/>
+      <line class="ln k" x1="226" y1="290" x2="268" y2="316" marker-end="url(#ak)"/>
+      <line class="ln k" x1="270" y1="340" x2="228" y2="354" marker-end="url(#ak)"/>
+
+      <!-- sunucu kutuları -->
+      <rect class="bx" x="530" y="84" width="200" height="44" rx="7"/>
+      <text class="t" x="630" y="103" text-anchor="middle">/auth/login</text>
+      <text class="ts" x="630" y="119" text-anchor="middle">scrypt(auth_token)</text>
+
+      <rect class="bx" x="530" y="176" width="200" height="44" rx="7"/>
+      <text class="t" x="630" y="195" text-anchor="middle">fiyat cron'u</text>
+      <text class="ts" x="630" y="211" text-anchor="middle">yalnız sembol okur</text>
+
+      <rect class="bx" x="530" y="240" width="200" height="104" rx="7"/>
+      <text class="t" x="630" y="268" text-anchor="middle">/api uçları</text>
+      <text class="ts" x="630" y="290" text-anchor="middle">guard + user_id kapsamı</text>
+      <text class="ts" x="630" y="306" text-anchor="middle">zarfı açmadan yazar</text>
+      <text class="ts" x="630" y="322" text-anchor="middle">p1 gövdesini reddeder</text>
+
+      <rect class="bp" x="530" y="394" width="200" height="44" rx="7"/>
+      <text class="t" x="630" y="413" text-anchor="middle">/api/ai/relay</text>
+      <text class="ts" x="630" y="429" text-anchor="middle">loglamaz, saklamaz</text>
+
+      <!-- veritabanı -->
+      <rect class="bx" x="786" y="84" width="182" height="72" rx="7"/>
+      <text class="t" x="877" y="104" text-anchor="middle">users</text>
+      <text class="ts" x="877" y="122" text-anchor="middle">password_hash</text>
+      <text class="ts" x="877" y="138" text-anchor="middle">kdf_salt · dek_wrapped_*</text>
+
+      <rect class="bc" x="786" y="240" width="182" height="104" rx="7"/>
+      <text class="t" x="877" y="266" text-anchor="middle">18 zarflı tablo</text>
+      <text class="ts" x="877" y="288" text-anchor="middle">düz: tarih, FK, tür,</text>
+      <text class="ts" x="877" y="303" text-anchor="middle">sembol, gün</text>
+      <text class="ts" x="877" y="324" text-anchor="middle">enc: v1:&lt;iv&gt;:&lt;ct&gt;</text>
+
+      <rect class="bp" x="786" y="394" width="182" height="44" rx="7"/>
+      <text class="t" x="877" y="413" text-anchor="middle">LLM sağlayıcısı</text>
+      <text class="ts" x="877" y="429" text-anchor="middle">API anahtarı sunucuda</text>
+
+      <!-- sınırı geçen oklar -->
+      <line class="ln" x1="226" y1="100" x2="528" y2="100" marker-end="url(#a)"/>
+      <text class="l" x="378" y="92" text-anchor="middle">auth_token (parola değil)</text>
+      <line class="ln" x1="730" y1="106" x2="784" y2="106" marker-end="url(#a)"/>
+
+      <polyline class="ln c" points="786,142 244,142 244,190 228,190" marker-end="url(#ac)"/>
+      <text class="l c" x="640" y="159" text-anchor="middle">dek_wrapped_pw (şifreli)</text>
+
+      <polyline class="ln m" points="730,198 877,198 877,238" marker-end="url(#am)"/>
+      <text class="l m" x="740" y="191">trades.symbol</text>
+
+      <line class="ln c" x1="430" y1="244" x2="528" y2="244" marker-end="url(#ac)"/>
+      <text class="l c" x="436" y="236">POST · enc zarflı</text>
+      <line class="ln c" x1="528" y1="322" x2="432" y2="322" marker-end="url(#ac)"/>
+      <text class="l c" x="436" y="314">GET /api/all · enc</text>
+
+      <line class="ln c" x1="730" y1="270" x2="784" y2="270" marker-end="url(#ac)"/>
+      <line class="ln c" x1="784" y1="316" x2="732" y2="316" marker-end="url(#ac)"/>
+
+      <line class="ln p" x1="226" y1="416" x2="528" y2="416" marker-end="url(#ap)"/>
+      <text class="l p" x="378" y="408" text-anchor="middle">mesaj + bağlam (düz)</text>
+      <line class="ln p" x1="730" y1="416" x2="784" y2="416" marker-end="url(#ap)"/>
+    </svg>
+    </div>
+    <figcaption><b>Sunucu zarfı açmadan saklar ve geri verir.</b> Yazmada şifreleme gönderimden hemen önce <code>yaz()</code> içinde, okumada çözme <code>/api/all</code> yanıtı gelince <code>veriAc()</code> içinde yapılır. Asistana yazılan cümle röleden düz geçip sağlayıcıya gider; diske yazılmaz ama o an sunucunun belleğindedir. Asistan bu yüzden kullanıcı başına kapatılabilir. Sohbetin kendisi <code>ai_messages</code> tablosunda zarflı durur.</figcaption>
+  </figure>
+</section>
+
+<!-- ============ 2. ANAHTAR ZİNCİRİ ============ -->
+<section id="anahtar">
+  <h2>Anahtar zinciri: tek parola, iki bağımsız çıktı</h2>
+  <p class="muted">Parola bir kez yavaş türetilir. Aynı <code>master</code> değerinden HKDF farklı <code>info</code> etiketleriyle iki bağımsız anahtar üretir: biri sunucuya kimlik kanıtı olarak gider, diğeri cihazda kalıp DEK'i sarar. Jetonu ele geçiren KEK'e ulaşamaz.</p>
+  <figure>
+    <div class="scroll">
+    <svg viewBox="0 0 960 370" role="img" aria-label="Parola PBKDF2 ile master değerine, oradan HKDF ile auth_token ve KEK'e türer. KEK ve kurtarma kodundan türeyen RK aynı rastgele DEK'i ayrı ayrı sarar; sarılı paketler ve auth_token'ın scrypt özeti sunucuda saklanır.">
+      <line class="bd" x1="800" y1="8" x2="800" y2="360"/>
+      <text class="zl" x="820" y="358">SUNUCUDA DURAN</text>
+
+      <!-- parola → master -->
+      <rect class="bk" x="20" y="60" width="130" height="44" rx="7"/>
+      <text class="t" x="85" y="79" text-anchor="middle">Parola</text>
+      <text class="ts" x="85" y="95" text-anchor="middle">12+ karakter</text>
+      <line class="ln k" x1="150" y1="82" x2="188" y2="82" marker-end="url(#ak)"/>
+
+      <rect class="bk" x="190" y="60" width="200" height="44" rx="7"/>
+      <text class="t" x="290" y="79" text-anchor="middle">PBKDF2-SHA256</text>
+      <text class="ts" x="290" y="95" text-anchor="middle">600.000 tur · kdf_salt</text>
+      <line class="ln k" x1="390" y1="82" x2="428" y2="82" marker-end="url(#ak)"/>
+
+      <rect class="bk" x="430" y="60" width="130" height="44" rx="7"/>
+      <text class="t" x="495" y="79" text-anchor="middle">master</text>
+      <text class="ts" x="495" y="95" text-anchor="middle">256 bit</text>
+
+      <!-- master → auth_token / KEK -->
+      <line class="ln" x1="560" y1="72" x2="618" y2="44" marker-end="url(#a)"/>
+      <line class="ln k" x1="560" y1="92" x2="618" y2="120" marker-end="url(#ak)"/>
+
+      <rect class="bx" x="620" y="20" width="150" height="44" rx="7"/>
+      <text class="t" x="695" y="39" text-anchor="middle">auth_token</text>
+      <text class="ts" x="695" y="55" text-anchor="middle">HKDF finans/auth/v1</text>
+
+      <rect class="bk" x="620" y="100" width="150" height="44" rx="7"/>
+      <text class="t" x="695" y="119" text-anchor="middle">KEK</text>
+      <text class="ts" x="695" y="135" text-anchor="middle">HKDF finans/kek/v1</text>
+
+      <line class="ln" x1="770" y1="42" x2="828" y2="42" marker-end="url(#a)"/>
+      <rect class="bx" x="830" y="20" width="120" height="44" rx="7"/>
+      <text class="t" x="890" y="39" text-anchor="middle">password_hash</text>
+      <text class="ts" x="890" y="55" text-anchor="middle">scrypt(token)</text>
+
+      <!-- DEK -->
+      <rect class="bk" x="390" y="200" width="170" height="48" rx="7"/>
+      <text class="t" x="475" y="220" text-anchor="middle">DEK</text>
+      <text class="ts" x="475" y="237" text-anchor="middle">32 bayt, rastgele</text>
+
+      <!-- KEK sarar → pw paketi -->
+      <line class="ln k" x1="695" y1="144" x2="695" y2="178" marker-end="url(#ak)"/>
+      <text class="l k" x="703" y="165">sarar</text>
+      <line class="ln k" x1="560" y1="214" x2="618" y2="202" marker-end="url(#ak)"/>
+      <rect class="bc" x="620" y="180" width="150" height="44" rx="7"/>
+      <text class="t" x="695" y="199" text-anchor="middle">dek_wrapped_pw</text>
+      <text class="ts" x="695" y="215" text-anchor="middle">AAD finans/dek/pw/v1</text>
+
+      <!-- kurtarma kodu → RK → rk paketi -->
+      <rect class="bk" x="20" y="300" width="190" height="44" rx="7"/>
+      <text class="t" x="115" y="319" text-anchor="middle">Kurtarma kodu</text>
+      <text class="ts" x="115" y="335" text-anchor="middle">160 bit · Crockford</text>
+      <line class="ln k" x1="210" y1="322" x2="428" y2="322" marker-end="url(#ak)"/>
+      <text class="l k" x="319" y="314" text-anchor="middle">HKDF finans/rk/v1</text>
+
+      <rect class="bk" x="430" y="300" width="130" height="44" rx="7"/>
+      <text class="t" x="495" y="319" text-anchor="middle">RK</text>
+      <text class="ts" x="495" y="335" text-anchor="middle">salt'a bağlı değil</text>
+
+      <line class="ln k" x1="560" y1="234" x2="618" y2="272" marker-end="url(#ak)"/>
+      <line class="ln k" x1="560" y1="318" x2="618" y2="292" marker-end="url(#ak)"/>
+      <text class="l k" x="572" y="306">sarar</text>
+      <rect class="bc" x="620" y="260" width="150" height="44" rx="7"/>
+      <text class="t" x="695" y="279" text-anchor="middle">dek_wrapped_rk</text>
+      <text class="ts" x="695" y="295" text-anchor="middle">AAD finans/dek/rk/v1</text>
+
+      <!-- sunucuya -->
+      <rect class="bx" x="830" y="180" width="120" height="124" rx="7"/>
+      <text class="t" x="890" y="202" text-anchor="middle">users</text>
+      <text class="ts" x="890" y="226" text-anchor="middle">kdf_salt</text>
+      <text class="ts" x="890" y="244" text-anchor="middle">kdf_params</text>
+      <text class="ts" x="890" y="262" text-anchor="middle">dek_wrapped_pw</text>
+      <text class="ts" x="890" y="280" text-anchor="middle">dek_wrapped_rk</text>
+      <line class="ln c" x1="770" y1="202" x2="828" y2="202" marker-end="url(#ac)"/>
+      <line class="ln c" x1="770" y1="282" x2="828" y2="282" marker-end="url(#ac)"/>
+    </svg>
+    </div>
+    <figcaption><b>Aynı DEK iki kez sarılır.</b> Paketlerin AAD'si amacı taşır; sunucu parola paketiyle kurtarma paketinin yerini değiştirirse çözme başarısız olur. Parola değişimi veriyi yeniden şifrelemez, yalnız DEK yeni KEK ile yeniden sarılır. Kurtarma kodu parolanın salt'ına bağlı olmadığı için parola değişince de çalışır. Girişte istemci sunucunun bildirdiği KDF'yi <code>kdfDenetle()</code> ile denetler: PBKDF2-SHA256 değilse ya da 600k'nın altındaysa giriş durur.</figcaption>
+  </figure>
+</section>
+
+<!-- ============ 3. GİRİŞ ============ -->
+<section id="giris">
+  <h2>Giriş: anahtar cihaza gelene kadar uygulama açılmaz</h2>
+  <p class="muted">Sıra önemlidir. Kurtarma paketi sunucuya yazılmadan anahtar cihaza konmaz, çünkü anahtar cihaza konduğu an uygulama şifreli yazmaya başlar. Oturum var ama cihazda anahtar yoksa (IndexedDB temizlendi, gizli pencere) parola yeniden sorulur.</p>
+  <figure>
+    <div class="scroll">
+    <svg viewBox="0 0 960 1010" role="img" aria-label="Giriş dizisi: prelogin ile salt alınır, KDF denetlenir, auth_token gönderilir, sarılı DEK geri gelir ve tarayıcıda açılır; gerekiyorsa kurtarma paketi yazılır, anahtar IndexedDB'ye konur, düz satırlar şifrelenir ve veri çekilip çözülür.">
+      <!-- başlıklar -->
+      <rect class="nk" x="90" y="16" width="160" height="36" rx="7"/>
+      <text class="t" x="170" y="39" text-anchor="middle">Tarayıcı</text>
+      <rect class="ns" x="480" y="16" width="160" height="36" rx="7"/>
+      <text class="t" x="560" y="39" text-anchor="middle">Sunucu</text>
+      <rect class="ns" x="770" y="16" width="160" height="36" rx="7"/>
+      <text class="t" x="850" y="39" text-anchor="middle">Postgres</text>
+      <line class="life" x1="170" y1="52" x2="170" y2="995"/>
+      <line class="life" x1="560" y1="52" x2="560" y2="995"/>
+      <line class="life" x1="850" y1="52" x2="850" y2="995"/>
+
+      <!-- prelogin -->
+      <line class="ln" x1="170" y1="100" x2="558" y2="100" marker-end="url(#a)"/>
+      <text class="l" x="364" y="92" text-anchor="middle">POST /auth/prelogin {email}</text>
+      <line class="ln m" x1="560" y1="130" x2="848" y2="130" marker-end="url(#am)"/>
+      <text class="l m" x="705" y="122" text-anchor="middle">kdf_salt, kdf_params</text>
+      <line class="ln" x1="560" y1="170" x2="172" y2="170" marker-end="url(#a)"/>
+      <text class="l" x="364" y="162" text-anchor="middle">{kdf:"v2", salt, params}</text>
+      <text class="ts" x="364" y="186" text-anchor="middle">kayıtsız e-postaya HMAC'li sahte salt döner</text>
+
+      <rect class="nk" x="10" y="204" width="320" height="30" rx="6"/>
+      <text class="tn" x="170" y="224" text-anchor="middle">kdfDenetle: PBKDF2 ve ≥600k değilse dur</text>
+      <rect class="nk" x="10" y="242" width="320" height="30" rx="6"/>
+      <text class="tn" x="170" y="262" text-anchor="middle">parolaTuret → KEK + auth_token</text>
+
+      <!-- login -->
+      <line class="ln" x1="170" y1="310" x2="558" y2="310" marker-end="url(#a)"/>
+      <text class="l" x="364" y="302" text-anchor="middle">POST /auth/login {auth_token}</text>
+      <line class="ln m" x1="560" y1="344" x2="848" y2="344" marker-end="url(#am)"/>
+      <text class="l m" x="705" y="336" text-anchor="middle">password_hash, dek_wrapped_pw</text>
+      <rect class="ns" x="430" y="360" width="260" height="30" rx="6"/>
+      <text class="tn" x="560" y="380" text-anchor="middle">scrypt doğrula · oturum çerezi</text>
+      <line class="ln c" x1="560" y1="424" x2="172" y2="424" marker-end="url(#ac)"/>
+      <text class="l c" x="364" y="416" text-anchor="middle">{user, dek_wrapped_pw, kurtarma}</text>
+      <rect class="nk" x="10" y="440" width="320" height="30" rx="6"/>
+      <text class="tn" x="170" y="460" text-anchor="middle">dekAc(paket, KEK) → ham DEK · açılmazsa giriş yok</text>
+
+      <!-- legacy notu -->
+      <rect class="ns" x="640" y="200" width="300" height="84" rx="8"/>
+      <text class="t" x="656" y="222">Eski (legacy) hesap</text>
+      <text class="ts" x="656" y="242">prelogin → {kdf:"legacy"}</text>
+      <text class="ts" x="656" y="258">login {password, upgrade: malzeme}</text>
+      <text class="ts" x="656" y="274">aynı istekte v2'ye geçer, parola son kez gider</text>
+
+      <!-- alt: kurtarma -->
+      <rect class="fr" x="6" y="494" width="948" height="160" rx="8"/>
+      <text class="l m" x="18" y="512">alt · hesabın kurtarma paketi yoksa (yeni kayıt ya da ilk giriş)</text>
+      <rect class="nk" x="10" y="524" width="320" height="30" rx="6"/>
+      <text class="tn" x="170" y="544" text-anchor="middle">kurtarmaHazirla: kod üret, sar, geri açıp doğrula</text>
+      <rect class="nk" x="10" y="562" width="320" height="30" rx="6"/>
+      <text class="tn" x="170" y="582" text-anchor="middle">kod gösterilir · son 4 karakteri yazılır</text>
+      <line class="ln c" x1="170" y1="616" x2="558" y2="616" marker-end="url(#ac)"/>
+      <text class="l c" x="364" y="608" text-anchor="middle">POST /e2ee/kurtarma {dek_wrapped_rk}</text>
+      <line class="ln m" x1="560" y1="638" x2="848" y2="638" marker-end="url(#am)"/>
+      <text class="l m" x="705" y="630" text-anchor="middle">UPDATE … WHERE rk IS NULL · yoksa 409</text>
+
+      <rect class="nk" x="10" y="670" width="320" height="30" rx="6"/>
+      <text class="tn" x="170" y="690" text-anchor="middle">anahtarKur: DEK → IndexedDB, dışa aktarılamaz</text>
+
+      <!-- alt: göç -->
+      <rect class="fr" x="6" y="716" width="948" height="176" rx="8"/>
+      <text class="l m" x="18" y="734">alt · hâlâ düz (p1) satır varsa · yazim/goc.ts</text>
+      <line class="ln" x1="170" y1="760" x2="558" y2="760" marker-end="url(#a)"/>
+      <text class="l" x="364" y="752" text-anchor="middle">GET /e2ee/bekleyen</text>
+      <line class="ln" x1="560" y1="790" x2="172" y2="790" marker-end="url(#a)"/>
+      <text class="l" x="364" y="782" text-anchor="middle">p1:{json} satırları</text>
+      <rect class="nk" x="10" y="802" width="320" height="30" rx="6"/>
+      <text class="tn" x="170" y="822" text-anchor="middle">şifrele → geri çöz → düz hâliyle karşılaştır</text>
+      <line class="ln c" x1="170" y1="852" x2="558" y2="852" marker-end="url(#ac)"/>
+      <text class="l c" x="364" y="846" text-anchor="middle">PUT /e2ee/satirlar · yalnız hâlâ p1 ise yazılır</text>
+      <line class="ln" x1="170" y1="880" x2="558" y2="880" marker-end="url(#a)"/>
+      <text class="l" x="364" y="874" text-anchor="middle">POST /e2ee/tamam · sunucu kendisi sayar</text>
+
+      <!-- veri -->
+      <line class="ln" x1="170" y1="922" x2="558" y2="922" marker-end="url(#a)"/>
+      <text class="l" x="364" y="914" text-anchor="middle">GET /api/all</text>
+      <line class="ln c" x1="560" y1="950" x2="172" y2="950" marker-end="url(#ac)"/>
+      <text class="l c" x="364" y="942" text-anchor="middle">satırlar, enc zarflarıyla</text>
+      <rect class="nk" x="10" y="964" width="320" height="30" rx="6"/>
+      <text class="tn" x="170" y="984" text-anchor="middle">veriAc → uygulama açılır</text>
+    </svg>
+    </div>
+    <figcaption><b>Parola hiçbir adımda sunucuya gitmez</b> (legacy yükseltmesi hariç, o da tek seferlik). Kurtarma paketi kaydedilmeden önce aynı kodla açılıp ham DEK ile karşılaştırılır; kod yanlış üretilmişse hata bugün çıkar, kullanıcının koda muhtaç olduğu gün değil. Göç başarısız olursa uygulama yine açılır ve kalan satırlar sonraki girişte şifrelenir.</figcaption>
+  </figure>
+</section>
+
+<!-- ============ 4. YAZMA / OKUMA ============ -->
+<section id="yazma">
+  <h2>Yazma ve okuma: tek boru hattı, tek açıcı</h2>
+  <p class="muted">Formlar, adlandırılmış uçlar, asistanın yazma araçları ve otomatik gerçekleştirme hep <code>yaz()</code>'dan geçer. Bu kapıyı atlayan bir yol şifrelemeyi de sessizce atlardı; <code>check-yazim.mjs</code> bu yüzden <code>yazim/</code> dışındaki gövdeli <code>fetch</code>'i derlemede durdurur.</p>
+  <div class="lanes">
+    <div class="lane" role="group" aria-label="Yazma boru hattı">
+      <h3>Yazma <span class="mono">yazim/index.ts</span></h3>
+      <div class="step k"><div class="dot">→</div><div>
+        <div class="who">tarayıcı · form</div>
+        <div class="what">Gövde oluşur</div>
+        <pre class="payload">{ date:"2026-09-12", account_id:3,
+  category_id:7, <span class="k">amount:-450.5, name:"Migros"</span> }</pre>
+      </div></div>
+      <div class="step k"><div class="dot">∑</div><div>
+        <div class="who">tutar.ts · tutarTamamla</div>
+        <div class="what">Türetilen tutarlar hesaplanır</div>
+        <div class="why">Ekstre tutarı, <code>cashDelta</code>, mevduat, mutabakat farkı. Sunucu artık hesaplamaz çünkü göremez. Engine'in aynı fonksiyonları kullanılır.</div>
+      </div></div>
+      <div class="step k"><div class="dot">✉</div><div>
+        <div class="who">zarf.ts · zarfla</div>
+        <div class="what">Hassas alanlar zarfa ayrılır</div>
+        <div class="why">Hangi alanın zarfa girdiğini <code>map.ts</code> söyler. Yan etkili rotalarda işleyici hareket zarfını da kurar. Senkron çalışır, yerine <code>Muhur</code> yer tutucusu bırakır.</div>
+        <pre class="payload">{ date, account_id, category_id,
+  enc: <span class="k">Muhur(transactions, {amount,name})</span>,
+  entry: <span class="k">Muhur(account_entries, {amount,note})</span> }</pre>
+      </div></div>
+      <div class="step c"><div class="dot">⚿</div><div>
+        <div class="who">zarf.ts · muhurle</div>
+        <div class="what">AES-256-GCM ile mühürlenir</div>
+        <div class="why">JSON 32 baytlık kovaya boşlukla doldurulur, IV her yazımda rastgele, AAD = <code>tablo:user_id</code>.</div>
+        <pre class="payload">enc: <span class="c">"v1:Qx7n…:9fK2…"</span>   <span class="m">// AAD transactions:42</span></pre>
+        <div class="branch">Cihazda anahtar yoksa düz metne düşmez: <b>401</b>, yeniden giriş.</div>
+      </div></div>
+      <div class="step s"><div class="dot">⇢</div><div>
+        <div class="who">sunucu · POST /api/transactions</div>
+        <div class="what">Zarf açılmadan yazılır</div>
+        <div class="why">Kayıt ve hareket aynı <code>db.tx</code> içinde. Göçü biten kullanıcıdan gelen <code>p1:{</code> gövdesi reddedilir.</div>
+        <pre class="payload">transactions(id, user_id, date,
+  account_id, category_id, <span class="c">enc</span>)</pre>
+      </div></div>
+    </div>
+
+    <div class="lane" role="group" aria-label="Okuma yolu">
+      <h3>Okuma <span class="mono">api.all → veriAc</span></h3>
+      <div class="step s"><div class="dot">⇠</div><div>
+        <div class="who">sunucu · GET /api/all</div>
+        <div class="what">Satırlar zarflarıyla döner</div>
+        <div class="why">Sunucu zarflı alanla SQL'de süzemez, sıralayamaz, toplayamaz. Sıralama gereken yerde tarayıcı sıralar (<code>SIRA</code>).</div>
+        <pre class="payload">{ id:812, date:"2026-09-12", account_id:3,
+  enc:<span class="c">"v1:Qx7n…:9fK2…"</span> }</pre>
+      </div></div>
+      <div class="step c"><div class="dot">⚿</div><div>
+        <div class="who">zarf.ts · veriAc / zarfIci</div>
+        <div class="what">Her satır tablo adıyla çözülür</div>
+        <div class="why">AAD tabloyu ve kullanıcıyı bağlar. Zarf başka kolona ya da başka kullanıcıya taşınmışsa çözme hata verir, çöp dönmez. <code>p1:</code> önekli düz zarf da okunur.</div>
+      </div></div>
+      <div class="step k"><div class="dot">✓</div><div>
+        <div class="who">tarayıcı · bellekte</div>
+        <div class="what">Alanlar satıra geri açılır</div>
+        <pre class="payload">{ id:812, date:"2026-09-12", account_id:3,
+  <span class="k">amount:-450.5, name:"Migros"</span> }</pre>
+        <div class="why">Ekranlar <code>t.amount</code>, <code>c.name</code> okumaya devam eder; zarfı görmezler. Çözülmüş veri diske yazılmaz, önbellek yok.</div>
+      </div></div>
+      <div class="step k"><div class="dot">∑</div><div>
+        <div class="who">engine</div>
+        <div class="what">Türetilen her şey burada hesaplanır</div>
+        <div class="why">Bakiye = Σ <code>account_entries</code> (<code>accounts.balance</code> kolonu yok). Projeksiyon, ekstreler, otomatik gerçekleştirme kararları da tarayıcıda.</div>
+      </div></div>
+      <div class="step k"><div class="dot">⏱</div><div>
+        <div class="who">ölçüm</div>
+        <div class="what">8.000 satır: masaüstünde ~48 ms, orta telefonda ~215 ms</div>
+        <div class="why">Prod hesabı ~200 satır. Telefonda 300 ms aşılırsa blob anahtarlı önbelleğe yeniden bakılır.</div>
+      </div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 5. GÖÇ ============ -->
+<section id="goc">
+  <h2>Göç: önek değerin hâlini söyler</h2>
+  <p class="muted">Göç iki katlıdır ve ikisi de kendiliğinden işler. Riskli DDL işi anahtar yokken sunucuda yapılır, şifreleme işi anahtarın olduğu tarayıcıda.</p>
+  <figure>
+    <div class="scroll">
+    <svg viewBox="0 0 960 250" role="img" aria-label="Göç durumları: düz kolonlar sunucuda p1 düz zarfa, p1 tarayıcıda v1 şifreli zarfa dönüşür; sunucu düz satır kalmadığını sayınca göç biter ve p1 gövdeleri reddedilir.">
+      <text class="l m" x="235" y="46" text-anchor="middle">zarfGoc() · sunucu açılışı</text>
+      <text class="ts" x="235" y="62" text-anchor="middle">anahtar gerekmez</text>
+      <text class="l k" x="495" y="46" text-anchor="middle">goc.ts · tarayıcı, girişte</text>
+      <text class="ts" x="495" y="62" text-anchor="middle">DEK ile</text>
+      <text class="l m" x="755" y="46" text-anchor="middle">POST /e2ee/tamam</text>
+      <text class="ts" x="755" y="62" text-anchor="middle">sunucu p1 sayar</text>
+
+      <rect class="bx" x="20" y="80" width="170" height="60" rx="10"/>
+      <text class="t" x="105" y="106" text-anchor="middle">Düz kolonlar</text>
+      <text class="ts" x="105" y="124" text-anchor="middle">name, amount …</text>
+
+      <rect class="bx" x="280" y="80" width="170" height="60" rx="10"/>
+      <text class="t" x="365" y="106" text-anchor="middle">p1:{json}</text>
+      <text class="ts" x="365" y="124" text-anchor="middle">düz zarf, tek kolon</text>
+
+      <rect class="bc" x="540" y="80" width="170" height="60" rx="10"/>
+      <text class="t" x="625" y="106" text-anchor="middle">v1:&lt;iv&gt;:&lt;ct&gt;</text>
+      <text class="ts" x="625" y="124" text-anchor="middle">şifreli zarf</text>
+
+      <rect class="bk" x="800" y="80" width="150" height="60" rx="10"/>
+      <text class="t" x="875" y="106" text-anchor="middle">Göç bitti</text>
+      <text class="ts" x="875" y="124" text-anchor="middle">e2ee_migrated_at</text>
+
+      <line class="ln" x1="190" y1="110" x2="278" y2="110" marker-end="url(#a)"/>
+      <line class="ln k" x1="450" y1="110" x2="538" y2="110" marker-end="url(#ak)"/>
+      <line class="ln" x1="710" y1="110" x2="798" y2="110" marker-end="url(#a)"/>
+
+      <!-- yarıda kalırsa döngüsü -->
+      <path class="ln m" d="M340,140 C330,176 400,176 390,142" marker-end="url(#am)"/>
+      <text class="ts" x="365" y="194" text-anchor="middle">yarıda kalırsa: p1 ve v1</text>
+      <text class="ts" x="365" y="208" text-anchor="middle">yan yana okunur, devam eder</text>
+
+      <text class="ts" x="625" y="166" text-anchor="middle">her satır: şifrele → geri çöz →</text>
+      <text class="ts" x="625" y="180" text-anchor="middle">karşılaştır → yalnız hâlâ p1 ise yaz</text>
+
+      <text class="ts" x="875" y="166" text-anchor="middle">bundan sonra bu</text>
+      <text class="ts" x="875" y="180" text-anchor="middle">kullanıcıdan p1 gövdesi</text>
+      <text class="ts" x="875" y="194" text-anchor="middle">reddedilir</text>
+    </svg>
+    </div>
+    <figcaption><b>Göç yeniden çalıştırılabilir.</b> <code>zarfGoc()</code> mevcut zarfa birleştirir, şifreli satırda veri varken kolon düşürmeyi reddeder. Tarayıcı göçü doğrulanmamış bir paketi göndermez; "bitti" kararını istemci değil sunucu, düz satır sayarak verir. Yazma kilidi yok: düz yazan bir istemci kalmadı.</figcaption>
+  </figure>
+</section>
+
+<!-- ============ 6. PAROLA ============ -->
+<section id="parola">
+  <h2>Parola unutulunca: iki açık yol, bir de parola değişimi</h2>
+  <p class="muted">E-postayla gelen bağlantı DEK'i açamaz; açabilseydi sunucu da açabilirdi. Bağlantı açılınca sunucu hesabın durumunu <code>/auth/reset-bilgi</code> ile söyler, yol seçilmeden gelen istek 409 döner ve bağlantıyı yakmaz.</p>
+  <div class="paths">
+    <div class="path ok">
+      <div class="tag">Yol A · kurtarma koduyla</div>
+      <ol>
+        <li>Tarayıcı <code>dek_wrapped_rk</code> paketini koddan türeyen RK ile açar.</li>
+        <li>Kod yanlışsa paket açılmaz ve sunucuya hiçbir şey gitmez.</li>
+        <li>Yeni salt, yeni KEK; aynı DEK yeniden sarılır, göndermeden önce açılıp doğrulanır.</li>
+        <li><code>POST /auth/reset</code>, mod <code>kurtarma</code>.</li>
+      </ol>
+      <div class="res">Veri ve kurtarma paketi aynen kalır.</div>
+    </div>
+    <div class="path loss">
+      <div class="tag">Yol B · kodum yok</div>
+      <ol>
+        <li>Ayrı bir onay kutusu işaretlenir.</li>
+        <li>Kullanıcının tüm satırları şema kataloğundan bulunup silinir.</li>
+        <li><code>dek_wrapped_rk = NULL</code>, <code>e2ee_migrated_at = NULL</code>.</li>
+        <li>İlk girişte yeni DEK ve yeni kurtarma kodu.</li>
+      </ol>
+      <div class="res">Hesap boş başlar. E-postası ele geçmiş hesapta saldırgan veriyi okuyamaz, en fazla siler.</div>
+    </div>
+    <div class="path chg">
+      <div class="tag">Parola değişimi · Hesabım</div>
+      <ol>
+        <li>Eski paroladan <code>auth_token</code> türetilir; sarılı paket oturuma değil bu kanıta verilir.</li>
+        <li>DEK eski KEK ile açılır, yeni KEK ile sarılır, doğrulanır.</li>
+        <li>Sunucu tek UPDATE ile yazar, diğer cihazların oturumlarını kapatır.</li>
+      </ol>
+      <div class="res">Veri yeniden şifrelenmez, kurtarma kodu değişmez.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 7. SUNUCU NE GÖRÜR ============ -->
+<section id="gorulen">
+  <h2>Sunucu ne görür</h2>
+  <p class="muted">Veritabanını açan operatörün gördüğü <code>transactions</code> satırı. "12 Eylül'de 3 numaralı hesapta bir gider var" okunur; "Migros'a 450 TL" okunmaz.</p>
+  <div class="dbrow">
+    <table>
+      <thead><tr><th>id</th><th>user_id</th><th>date</th><th>account_id</th><th>category_id</th><th>enc</th></tr></thead>
+      <tbody>
+        <tr><td>812</td><td>42</td><td>2026-09-12</td><td>3</td><td>7</td><td class="enc">v1:Qx7nR2aW0pL3kT9v:9fK2mZ…Yh4</td></tr>
+        <tr><td>813</td><td>42</td><td>2026-09-12</td><td>3</td><td>7</td><td class="enc">v1:b8Hs0QeLr1Nw5Uc2:Tq0xVd…aP9</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="seen">
+    <div>
+      <h3 class="v">Görünür (kaçınılmaz meta veri)</h3>
+      <ul>
+        <li>E-posta, kayıt tarihi, oturum zamanları, IP</li>
+        <li>Tablo başına satır sayısı</li>
+        <li>Tarihler ve FK'ler: hangi harcama hangi kartta</li>
+        <li>Tutulan semboller (<code>trades.symbol</code>, kullanıcı kararı)</li>
+        <li>Zarfın kaba boyu, 32 baytlık kovalar hâlinde</li>
+      </ul>
+    </div>
+    <div>
+      <h3 class="h">Görünmez</h3>
+      <ul>
+        <li>Her tutar: harcama, maaş, bakiye, adet, fiyat, K/Z</li>
+        <li>Her ad ve not: işyeri, kalem adı, kategori adı</li>
+        <li>Asistan sohbetleri, plan argümanları, işlem özetleri</li>
+        <li>"Migros" ile "Migros Jet" aynı boyda paket verir</li>
+      </ul>
+    </div>
+  </div>
+  <p class="muted" style="font-size:14px">Söylenebilecek cümle: <b style="color:var(--ink)">"Veritabanında duran kayıtlarını okuyamam."</b> Söylenemeyecek olan: "hiçbir şekilde erişemem". JS'i sunucu sunduğu için aktif kötü niyetli sunucu kapsam dışıdır. AAD aynı kullanıcının iki satırının takasını ya da geri sarmayı yakalamaz.</p>
+</section>
+
+<!-- ============ 8. KAPILAR ============ -->
+<section id="kapi">
+  <h2>Derleme kapıları</h2>
+  <p class="muted">Şifrelemeyi sessizce atlayan bir değişiklik build'i durdurur. Beşincisi çalışma anında devrededir.</p>
+  <div class="gates">
+    <div class="gate"><h3>Şema kayması</h3><span class="mono">check-zarf-sema.ts</span><p>DDL ile <code>map.ts</code> iki yönlü karşılaştırılır. Sınıflandırılmamış kolon ya da zarflı kolonu geri ekleyen <code>ADD COLUMN</code> durur.</p></div>
+    <div class="gate"><h3>Boru hattını atlama</h3><span class="mono">check-yazim.mjs</span><p><code>yazim/</code> dışında gövdeli <code>fetch</code> yasak. İzin listesi gerekçeli: auth, röle, fiyatlar, hesap silme.</p></div>
+    <div class="gate"><h3>Sızıntı testi</h3><span class="mono">zarf.test.ts</span><p>Her rota işaretli gövdeyle geçer; zarf alanları çıkarılınca hiçbir işaret kalmamalı. AAD reddi, yanlış anahtar, dolgu testli.</p></div>
+    <div class="gate"><h3>Sunucu kriptosuz</h3><span class="mono">check-no-crypto.ts</span><p><code>apps/server</code> yalnız <code>@finans/crypto/map</code>'i import eder. Anahtar görme imkânı yapısal olarak yok.</p></div>
+    <div class="gate"><h3>Düz zarf reddi</h3><span class="mono">çalışma anı</span><p>Göçü biten kullanıcıdan <code>p1:{</code> gövdesi gelirse sunucu reddeder. Eski bir PWA paketi veriyi düz yazamaz.</p></div>
+  </div>
+</section>
+
+<footer>Kaynak: <span class="mono">docs/E2EE.md</span>, <span class="mono">packages/crypto/src/keys.ts</span>, <span class="mono">apps/web/src/yazim/</span>, <span class="mono">apps/web/src/features/auth/e2ee.ts</span>, <span class="mono">apps/server/index.ts</span> · e2ee branch'i, 47d655d · 2026-09-29</footer>
+</div>
+</body>
+</html>

@@ -66,7 +66,7 @@ export function project(data: AllData, months: number, rates: Rates = { usdTry: 
     });
     return { assets, cashFunds };
   };
-  let bal = totalCash(data.account_entries ?? []); // bakiye defterden türetilir (Faz 42)
+  let bal = totalCash(data.account_entries ?? []); // bakiye defterden türetilir (E2EE aşama 1a)
   /* kart ekstre ödemeleri: son ödeme tarihine gider olarak düşer; ödendi işaretlenen ekstre atlanır
      (ödeme zaten transactions'a yazıldı → başlangıç bakiyesinde; tekrar düşmek çift sayım olurdu) */
   const paidStmts = new Set((data.statement_payments ?? []).map((p) => `${p.card_id}:${p.due}`));

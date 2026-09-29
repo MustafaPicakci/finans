@@ -31,15 +31,15 @@ export function accountLedger(entries: AccountEntry[], accountId: number): Ledge
   return rows.reverse();
 }
 
-/* ————— BAKİYE ARTIK TÜRETİLİR (Faz 42) —————
+/* ————— BAKİYE ARTIK TÜRETİLİR (E2EE aşama 1a) —————
    `accounts.balance` kolonu kalktı; bakiye defterin kendisinden gelir. Değişmez zaten
    "bakiye = Σ hareketler" diyordu, yani bu yeni bir kural DEĞİL — tek gerçeği iki yerde
    tutmayı bırakmak. Doğrudan sonucu: `ledgerDrift` kavramsal olarak öldü (fark tanım
    gereği 0) ve onunla birlikte "defter ile bakiye ayrıştı" diye bir hata sınıfı kalmadı.
 
-   Maliyeti yok — `account_entries` zaten `/api/all` ile tamamen istemciye geliyor ve
-   `accountLedger` aynı diziyi zaten geziyor. (Aynı değişiklik şifreleme çalışmasının da ön
-   koşuluydu: şifreli tutarlar sunucuda toplanamaz.) */
+   Sebebi E2EE: sunucu şifreli tutarları toplayamaz, yani `UPDATE accounts SET balance =
+   balance + ?` şifreli dünyada çalışmaz. Maliyeti yok — `account_entries` zaten `/api/all`
+   ile tamamen istemciye geliyor ve `accountLedger` aynı diziyi zaten geziyor. */
 
 /** Tek bir hesabın bakiyesi = o hesabın hareketlerinin toplamı (açılış dahil). */
 export function accountBalance(entries: AccountEntry[], accountId: number): number {

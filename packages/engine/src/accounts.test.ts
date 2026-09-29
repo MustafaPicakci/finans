@@ -40,11 +40,11 @@ describe("accountLedger", () => {
   });
 });
 
-/* `ledgerDrift` testleri KALDIRILDI ve yerine türetme testleri geldi (Faz 42):
+/* `ledgerDrift` testleri KALDIRILDI ve yerine türetme testleri geldi (E2EE aşama 1a):
    bakiye artık `account_entries`'ten türediği için "defter ile bakiye ayrıştı" diye bir
    durum yok — fark tanım gereği 0. Test edilecek şey değişti: kolon ile defterin
    uyuşması değil, türetmenin kendisi. */
-describe("bakiye türetme (Faz 42)", () => {
+describe("bakiye türetme (E2EE aşama 1a)", () => {
   it("hesabın bakiyesi = o hesabın hareketlerinin toplamı", () => {
     const entries = [e(1, 1, "2026-01-01", 1000), e(2, 1, "2026-01-05", -250)];
     expect(accountBalance(entries, 1)).toBe(750);

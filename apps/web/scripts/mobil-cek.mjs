@@ -54,6 +54,29 @@ await send("Emulation.setTouchEmulationEnabled", { enabled: true });
 await send("Page.navigate", { url });
 await sleep(3500);
 
+/* E2EE aşama 6: uygulama cihazda veri anahtarı olmadan açılmıyor ve yukarıda depolama
+   temizlendi — stub giriş ekranını gösterir. Stub "gir" diyorsa (`stubGiris`; CIKIS=1 modunda
+   demez, orada giriş ekranının KENDİSİ denetleniyor) GERÇEK formdan stub parolasıyla girilir:
+   tarayıcı parolayı türetir ve stub'daki sarılı anahtarı açar. Parola mobil-stub.mjs'teki
+   STUB_PAROLA ile aynı olmalı (oradaki paket bu parolayla üretildi). */
+const STUB_PAROLA = "Stub-Parola-2026";
+const giris = await send("Runtime.evaluate", {
+  awaitPromise: true, returnByValue: true,
+  expression: `(async () => {
+    if (!document.querySelector("input[type=password]")) return "gerekmedi";
+    const me = await (await fetch("/api/auth/me")).json();
+    if (!me.stubGiris) return "giriş ekranı (CIKIS)";
+    const yaz = (el, v) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); };
+    yaz(document.querySelector("input[type=email]"), "demo@finans.local");
+    yaz(document.querySelector("input[type=password]"), ${JSON.stringify(STUB_PAROLA)});
+    document.querySelector("form button[type=submit]").click();
+    for (let i = 0; i < 60; i++) { await new Promise((r) => setTimeout(r, 250)); if (!document.querySelector("input[type=password]")) return "giriş yapıldı"; }
+    return "giriş BAŞARISIZ: " + document.body.innerText.slice(0, 120);
+  })()`,
+});
+console.log("  oturum:", giris.result?.value);
+if (giris.result?.value === "giriş yapıldı") await sleep(2500);
+
 if (tabLabel) {
   await send("Runtime.evaluate", {
     expression: `

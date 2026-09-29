@@ -3,7 +3,7 @@ import { project, netWorthBreakdown } from "./projection.js";
 import type { AllData, Account, AccountEntry } from "./types.js";
 
 /* Fixture'da hesap hâlâ `balance` ile yazılır ama o alan artık `Account` tipinde YOK
-   (Faz 42): bakiye `account_entries`'ten türetiliyor. Yardımcı, fixture'daki
+   (E2EE aşama 1a): bakiye `account_entries`'ten türetiliyor. Yardımcı, fixture'daki
    bakiyeyi bir AÇILIŞ HAREKETİNE çevirir — yani gerçek `POST /accounts` ne yapıyorsa
    onu (Faz 15'ten beri açılış bakiyesi bir 'acilis' satırıdır). Böylece testlerin
    gövdesi olduğu gibi kalıyor ve okunurluğu ("bakiyesi 1000 olan hesap") bozulmuyor. */

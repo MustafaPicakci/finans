@@ -40,6 +40,20 @@ Kayıt herkese açıktır ve **e-posta doğrulaması zorunludur**:
 
 > **Önemli:** Çok-kullanıcı için **çalışan bir e-posta yolu** şarttır (+ `APP_URL`). Yapılandırılmazsa aktivasyon e-postası gönderilemez ve owner dışındaki kullanıcılar giriş yapamaz (uygulama açılışta uyarı loglar). Geliştirmede yol boşsa aktivasyon bağlantısı sunucu konsoluna yazılır.
 
+### Verilerin şifreli — sunucu okuyamaz
+
+Tutarların (harcama, maaş, bakiye, adet, fiyat), adların (işyeri, hesap, kategori, not) ve asistan sohbetlerin **tarayıcında şifrelenir** (AES-256-GCM) ve sunucuda yalnız şifreli hâlde durur. Anahtar parolandan türer; **parolan tarayıcıdan hiç çıkmaz**. Yani sunucuyu işleten kişi veritabanında kayıtlarını okuyamaz. Tasarım ve sınırları: [docs/E2EE.md](docs/E2EE.md).
+
+- **Sunucunun yine gördükleri**: e-posta, tarihler (ne zaman bir kayıt girdiğin), kayıt sayıları, hangi harcamanın hangi hesaba/karta bağlı olduğu, tuttuğun semboller (fiyat çekmek için). *"12 Eylül'de Garanti kartında bir harcama"* görünür; *"Migros'a 450 TL"* görünmez.
+- **Kurtarma kodu**: ilk girişte (yeni hesapta da mevcut hesapta da) bir kez gösterilir, son dört karakterini yazarak kaydettiğini doğrularsın. **Parolanı unutursan verine ulaşmanın tek yolu bu kod** — biz de açamayız.
+- **Şifremi unuttum**: sıfırlama bağlantısı iki yol sunar — kurtarma koduyla (verin korunur) ya da kodun yoksa **verini silerek** yeni parola (hesap boş başlar). Üçüncü bir yol yok ve olamaz.
+- **Parolayı değiştirmek** (Hesabım → Parola) veriyi yeniden şifrelemez, anında biter; kurtarma kodun aynı kalır, diğer cihazlardaki oturumlar kapanır.
+- **Yeni cihaz / temizlenmiş tarayıcı**: anahtar cihazda saklanır (çıkışta silinir); anahtarı olmayan bir cihazda oturum açık olsa bile parolan bir kez daha sorulur.
+- **Düzenli kalemler ve ekstre talimatları** uygulamayı açtığında deftere geçer (sunucu tutarları göremediği için arka planda yazamaz). Kaydın tarihi yine ödeme günüdür, yani geç yazılan kayıt zamanında yazılanla aynıdır. Uygulamayı uzun süre açmasan da kaçırılan hiçbir vade kaybolmaz: talimatı verdiğin günden sonraki her ödenmemiş vade, açtığın ilk gün yazılır. Talimattan **önceki** vadelere dokunulmaz (onları zaten elle ödemiş olabilirsin).
+- **Asistan**: yazdığın cümle ve hesap/kart adların yanıt üretmesi için model sağlayıcısına **düz** gider (sunucu yalnız aktarır, saklamaz ve loglamaz); sohbet geçmişi şifreli saklanır. İstemiyorsan Hesabım'dan kapat.
+
+**Operatör için — mevcut kurulumu güncellemek**: yeni sürüm ilk açılışta şemayı kendisi dönüştürür (kolonlar zarfa taşınır; veri kaybı yok, iki kez çalışması zararsız). Her kullanıcının verisi o kullanıcının **bir sonraki girişinde** tarayıcıda şifrelenir; o ana kadar sunucuda düz (şifresiz) zarf olarak durur. Açık oturumlar bir kez yeniden giriş ister.
+
 ### E-posta gönderim yolu (Faz 28)
 
 Yol **açıkça** seçilir: `MAIL_PROVIDER` = `smtp` (varsayılan) · `gmail` · `resend`. Seçilen yolun env'leri eksikse sunucu açılışta hangi değişkenin eksik olduğunu söyler. Ayrıntılı env örnekleri: [`apps/server/.env.example`](apps/server/.env.example).
@@ -179,8 +193,8 @@ Seçilen model **function calling** desteklemek zorundadır (asistanın tek işi
 
 **Dürüst kısıtlar:**
 - Dil modeli tarih ve tutar çıkarımında hata yapabilir — onay ekranı tam da bunun için var, uygulamadan önce satırları oku.
-- **Verin sağlayıcıya gider:** her mesajda hesap/kart/kategori/portföy adların, hesap bakiyelerin ve portföydeki sembollerin (id'lere çevirebilmesi için) seçtiğin model sağlayıcısına gönderilir. İşlem geçmişin ancak asistan `kayit_ara` ile bakma ihtiyacı duyarsa gider; toplam soran sorularda (bkz. Faz 35) sağlayıcıya giden şey **hesaplanmış özettir** (toplam, kırılım), tek tek kayıtlar değil. Bu veriyi dışarı hiç çıkarmak istemiyorsan `AI_API_KEY`'i boş bırak (sekme kapalı kalır) ya da yerel bir model kullan (`AI_PROVIDER=openai` + Ollama'nın `AI_BASE_URL`'i).
-- Konuşma geçmişi sunucuda tutulmaz; her istekte istemciden gider ve sohbet sayfayı yenileyince sıfırlanır.
+- **Verin sağlayıcıya gider:** (sunucu bu içeriği saklamaz, yalnız aktarır — asistan tarayıcıda çalışır) her mesajda hesap/kart/kategori/portföy adların, hesap bakiyelerin ve portföydeki sembollerin (id'lere çevirebilmesi için) seçtiğin model sağlayıcısına gönderilir. İşlem geçmişin ancak asistan `kayit_ara` ile bakma ihtiyacı duyarsa gider; toplam soran sorularda (bkz. Faz 35) sağlayıcıya giden şey **hesaplanmış özettir** (toplam, kırılım), tek tek kayıtlar değil. Bu veriyi dışarı hiç çıkarmak istemiyorsan asistanı **Hesabım**'dan kapat, `AI_API_KEY`'i boş bırak (sekme herkes için kapalı kalır) ya da yerel bir model kullan (`AI_PROVIDER=openai` + Ollama'nın `AI_BASE_URL`'i).
+- Sohbet geçmişi sunucuda **şifreli** saklanır (başka cihazdan devam edilebilir); sunucu içeriğini okuyamaz.
 - Bir plan yalnız **bir kez** uygulanabilir (plan kimliği tek kullanımlıktır) — ağ hatasından sonraki tekrar denemesi çift kayıt yazmaz.
 
 ## Soğuk başlangıç ve uptime izleme
@@ -213,6 +227,8 @@ pg_dump "$DATABASE_URL" > yedek/finans-$(date +%F).sql        # tek dosya dökü
 ```
 
 Geri yükleme: `psql "$DATABASE_URL" < yedek/finans-YYYY-AA-GG.sql`. Sunucuda cron ile günlük `pg_dump` + istersen başka makineye rsync önerilir.
+
+> Veritabanı dökümü kullanıcı verisini **şifreli** içerir: geri yüklenen döküm, kullanıcılar kendi parolalarıyla (ya da kurtarma kodlarıyla) girdiğinde açılır — operatör onu okunur hâle getiremez. Kullanıcının kendi okunur yedeği Hesabım → **Verilerini indir**'dir (tarayıcıda çözülmüş JSON).
 
 ## Yol haritası (henüz yok, bilinçli olarak)
 

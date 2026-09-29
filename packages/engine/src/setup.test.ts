@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { setupGaps } from "./setup.js";
 import type { AllData, Account, Trade } from "./types.js";
 
-/* `balance` alanı kalktı (Faz 42); setupGaps zaten yalnız `kind` ve
+/* `balance` alanı kalktı (E2EE aşama 1a); setupGaps zaten yalnız `kind` ve
    `last_recon_date` okuyor, yani bakiye bu testler için hiç anlamlı değildi. */
 const acc = (id: number, over: Partial<Account> = {}): Account =>
   ({ id, name: `H${id}`, kind: "banka", ...over });

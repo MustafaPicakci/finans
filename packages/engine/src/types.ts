@@ -7,7 +7,7 @@ import type { CorporateAction } from "./corporate.js";
 export type AccountKind = "banka" | "nakit" | "araci" | "fon";
 /** `last_recon_*`: son mutabakat (Faz 16) — kullanıcının "gerçek bakiye buydu" dediği an ve tutar.
     Fark çıkmışsa 'duzeltme' hareketi yazılır, yani mutabakat sonrası defter her zaman tutar. */
-/** `balance` alanı YOK ve bu bilinçli (Faz 42): bakiye `account_entries`'ten
+/** `balance` alanı YOK ve bu bilinçli (E2EE aşama 1a): bakiye `account_entries`'ten
     türetilir (`accountBalance`/`balancesByAccount`/`totalCash`). Tipte bırakılsaydı
     kolonu okuyan bir çağrı yeri derlemeden geçer ve sessizce bayat rakam gösterirdi. */
 export type Account = {
@@ -21,9 +21,9 @@ export type Transfer = {
   id: number; date: string; from_account_id: number; to_account_id: number; amount: number; note?: string | null;
 };
 /** Düzenli gelir/gider. Opsiyonel hedef (`account_id` VEYA `card_id`; en fazla biri) verilirse günü
-    gelince gerçek kayda dönüştürülebilir (transactions / card_txs). `auto` → cron otomatik gerçekleştirir;
-    `auto_since` o talimatın başladığı gündür (sunucu damgalar, Faz 42) ve cron'un geriye ne kadar
-    gideceğini O belirler — sabit bir gün penceresi değil. */
+    gelince gerçek kayda dönüştürülebilir (transactions / card_txs). `auto` → uygulama açılışında
+    otomatik gerçekleştirilir; `auto_since` o talimatın başladığı gündür (sunucu damgalar) ve
+    otomatik yazmanın geriye ne kadar gideceğini O belirler — sabit bir gün penceresi değil. */
 export type Recurring = { id: number; kind: "income" | "expense"; name: string; day: number; from_month: string | null; to_month: string | null; account_id?: number | null; card_id?: number | null; category_id?: number | null; auto?: boolean; auto_since?: string | null };
 /** Düzenli kalemin tutar zaman çizelgesi: YM ayındaki tutar = from_month <= YM olan en büyük
     from_month'lu satır. from_month REC_AMOUNT_BEGIN ('0000-01') = baştan (PG PK kolonu NULL olamaz). */
@@ -51,8 +51,8 @@ export type Portfolio = { id: number; name: string; note: string | null };
     Faiz basit (yıllık `rate` %, 365 gün-sayımı); `withholding` = stopaj % (net faize düşer).
     `account_id` verilmişse açılışta anapara o hesaptan düşülür (silinince geri döner). */
 export type Deposit = { id: number; name: string; principal: number; rate: number; open_date: string; term_days: number; withholding: number; account_id?: number | null };
-/** `pay_account_id` doluysa otomatik ödeme talimatı: vadesi gelen ekstre cron ile o hesaptan ödenir.
-    `pay_since` talimatın başladığı gün (sunucu damgalar, Faz 42) — bu günden önceki vadelere dokunulmaz. */
+/** `pay_account_id` doluysa otomatik ödeme talimatı: vadesi gelen ekstre o hesaptan ödenir.
+    `pay_since` talimatın başladığı gün (sunucu damgalar) — bu günden önceki vadelere dokunulmaz. */
 export type Card = { id: number; name: string; limit_amount: number; statement_day: number; due_day: number; pay_account_id?: number | null; pay_since?: string | null };
 /** Kart harcaması. `category_id` **Faz 39'da eklendi** ve opsiyoneldir: eski kayıtlarda (ve
     eski sunucu/PWA önbelleğinden gelen yanıtta) yoktur — kategorisi olmayan kart harcaması

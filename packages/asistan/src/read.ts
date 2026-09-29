@@ -21,36 +21,41 @@
    Üç araç bu boşluğu kapatır ve toplamı MODEL DEĞİL SUNUCU hesaplar (harcama_ozeti,
    net_varlik, nakit_durumu). Matematik burada değil engine'de: net varlık `Day.worth` ile,
    harcama özeti çifte sayma kuralıyla, nakit açığı Özet ekranının kendi önerisiyle aynı
-   tanımdır — asistanın söylediği rakam ekranda görünenle çelişmesin diye. */
+   tanımdır — asistanın söylediği rakam ekranda görünenle çelişmesin diye.
+   ————— E2EE aşama 4 —————
+   Araçlar artık veritabanına SORGU ATMAZ: `AllData` alır ve saf fonksiyondur. Sunucu onu
+   `loadAllData` ile verir; tarayıcı (aşama 4c) zaten bellekte tuttuğu kopyadan. Şifreli
+   dünyada yalnız ikincisi mümkün. Tek davranış farkı `kayit_ara`nın metin süzgecinde:
+   SQL `ILIKE` yerine Kayıtlar ekranının kullandığı Türkçe'ye toleranslı `metinEsler` —
+   "MIGROS" artık "Migros"u da buluyor, yani asistanın bulduğu ile ekranın bulduğu aynı. */
 
 import {
   positions, openPositions, txShares, keyOf, stmtKey, harcamaOzeti, netWorthBreakdown, project,
-  cashGap, fundSellSuggestion,
-  type Card, type CardTx, type Trade, type Price, type Transaction, type Category,
-  type HarcamaTemeli, type HarcamaGrup, type Rates,
+  cashGap, fundSellSuggestion, metinEsler,
+  type AllData, type HarcamaTemeli, type HarcamaGrup, type Rates,
 } from "@finans/engine";
-import { db, todayLocal } from "../db.js";
-import { loadAllData } from "../data.js";
 import type { ArgVals } from "./tools.js";
-import type { JsonSchema } from "./provider.js";
+import type { JsonSchema } from "./types.js";
 
 export type ReadTool = {
   name: string;
   description: string;
   parameters: JsonSchema;
-  run: (uid: number, args: ArgVals) => Promise<unknown>;
+  /** `bugun`: 'YYYY-MM-DD' — saati çağıran verir (sunucu kendi yerel günü, tarayıcı kendisi). */
+  run: (data: AllData, args: ArgVals, bugun: string) => unknown;
 };
 
-const dateShift = (days: number): string => {
-  const d = new Date();
-  d.setDate(d.getDate() + days);
-  return keyOf(d);
+const gunKaydir = (bugun: string, gun: number): string => {
+  const [y, m, d] = bugun.split("-").map(Number);
+  return keyOf(new Date(y, m - 1, d + gun));
 };
 const num = (v: unknown, def: number) => (Number.isFinite(Number(v)) ? Number(v) : def);
 const r2 = (n: number) => Math.round(n * 100) / 100;
 /** USD-doğal varlıkları TRY'ye çevirmek için kur (kaynak: settings.fx_usd_try — prices.ts her
     tazelemede yazar). Kur yoksa 0: engine USD pozisyonu çevirmeden bırakır, uydurmaz. */
 const ratesOf = (settings: Record<string, string>): Rates => ({ usdTry: Number(settings.fx_usd_try) || 0 });
+const tarihAraligi = <T extends { date: string }>(xs: readonly T[], bas: string, son: string) =>
+  xs.filter((x) => x.date >= bas && x.date <= son);
 
 export const READ_TOOLS: ReadTool[] = [
   {
@@ -62,18 +67,13 @@ export const READ_TOOLS: ReadTool[] = [
       type: "object",
       properties: { card_id: { type: "integer", description: "Yalnız bu kartı listele (opsiyonel)" } },
     },
-    async run(uid, a) {
-      const cards = await db.all<Card>("SELECT * FROM cards WHERE user_id=?", uid);
-      const txs = await db.all<CardTx>("SELECT * FROM card_txs WHERE user_id=?", uid);
-      const paid = new Set(
-        (await db.all<{ card_id: number; due: string }>("SELECT card_id, due FROM statement_payments WHERE user_id=?", uid))
-          .map((p) => stmtKey(p.card_id, p.due)),
-      );
-      const from = dateShift(-95), to = dateShift(125);
-      const wanted = a.card_id != null ? cards.filter((c) => c.id === Number(a.card_id)) : cards;
+    run(data, a, bugun) {
+      const paid = new Set((data.statement_payments ?? []).map((p) => stmtKey(p.card_id, p.due)));
+      const from = gunKaydir(bugun, -95), to = gunKaydir(bugun, 125);
+      const wanted = a.card_id != null ? data.cards.filter((c) => c.id === Number(a.card_id)) : data.cards;
       return wanted.map((card) => {
         const byDue = new Map<string, number>();
-        for (const t of txs.filter((t) => t.card_id === card.id)) {
+        for (const t of data.card_txs.filter((t) => t.card_id === card.id)) {
           for (const sh of txShares(t, card)) {
             const k = keyOf(sh.due);
             if (k >= from && k <= to) byDue.set(k, (byDue.get(k) ?? 0) + sh.amount);
@@ -93,17 +93,14 @@ export const READ_TOOLS: ReadTool[] = [
       "Portföydeki güncel pozisyonlar: sembol, tür, elde tutulan adet, ortalama maliyet, güncel fiyat ve değer. " +
       "'Tümünü sat', 'kaç adedim var', 'ne kadar kâr var' gibi sorularda kullan.",
     parameters: { type: "object", properties: { symbol: { type: "string", description: "Yalnız bu sembol (opsiyonel)" } } },
-    async run(uid, a) {
-      const trades = await db.all<Trade>("SELECT * FROM trades WHERE user_id=? ORDER BY date, id", uid);
-      const auto = await db.all<Price>("SELECT symbol, asset_type, price, source, updated_at, currency FROM prices");
-      const manual = await db.all<Price>("SELECT symbol, asset_type, price, updated_at, currency FROM user_prices WHERE user_id=?", uid);
-      const pm = new Map(auto.map((p) => [`${p.asset_type}:${p.symbol}`, p]));
-      for (const p of manual) pm.set(`${p.asset_type}:${p.symbol}`, { ...p, source: "manual" });
+    run(data, a) {
       const sym = a.symbol ? String(a.symbol).toUpperCase() : null;
       /* `openPositions`: `positions()` işlem görmüş HER sembolü döndürür, kapananlar dahil.
          Süzülmezse asistan "elinde 0 adet EREGL var" diyebiliyordu — oysa aracın kendi
-         açıklaması "elde tutulan adet" diyor. Arayüzdeki liste ile aynı kural. */
-      return openPositions(positions(trades, [...pm.values()]))
+         açıklaması "elde tutulan adet" diyor. Arayüzdeki liste ile aynı kural.
+         `data.prices` zaten birleşik (global otomatik + kullanıcının elle fiyatı, çakışmada
+         kullanıcı kazanır) — birleştirme data.ts'te tek yerde. */
+      return openPositions(positions(data.trades, data.prices))
         .filter((p) => (sym ? p.sym.toUpperCase() === sym : true))
         .map((p) => ({
           sembol: p.sym, tur: p.type, adet: r2(p.qty), ort_maliyet: r2(p.avg),
@@ -130,37 +127,31 @@ export const READ_TOOLS: ReadTool[] = [
       },
       required: ["tur"],
     },
-    async run(uid, a) {
-      /* Tür başına TEK tanım: tablo + aranan kolon + döndürülen kolonlar. Eskiden `switch`
-         her türün SQL'ini ayrı yazıyordu; sayaç eklenince tablo adı ikinci bir yerde de
-         geçecekti, yani yeni bir tür eklendiğinde biri güncellenmeden kalabilirdi. */
+    run(data, a) {
+      /* Tür başına TEK tanım: kaynak dizi + aranan alan + döndürülen alanlar. */
       const TURLER = {
-        islem: { tablo: "transactions", kolon: "name", secim: "id, date, name, amount, category_id, account_id" },
-        portfoy: { tablo: "trades", kolon: "symbol", secim: "id, date, symbol, asset_type, side, qty, price, fee, currency, account_id, portfolio_id" },
-        kart: { tablo: "card_txs", kolon: "name", secim: "id, date, name, amount, installments, card_id" },
-        plan: { tablo: "oneoffs", kolon: "name", secim: "id, date, name, amount" },
+        islem: { kayitlar: data.transactions as readonly any[], alan: "name", secim: ["id", "date", "name", "amount", "category_id", "account_id"] },
+        portfoy: { kayitlar: data.trades as readonly any[], alan: "symbol", secim: ["id", "date", "symbol", "asset_type", "side", "qty", "price", "fee", "currency", "account_id", "portfolio_id"] },
+        kart: { kayitlar: data.card_txs as readonly any[], alan: "name", secim: ["id", "date", "name", "amount", "installments", "card_id"] },
+        plan: { kayitlar: data.oneoffs as readonly any[], alan: "name", secim: ["id", "date", "name", "amount"] },
       } as const;
       const tur = (String(a.tur) in TURLER ? String(a.tur) : "islem") as keyof typeof TURLER;
-      const { tablo, kolon, secim } = TURLER[tur];
+      const { kayitlar: tumu, alan, secim } = TURLER[tur];
       const limit = Math.min(Math.max(num(a.limit, 20), 1), 50);
       const from = a.baslangic ? String(a.baslangic) : "0000-01-01";
       const to = a.bitis ? String(a.bitis) : "9999-12-31";
-      const like = a.metin ? `%${String(a.metin)}%` : "%";
-      const kosul = `WHERE user_id=? AND date BETWEEN ? AND ? AND ${kolon} ILIKE ?`;
+      const metin = a.metin ? String(a.metin) : "";
+      const eslesen = tumu
+        .filter((k) => k.date >= from && k.date <= to && (!metin || metinEsler(String(k[alan] ?? ""), metin)))
+        .sort((x, y) => (y.date.localeCompare(x.date)) || (y.id - x.id));
       /* Sonuç `{ toplam, gosterilen, kayitlar }` — çıplak dizi DEĞİL. Eskiden dizi dönüyordu ve
          50'de kesildiğinde bunu hiçbir şey söylemiyordu: model 50 satırı toplayıp "bu ay 12.400
-         harcadın" diyebiliyordu, oysa 137 kayıt vardı. Toplam sayının görünmesi, modelin
-         toplamaya kalkmak yerine harcama_ozeti'ne yönelmesini de sağlar (sistem promptu bunu
-         açıkça söyler). */
-      const [sayim, kayitlar] = await Promise.all([
-        db.get<{ n: string }>(`SELECT COUNT(*) AS n FROM ${tablo} ${kosul}`, uid, from, to, like),
-        db.all<any>(`SELECT ${secim} FROM ${tablo} ${kosul} ORDER BY date DESC, id DESC LIMIT ?`, uid, from, to, like, limit),
-      ]);
-      const toplam = Number(sayim?.n ?? 0);
+         harcadın" diyebiliyordu, oysa 137 kayıt vardı. */
+      const kayitlar = eslesen.slice(0, limit).map((k) => Object.fromEntries(secim.map((f) => [f, k[f] ?? null])));
       return {
-        toplam, gosterilen: kayitlar.length,
-        ...(toplam > kayitlar.length
-          ? { uyari: `${toplam} kayıttan yalnız ${kayitlar.length} tanesi döndü — bu listeden TOPLAM ÇIKARMA, harcama_ozeti aracını kullan.` }
+        toplam: eslesen.length, gosterilen: kayitlar.length,
+        ...(eslesen.length > kayitlar.length
+          ? { uyari: `${eslesen.length} kayıttan yalnız ${kayitlar.length} tanesi döndü — bu listeden TOPLAM ÇIKARMA, harcama_ozeti aracını kullan.` }
           : {}),
         kayitlar,
       };
@@ -170,10 +161,9 @@ export const READ_TOOLS: ReadTool[] = [
     name: "bugun",
     description: "Bugünün tarihini döndürür. Kullanıcı 'dün', 'geçen cuma', '11 temmuzda' gibi göreli tarihler söylediğinde referans al.",
     parameters: { type: "object", properties: {} },
-    async run() {
-      const t = todayLocal();
-      const gun = new Date().toLocaleDateString("tr-TR", { weekday: "long" });
-      return { bugun: t, gun };
+    run(_data, _a, bugun) {
+      const [y, m, d] = bugun.split("-").map(Number);
+      return { bugun, gun: new Date(y, m - 1, d).toLocaleDateString("tr-TR", { weekday: "long" }) };
     },
   },
   /* ————— Faz 35: TOPLAMLAR ————— */
@@ -199,34 +189,19 @@ export const READ_TOOLS: ReadTool[] = [
         metin: { type: "string", description: "Ad/kategori/kart adında geçen metin (opsiyonel, Türkçe'ye toleranslı)" },
       },
     },
-    async run(uid, a) {
-      const bugun = todayLocal();
+    run(data, a, bugun) {
       const baslangic = a.baslangic ? String(a.baslangic) : `${bugun.slice(0, 7)}-01`;
       const bitis = a.bitis ? String(a.bitis) : bugun;
-      /* Tarih süzgeci SQL'de: engine zaten yeniden süzüyor ama bütün defteri belleğe çekmenin
-         anlamı yok (transactions/card_txs zamanla monoton büyür). */
-      /* `SELECT *` bilinçli (Faz 41 gözden geçirmesi): burada kolonlar ELLE sayılıyordu ve Faz
-         39'da eklenen `card_txs.category_id` bu listeye girmedi — asistan her kart harcamasını
-         kategorisiz görüyor, ekrandaki panel doğru rakamı veriyordu. Yani "asistanın rakamı
-         ekranla tanım olarak aynıdır" güvencesi sessizce kırılmıştı. Kolon listesi tutmak,
-         engine'in sözleşmesini İKİNCİ bir yerde tekrarlamaktır; `/api/all`'ın yükleyicisi
-         (data.ts) de bu yüzden `SELECT *` kullanıyor. Tarih süzgeci kalıyor: bütün defteri
-         belleğe çekmenin anlamı yok. */
-      const [transactions, card_txs, categories, cards, accounts, ekstre] = await Promise.all([
-        db.all<Transaction>(
-          "SELECT * FROM transactions WHERE user_id=? AND date BETWEEN ? AND ?", uid, baslangic, bitis),
-        db.all<CardTx>(
-          "SELECT * FROM card_txs WHERE user_id=? AND date BETWEEN ? AND ?", uid, baslangic, bitis),
-        db.all<Category>("SELECT id, name, kind, color FROM categories WHERE user_id=?", uid),
-        db.all<Card>("SELECT * FROM cards WHERE user_id=?", uid),
-        // yalnız metin süzgeci için: arama hesap adını da taramalı (bkz. harcama.ts HarcamaVeri)
-        db.all<{ id: number; name: string }>("SELECT id, name FROM accounts WHERE user_id=?", uid),
-        /* Ekstre ödemesi olan transaction id'leri. Engine bunu adından ÇIKARAMAZ ("Akbank
-           ekstresi" elle de yazılabilir), kaynağı `statement_payments.tx_id`dir. */
-        db.all<{ tx_id: number }>("SELECT tx_id FROM statement_payments WHERE user_id=? AND tx_id IS NOT NULL", uid),
-      ]);
+      /* Ekstre ödemesi olan transaction id'leri: engine bunu adından ÇIKARAMAZ ("Akbank
+         ekstresi" elle de yazılabilir), kaynağı `statement_payments.tx_id`dir. Kayıtlar
+         ekranındaki Harcama Özeti paneli aynı listeyi aynı kaynaktan kurar. */
+      const ekstreTxIds = (data.statement_payments ?? []).map((p) => p.tx_id).filter((x): x is number => x != null);
       return harcamaOzeti(
-        { transactions, card_txs, categories, cards, accounts, ekstreTxIds: ekstre.map((e) => e.tx_id) },
+        {
+          transactions: tarihAraligi(data.transactions, baslangic, bitis),
+          card_txs: tarihAraligi(data.card_txs, baslangic, bitis),
+          categories: data.categories, cards: data.cards, accounts: data.accounts, ekstreTxIds,
+        },
         {
           baslangic, bitis,
           temel: (a.temel as HarcamaTemeli) ?? "tuketim",
@@ -243,11 +218,10 @@ export const READ_TOOLS: ReadTool[] = [
       "'Ne kadar param var', 'net varlığım', 'ne kadar borcum var' sorularında kullan. " +
       "Rakam uygulamanın en üstünde yazan net varlıkla AYNI tanımdır.",
     parameters: { type: "object", properties: {} },
-    async run(uid) {
-      const data = await loadAllData(uid);
+    run(data, _a, bugun) {
       const n = netWorthBreakdown(data, ratesOf(data.settings));
       return {
-        tarih: todayLocal(),
+        tarih: bugun,
         nakit: r2(n.nakit), portfoy: r2(n.portfoy), vadeli: r2(n.vadeli),
         toplam_varlik: r2(n.toplam),
         kart_borcu: r2(n.kartBorcu), kredi_borcu: r2(n.krediBorcu), toplam_borc: r2(n.borc),
@@ -267,9 +241,8 @@ export const READ_TOOLS: ReadTool[] = [
       type: "object",
       properties: { aylar: { type: "integer", description: "Kaç ay ileri bakılsın (1-12, varsayılan 3)" } },
     },
-    async run(uid, a) {
+    run(data, a, bugun) {
       const aylar = Math.min(Math.max(num(a.aylar, 3), 1), 12);
-      const data = await loadAllData(uid);
       const rates = ratesOf(data.settings);
       const days = project(data, aylar, rates);
       if (!days.length) return { hata: "projeksiyon üretilemedi" };
@@ -278,7 +251,7 @@ export const READ_TOOLS: ReadTool[] = [
       const oneri = fundSellSuggestion(days, data, rates);
       const gap = cashGap(days);
       return {
-        bugun: todayLocal(),
+        bugun,
         pencere: `${aylar} ay`,
         nakit_bugun: r2(days[0].bal),
         /* Nakit sayılan fonlar ayrı raporlanır: açık hesabı SAF nakde göre yapılır (bkz. funds.ts —

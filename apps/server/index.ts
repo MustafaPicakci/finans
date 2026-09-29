@@ -5,14 +5,15 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { logger } from "hono/logger";
 import cron from "node-cron";
-import { txShares, keyOf, cashDelta, statementAmount, REC_AMOUNT_BEGIN, type Card, type CardTx, type TradeSide } from "@finans/engine";
-import { db, initDb, nowLocal, todayLocal, TENANT_TABLES, GLOBAL_SETTING_KEYS, type TxClient } from "./db.js";
+import { REC_AMOUNT_BEGIN } from "@finans/engine";
+import { db, initDb, nowLocal, todayLocal, zarfGecerli, TENANT_TABLES, GLOBAL_SETTING_KEYS, type TxClient } from "./db.js";
 import { loadAllData } from "./data.js";
 import { refreshAll, backfillPriceHistory, refreshCorporateActions, refreshCompanyEvents } from "./prices.js";
 import { refreshBenchmarks, autoBackfill } from "./benchmarks.js";
-import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, purgeStaleEmailTokens, SESSION_COOKIE, type SessionUser } from "./auth.js";
+import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, peekEmailToken, purgeStaleEmailTokens, SESSION_COOKIE, type SessionUser , sahteSalt, e2eeMalzemeDogrula, PAKET } from "./auth.js";
+import { ZARF, ZARF_DUZ, type ZarfliTablo } from "@finans/crypto/map";
 import { sendMail, resetEmail, verifyEmail, mailConfigured, verifyMailConfig, mailFromWarning } from "./mail.js";
-import { mountAi, type Invoke } from "./ai/index.js";
+import { mountAi } from "./ai/index.js";
 import { getProvider } from "./ai/provider.js";
 
 const app = new Hono();
@@ -107,9 +108,16 @@ const setSessionCookie = (c: any, token: string, expires: Date) =>
 
 api.post("/auth/register", async (c) => {
   if (rateLimited(`reg:${clientIp(c)}`, 10, 5 * 60_000)) return c.json({ error: "Çok fazla deneme, biraz sonra tekrar dene" }, 429);
-  const { email, password } = await c.req.json().catch(() => ({}));
+  const b = await c.req.json().catch(() => ({}));
+  const { email } = b;
   if (!email || typeof email !== "string" || !email.includes("@")) return c.json({ error: "Geçerli e-posta gir" }, 400);
-  if (!password || typeof password !== "string" || password.length < 8) return c.json({ error: "Parola en az 8 karakter olmalı" }, 400);
+  /* E2EE aşama 3b: kayıt YALNIZ sıfır bilgi yoluyla. Parola sunucuya gelmez; istemci onu
+     türetip auth_token + sarılı DEK gönderir. Parola uzunluk/güç kuralı bu yüzden YALNIZ
+     istemcide uygulanabilir — sunucu parolayı hiç görmüyor. Eski (parola gönderen) bir
+     istemciye anlaşılır hata dönülür: sessizce legacy kullanıcı açmak göç penceresini uzatırdı. */
+  if (typeof b.password === "string") return c.json({ error: "Uygulamanın yeni sürümü gerekli — sayfayı yenile" }, 400);
+  const m = e2eeMalzemeDogrula(b);
+  if (typeof m === "string") return c.json({ error: m }, 400);
   const email2 = email.trim().toLowerCase();
   if (await db.get<{ id: number }>("SELECT id FROM users WHERE email = ?", email2)) {
     return c.json({ error: "Bu e-posta zaten kayıtlı" }, 409);
@@ -117,8 +125,11 @@ api.post("/auth/register", async (c) => {
   const { count } = (await db.get<{ count: number }>("SELECT COUNT(*)::int AS count FROM users"))!;
   const isOwner = count === 0; // ilk kullanıcı = owner: doğrulanmış gelir, sahipsiz veriyi devralır, otomatik giriş yapar
   const info = await db.run(
-    "INSERT INTO users (email, password_hash, email_verified, created_at) VALUES (?,?,?,?) RETURNING id",
-    email2, await hashPassword(password), isOwner, new Date().toISOString(),
+    `INSERT INTO users (email, password_hash, email_verified, created_at,
+                        password_kdf, kdf_salt, kdf_params, dek_wrapped_pw, dek_wrapped_rk)
+     VALUES (?,?,?,?, 'v2',?,?,?,?) RETURNING id`,
+    email2, await hashPassword(m.auth_token), isOwner, new Date().toISOString(),
+    m.kdf_salt, m.kdf_params, m.dek_wrapped_pw, m.dek_wrapped_rk,
   );
 
   if (isOwner) {
@@ -159,24 +170,76 @@ api.post("/auth/register", async (c) => {
   return c.json({ pending: true });
 });
 
+/* ---- sıfır bilgi girişinin ilk adımı (E2EE aşama 3b) ----
+   İstemci paroladan anahtar türetebilmek için ÖNCE bu e-postanın salt'ını bilmeli. Kayıtlı
+   olmayan e-postaya da (gizli anahtarla türetilmiş, her seferinde aynı) sahte bir salt dönülür,
+   yoksa bu uç "bu e-posta kayıtlı mı" sorusunu cevaplardı.
+   Bilinen ve SINIRLI tek sızıntı: henüz v2'ye geçmemiş (legacy) bir hesap "legacy" döner,
+   yani varlığı anlaşılır. Kaçınılmaz — sunucu o hesabın parolasını kontrol edebilmek için
+   istemciye "parolayı gönder" demek zorunda. Küme yalnız KÜÇÜLÜR: yeni kayıt hep v2 doğar ve
+   mevcut her hesap ilk girişinde v2'ye geçer. */
+api.post("/auth/prelogin", async (c) => {
+  if (rateLimited(`prelogin:${clientIp(c)}`, 20, 5 * 60_000)) return c.json({ error: "Çok fazla deneme, biraz sonra tekrar dene" }, 429);
+  const { email } = await c.req.json().catch(() => ({}));
+  const email2 = String(email ?? "").trim().toLowerCase();
+  if (!email2.includes("@")) return c.json({ error: "Geçerli e-posta gir" }, 400);
+  const u = await db.get<{ password_kdf: string; kdf_salt: string | null; kdf_params: string | null }>(
+    "SELECT password_kdf, kdf_salt, kdf_params FROM users WHERE email = ?", email2,
+  );
+  if (u?.password_kdf === "legacy") return c.json({ kdf: "legacy" });
+  if (u?.kdf_salt && u.kdf_params) return c.json({ kdf: "v2", salt: u.kdf_salt, params: JSON.parse(u.kdf_params) });
+  return c.json({ kdf: "v2", salt: await sahteSalt(email2), params: { alg: "PBKDF2-SHA256", iter: 600_000 } });
+});
+
 api.post("/auth/login", async (c) => {
   if (rateLimited(`login:${clientIp(c)}`, 10, 5 * 60_000)) return c.json({ error: "Çok fazla deneme, biraz sonra tekrar dene" }, 429);
-  const { email, password } = await c.req.json().catch(() => ({}));
-  if (!email || !password) return c.json({ error: "E-posta ve parola gerekli" }, 400);
-  const email2 = String(email).trim().toLowerCase();
+  const b = await c.req.json().catch(() => ({}));
+  const email2 = String(b.email ?? "").trim().toLowerCase();
+  const v2 = typeof b.auth_token === "string", legacy = typeof b.password === "string";
+  if (!email2 || (!v2 && !legacy)) return c.json({ error: "E-posta ve parola gerekli" }, 400);
   if (tooManyLoginFails(email2)) return c.json({ error: "Çok fazla başarısız deneme, biraz sonra tekrar dene" }, 429);
-  const user = await db.get<{ id: number; email: string; password_hash: string; email_verified: boolean }>(
-    "SELECT id, email, password_hash, email_verified FROM users WHERE email = ?", email2,
+  const user = await db.get<{ id: number; email: string; password_hash: string; email_verified: boolean; password_kdf: string; dek_wrapped_pw: string | null; kurtarma: boolean }>(
+    "SELECT id, email, password_hash, email_verified, password_kdf, dek_wrapped_pw, dek_wrapped_rk IS NOT NULL AS kurtarma FROM users WHERE email = ?", email2,
   );
-  const ok = await verifyPassword(String(password), user?.password_hash ?? DUMMY_HASH); // kullanıcı yoksa da scrypt ödenir
+  /* Yol ile hesabın türü EŞLEŞMEK ZORUNDA. v2 hesabın parolası sunucuya hiç gelmemeli (gelirse
+     reddedilir, kabul edilseydi eski bir istemci sıfır bilgi garantisini sessizce delerdi);
+     legacy hesap da token'la açılamaz (hash parolanın). Kullanıcı yoksa da scrypt ödenir. */
+  const gizli = v2 ? String(b.auth_token) : String(b.password);
+  const hashOk = await verifyPassword(gizli, user?.password_hash ?? DUMMY_HASH);
+  const ok = !!user && hashOk && user.password_kdf === (v2 ? "v2" : "legacy");
   if (!user || !ok) { recordLoginFail(email2); return c.json({ error: "E-posta veya parola hatalı" }, 401); }
   loginFails.delete(email2);
   // Aktivasyon kapısı (parola doğrulandıktan SONRA → enumerasyon sızmaz). Owner doğrulanmış geldiği için etkilenmez.
   if (!user.email_verified) return c.json({ error: "Hesabın henüz aktive edilmemiş. E-postana gönderilen bağlantıya tıkla." }, 403);
+
+  /* legacy → v2 YÜKSELTMESİ bu isteğin İÇİNDE ve bu bir güvenlik kararı: yükseltme fiilen bir
+     PAROLA DEĞİŞİMİDİR (yeni hash yazılır). Ayrı bir oturumlu uç olsaydı çalınmış bir oturum ona
+     kendi token'ını yazıp hesabı ele geçirebilirdi. Burada parola AYNI istekte az önce doğrulandı.
+     Malzeme eksik/bozuksa giriş yine başarılı, hesap legacy kalır ve bir sonraki girişte tekrar
+     denenir — kullanıcıyı kilitlemek, yükseltmeyi ertelemekten kötüdür. */
+  let yukseltildi = false;
+  let dekPaketi = user.dek_wrapped_pw;
+  if (user.password_kdf === "legacy") {
+    const m = e2eeMalzemeDogrula(b.upgrade);
+    if (typeof m !== "string") {
+      const r = await db.run(
+        `UPDATE users SET password_hash=?, password_kdf='v2', kdf_salt=?, kdf_params=?, dek_wrapped_pw=?, dek_wrapped_rk=?
+          WHERE id=? AND password_kdf='legacy'`,
+        await hashPassword(m.auth_token), m.kdf_salt, m.kdf_params, m.dek_wrapped_pw, m.dek_wrapped_rk, user.id,
+      );
+      yukseltildi = !!r.changes; dekPaketi = m.dek_wrapped_pw;
+      if (yukseltildi) console.log(`[audit] Hesap sıfır bilgi girişine geçti: ${user.email} (id:${user.id})`);
+    } else if (b.upgrade !== undefined) {
+      console.warn(`[auth] yükseltme reddedildi (${m}) — hesap legacy kaldı: (id:${user.id})`);
+    }
+  }
   const { token, expires } = await createSession(user.id);
   setSessionCookie(c, token, expires);
   console.log(`[audit] Kullanıcı giriş yaptı: ${user.email} (id:${user.id})`);
-  return c.json({ user: { id: user.id, email: user.email } });
+  /* `kurtarma`: DEK'in kurtarma koduyla sarılı kopyası var mı. Yoksa istemci uygulamayı
+     açmadan ÖNCE kodu gösterip kaydettirir (aşama 6) — veri şifreli hâle geldiği an
+     parola tek anahtar olmamalı. */
+  return c.json({ user: { id: user.id, email: user.email }, yukseltildi, dek_wrapped_pw: dekPaketi ?? null, kurtarma: !!user.kurtarma });
 });
 
 api.post("/auth/logout", async (c) => {
@@ -214,16 +277,78 @@ api.post("/auth/forgot", async (c) => {
   return c.json({ ok: true });
 });
 
-/* Şifre sıfırla (token ile) — tüketir, parolayı günceller, tüm oturumları düşürür. */
+/* ————— Şifre sıfırlama ve şifreli veri (E2EE aşama 6) —————
+   Sunucu parolayı bilmediği gibi veri anahtarını da bilmiyor: yeni parolayla YENİ bir anahtar
+   yazmak, şifreli veriyi sessizce okunamaz hâle getirirdi. Bu yüzden veri şifreliyse
+   sıfırlamanın yalnız iki yolu var ve ikisi de AÇIKÇA seçilir:
+     mod "kurtarma" — tarayıcı kurtarma koduyla ESKİ anahtarı açar ve yeni parolayla yeniden
+                      sarar; veri aynen kalır, kurtarma paketi değişmez.
+     mod "sil"      — kodu olmayan kullanıcı: tüm veri silinir, hesap boş başlar.
+   Veri şifreli değilse (göç öncesi hesap) eski davranış sürer: yeni anahtar yazılır.
+   E-posta erişimi olan biri kurtarma kodu olmadan VERİYİ OKUYAMAZ — en fazla silebilir; bu,
+   e-postası ele geçmiş bir hesap için şifrelemenin sağlayabileceği en iyi sonuç. */
+async function sifreliVeriVar(uid: number): Promise<boolean> {
+  const u = await db.get<{ m: boolean }>("SELECT e2ee_migrated_at IS NOT NULL AS m FROM users WHERE id=?", uid);
+  if (u?.m) return true;
+  for (const t of Object.keys(ZARF))
+    if (await db.get(`SELECT 1 FROM ${t} WHERE user_id=? AND enc LIKE 'v1:%' LIMIT 1`, uid)) return true;
+  return false;
+}
+
+/* Bağlantı açılınca: hesabın durumu. Kurtarma paketi token sahibine verilir — 160 bitlik
+   kodla sarılı olduğundan kodu bilmeyene bir şey söylemez; kodu bilen de onu tarayıcıda açar. */
+api.post("/auth/reset-bilgi", async (c) => {
+  if (rateLimited(`reset:${clientIp(c)}`, 10, 15 * 60_000)) return c.json({ error: "Çok fazla deneme, biraz sonra tekrar dene" }, 429);
+  const { token } = await c.req.json().catch(() => ({}));
+  const uid = await peekEmailToken(String(token ?? ""), "reset");
+  if (!uid) return c.json({ error: "Bağlantı geçersiz veya süresi dolmuş" }, 400);
+  const u = await db.get<{ rk: string | null }>("SELECT dek_wrapped_rk AS rk FROM users WHERE id=?", uid);
+  return c.json({ sifreli: await sifreliVeriVar(uid), kurtarma_paketi: u?.rk ?? null });
+});
+
+/** Kullanıcının SAHİP OLDUĞU her satır — şema kataloğundan: sonradan eklenen bir kiracı
+    tablosu da kendiliğinden kapsanır ("verimi sil" dendiğinde bir tablo unutulamasın). */
+async function kullaniciTablolari(): Promise<string[]> {
+  const rows = await db.all<{ t: string }>(
+    `SELECT table_name AS t FROM information_schema.columns
+      WHERE table_schema='public' AND column_name='user_id' AND table_name NOT IN ('users','sessions','email_tokens')`);
+  return rows.map((r) => r.t);
+}
+
 api.post("/auth/reset", async (c) => {
   if (rateLimited(`reset:${clientIp(c)}`, 10, 15 * 60_000)) return c.json({ error: "Çok fazla deneme, biraz sonra tekrar dene" }, 429);
-  const { token, password } = await c.req.json().catch(() => ({}));
-  if (!token || typeof password !== "string" || password.length < 8) return c.json({ error: "Parola en az 8 karakter olmalı" }, 400);
-  const userId = await consumeEmailToken(String(token), "reset");
+  const b = await c.req.json().catch(() => ({}));
+  if (!b.token) return c.json({ error: "Bağlantı geçersiz" }, 400);
+  if (typeof b.password === "string") return c.json({ error: "Uygulamanın yeni sürümü gerekli — sayfayı yenile" }, 400);
+  const mod = b.mod === "kurtarma" || b.mod === "sil" ? b.mod : null;
+  const m = e2eeMalzemeDogrula(b);
+  if (typeof m === "string") return c.json({ error: m }, 400);
+  /* Karar token TÜKETİLMEDEN verilir: reddedilen deneme bağlantıyı yakmasın, kullanıcı aynı
+     bağlantıyla doğru yolu seçebilsin. */
+  const peek = await peekEmailToken(String(b.token), "reset");
+  if (!peek) return c.json({ error: "Bağlantı geçersiz veya süresi dolmuş" }, 400);
+  const sifreli = await sifreliVeriVar(peek);
+  if (sifreli && !mod) return c.json({ error: "Verin şifreli: kurtarma kodunla sıfırla ya da veriyi silmeyi onayla", kurtarmaGerekli: true }, 409);
+  if (mod === "kurtarma" && !(await db.get("SELECT 1 FROM users WHERE id=? AND dek_wrapped_rk IS NOT NULL", peek)))
+    return c.json({ error: "Bu hesapta kurtarma kodu yok" }, 409);
+  const userId = await consumeEmailToken(String(b.token), "reset");
   if (!userId) return c.json({ error: "Bağlantı geçersiz veya süresi dolmuş" }, 400);
-  await db.run("UPDATE users SET password_hash = ? WHERE id = ?", await hashPassword(password), userId);
+  const hash = await hashPassword(m.auth_token);
+  await db.tx(async (t) => {
+    if (mod === "kurtarma") {
+      // aynı DEK, yeni parola: kurtarma paketi (aynı DEK'i saran) DEĞİŞMEZ, veri durur
+      await t.run(`UPDATE users SET password_hash=?, password_kdf='v2', kdf_salt=?, kdf_params=?, dek_wrapped_pw=? WHERE id=?`,
+        hash, m.kdf_salt, m.kdf_params, m.dek_wrapped_pw, userId);
+      return;
+    }
+    if (mod === "sil") for (const tablo of await kullaniciTablolari()) await t.run(`DELETE FROM ${tablo} WHERE user_id=?`, userId);
+    /* Yeni DEK: eski kurtarma paketi eski anahtarı sarıyor, artık geçersiz → silinir; ilk
+       girişte kurtarma kodu adımı yeniden çıkar. Göç işareti de sıfırlanır (veri yok ya da düz). */
+    await t.run(`UPDATE users SET password_hash=?, password_kdf='v2', kdf_salt=?, kdf_params=?, dek_wrapped_pw=?, dek_wrapped_rk=NULL, e2ee_migrated_at=NULL WHERE id=?`,
+      hash, m.kdf_salt, m.kdf_params, m.dek_wrapped_pw, userId);
+  });
   await revokeUserSessions(userId); // güvenlik: sıfırlama sonrası eski oturumlar düşer
-  console.log(`[audit] Şifre sıfırlandı: (id:${userId})`);
+  console.log(`[audit] Şifre sıfırlandı (${mod ?? "şifresiz veri"}): (id:${userId})`);
   return c.json({ ok: true });
 });
 
@@ -284,6 +409,20 @@ api.use("*", async (c, next) => {
   await next();
 });
 
+/* DÜZ ZARF KAPISI (E2EE aşama 6). Göçü bitmiş bir kullanıcıdan `p1:` (düz metin zarf)
+   kabul edilmez: tarayıcı artık yalnız şifreli yazar, düz zarf gelmesi ya eski bir PWA
+   paketi ya da boru hattını atlayan bir hata demektir — ikisinde de veriyi SESSİZCE düz
+   yazmak, şifrelemenin tüm iddiasını geri alırdı. Tek tek uçlara serpiştirmek yerine
+   burada, gövdenin METNİNDE aranır: hangi alanda gelirse gelsin yakalanır. */
+api.use("*", async (c, next) => {
+  const m = c.req.method;
+  if (m !== "GET" && m !== "HEAD" && c.get("user").e2ee) {
+    const govde = await c.req.text().catch(() => "");
+    if (govde.includes(`"${ZARF_DUZ}{`)) return c.json({ error: "Şifrelenmemiş veri reddedildi — uygulamayı yenile" }, 400);
+  }
+  await next();
+});
+
 /* ---- tek seferde tüm veri (kullanıcıya scope'lu; prices/price_history/benchmark_history GLOBAL) ----
    Gövdesi data.ts'e taşındı: asistanın okuma araçları da (net varlık, nakit projeksiyonu) aynı
    `AllData`yı ister ve fiyat/ayar birleştirmesinin ikinci bir kopyası olmamalı — bkz. data.ts.
@@ -298,21 +437,18 @@ api.get("/all", async (c) => c.json(await loadAllData(c.get("user").id, { gecmis
 /* ---- generic CRUD ---- */
 type Col = { name: string; required?: boolean; default?: unknown };
 
-/* ---- otomatik talimatın başlangıç günü (kart ödeme talimatı, otomatik düzenli kalem) — Faz 42 ----
-   Cron (materializeDueStatements / materializeDueRecurring) bu günden ÖNCEKİ vadelere dokunmaz;
-   önceden yerinde sabit bir telafi penceresi vardı (ekstre 10 gün, kalem 45 gün). Pencere iki
-   yönden yanlıştı: sunucu (Render uykusu, Neon kotası) pencereden uzun kapalı kalırsa vade bir
-   daha hiç yazılmıyor ve geçmiş vadeli ekstre borçtan düştüğü için bakiye sessizce şişik
-   kalıyordu; öte yandan talimatı YENİ veren kullanıcının pencere içindeki eski vadeleri geriye
-   dönük ödeniyordu. Başlangıç günü ikisini de çözer: talimattan sonraki HER vade yazılır,
-   öncesine dokunulmaz. Damgayı SUNUCU atar çünkü eski ve yeni satırı aynı anda yalnız o görür,
-   ve bütün yazma yolları (form, kart seçicisi, asistan) buradan geçer:
+/* ---- otomatik talimatın başlangıç günü (kart ödeme talimatı, otomatik düzenli kalem) ----
+   Otomatik yazma tarayıcıda (engine/otomatik.ts) bu günden ÖNCEKİ vadelere dokunmaz; eskiden
+   yerinde sabit 10/45 günlük pencere vardı ve uygulama o süre açılmazsa vade bir daha hiç
+   yazılmıyordu. Damgayı SUNUCU atar çünkü eski ve yeni satırı aynı anda yalnız o görür, ve
+   bütün yazma yolları (form, kart seçicisi, asistan) buradan geçer:
    - pasiften aktife geçiş → bugün; aktif kalıyorsa (ör. hesap A→B, ad değişti) → dokunulmaz;
    - pasife geçiş → NULL. FK silinmesiyle pasifleşen satır (hesap/kart silindi, ON DELETE SET
      NULL) eski damgasını taşır ama ESKİ satır pasif göründüğü için yeniden açılışta taze damga
      alır — yoksa aradaki bütün vadeleri geriye dönük öderdi.
    "Bugün" sunucunun takvim günüdür (Render UTC): TSİ 00-03 arası açılan talimat bir önceki
-   günden başlar. Sonucu en fazla o günün vadesini kapsamaktır. */
+   günden başlar. Sonucu en fazla o günün vadesini kapsamaktır; tarayıcı saatine güvenmekten
+   (her istemcinin kendi saati) tutarlı. */
 function talimatDamgasi(eskiAktif: boolean, eskiDamga: string | null | undefined, yeniAktif: boolean): string | null {
   if (!yeniAktif) return null;
   return eskiAktif && eskiDamga ? eskiDamga : todayLocal();
@@ -326,6 +462,7 @@ function crud(route: string, table: string, cols: Col[], talimat?: Talimat) {
     for (const col of cols) if (col.required && (b[col.name] === undefined || b[col.name] === "")) {
       return c.json({ error: `${col.name} zorunlu` }, 400);
     }
+    if (b.enc !== undefined && !zarfGecerli(b.enc)) return c.json({ error: "geçersiz zarf" }, 400);
     const uid = c.get("user").id;
     /* Gövdede HİÇ GEÇMEYEN (undefined) ve kod tarafında varsayılanı olmayan kolon INSERT'e
        yazılmaz — böylece tablonun kendi DEFAULT'u devreye girer. Eskiden açıkça NULL
@@ -348,6 +485,7 @@ function crud(route: string, table: string, cols: Col[], talimat?: Talimat) {
     if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
     const names = cols.map((x) => x.name).filter((n) => b[n] !== undefined);
     if (!names.length) return c.json({ error: "boş" }, 400);
+    if (b.enc !== undefined && !zarfGecerli(b.enc)) return c.json({ error: "geçersiz zarf" }, 400);
     /* Faz 18 — etkilenen satır sayısı kontrol edilir. `WHERE ... AND user_id=?` başkasının (ya da
        silinmiş bir) kaydını zaten değiştirmiyordu, ama uç yine de {ok:true} dönüyordu: arayüz
        "kaydedildi" der, hiçbir şey değişmezdi. Tanım kayıtları Faz 18'de düzenlenebilir olduğundan
@@ -376,22 +514,38 @@ function crud(route: string, table: string, cols: Col[], talimat?: Talimat) {
 
 /* ---- hesap hareket defteri (Faz 15) ----
    Defteri değiştirmenin TEK yolu bu iki yardımcıdır. Değişmez kural DEĞİŞMEDİ — **bakiye =
-   Σ account_entries.amount** (açılış bakiyesi de bir satırdır) — ama Faz 42'den beri bir kolonla
-   eşitlenmiyor, TÜRETİLİYOR: `accounts.balance` kolonu yok, bakiye `accountBalance`/`totalCash`
-   ile defterden çıkar. Kolon, defterin ikinci bir kopyasıydı ve Faz 15'ten beri tek işi bu iki
-   yardımcının onu defterle eşit tutmasıydı; kaldırılınca "defter ile bakiye ayrıştı" diye bir
-   hata sınıfı da kalmadı, çünkü ikinci bir gerçek yok.
+   Σ account_entries.amount** (açılış bakiyesi de bir satırdır) — ama artık bir kolonla
+   eşitlenmiyor, TÜRETİLİYOR (E2EE aşama 1a): sunucu şifreli tutarları toplayamayacağı için
+   `UPDATE accounts SET balance = balance + ?` şifreli dünyada çalışmaz. Bakiye istemcide
+   `accountBalance`/`totalCash` ile defterden çıkar. Yan kazanç: "defter ile bakiye ayrıştı"
+   diye bir hata sınıfı artık yok, çünkü ikinci bir gerçek yok.
    `applyEntry` hareketi yazar; `revertEntries` kaynağın YAZILMIŞ hareketlerini
    okuyup tersini uygular ve satırları siler — eski tutarı yeniden hesaplamaz, bu yüzden kaynak kaydı
    düzenlenmiş/silinmiş olsa da geri alma her zaman tutar. Düzenleme = revert + apply. */
-type EntryMeta = { date: string; kind: "islem" | "portfoy" | "mevduat" | "duzeltme" | "acilis" | "virman"; note: string; source_table?: string; source_id?: number };
-async function applyEntry(t: TxClient, uid: number, accountId: number | null, amount: number, m: EntryMeta): Promise<void> {
-  if (accountId == null || !amount) return; // hesapsız kayıt deftere girmez; 0 tutar defteri kirletmez
+/* ————— TUTARI SUNUCU HESAPLAMAZ (E2EE aşama 1b → 5a) —————
+   Türetilen tutarlar (portföy etkisi, mevduat açılışı, ekstre tutarı, düzenli kalemin o ayki
+   tutarı, mutabakat farkı) İSTEMCİDEN gelir: `apps/web/src/yazim/tutar.ts` bunların tek
+   kopyasıdır ve formlar, asistan, otomatik gerçekleştirme — her yazma oradan geçer.
+   Aşama 1b'de sunucuda YEDEK hesaplar vardı (asistan tutar göndermiyordu); asistanın döngüsü
+   tarayıcıya taşınıp aynı boru hattına bağlanınca (aşama 4–5a) yedekler SİLİNDİ. Şifreli
+   dünyada zaten yapamayacaklardı: qty, price, card_txs.amount sunucuya opak olacak.
+   Aşama 5c'de tutarlar ZARFA girdi: sunucu onları artık görmüyor bile — yalnız istemcinin kurduğu
+   zarfları (kayıt + hareket) yazıyor. */
+
+/* E2EE aşama 5c: hareketin TUTARI ve NOTU zarfta (`enc`) — istemci kurar (yazim/zarf.ts, notlar
+   sunucunun eskiden ürettikleriyle birebir). Sunucu hareketin yalnız yönlendirmesini bilir:
+   hangi hesap, hangi gün, hangi tür, hangi kaynak kayıt (geri alma bununla çalışır).
+   Zarf yoksa hareket yazılmaz — istemci tutarı 0 olan hareketi zaten göndermez. */
+type EntryMeta = { date: string; kind: "islem" | "portfoy" | "mevduat" | "duzeltme" | "acilis" | "virman"; source_table?: string; source_id?: number };
+async function applyEntry(t: TxClient, uid: number, accountId: number | null, enc: string | null, m: EntryMeta): Promise<void> {
+  if (accountId == null || !enc) return; // hesapsız kayıt deftere girmez
   await t.run(
-    "INSERT INTO account_entries (account_id,date,amount,kind,source_table,source_id,note,created_at,user_id) VALUES (?,?,?,?,?,?,?,?,?)",
-    accountId, m.date, amount, m.kind, m.source_table ?? null, m.source_id ?? null, m.note, nowLocal(), uid,
+    "INSERT INTO account_entries (account_id,date,kind,source_table,source_id,enc,created_at,user_id) VALUES (?,?,?,?,?,?,?,?)",
+    accountId, m.date, m.kind, m.source_table ?? null, m.source_id ?? null, enc, nowLocal(), uid,
   );
 }
+/** İstemcinin gönderdiği zarf: yoksa null, biçimi bozuksa false (uç 400 döner). */
+const zarfAl = (v: unknown): string | null | false => (v === undefined || v === null ? null : zarfGecerli(v) ? (v as string) : false);
 async function revertEntries(t: TxClient, uid: number, sourceTable: string, sourceId: number | string): Promise<void> {
   const rows = await t.all<{ id: number }>(
     "SELECT id FROM account_entries WHERE source_table=? AND source_id=? AND user_id=?",
@@ -408,14 +562,13 @@ const ACCOUNT_KINDS = ["banka", "nakit", "araci", "fon"];
 api.post("/accounts", async (c) => {
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
-  if (!b.name) return c.json({ error: "name zorunlu" }, 400);
+  const enc = zarfAl(b.enc), acilis = zarfAl(b.entry_enc);
+  if (!enc || acilis === false) return c.json({ error: "hesap zarfı gerekli (ad)" }, 400);
   const uid = c.get("user").id;
-  const balance = Number(b.balance ?? 0);
-  if (!Number.isFinite(balance)) return c.json({ error: "geçersiz bakiye" }, 400);
   const kind = ACCOUNT_KINDS.includes(b.kind) ? b.kind : "banka";
   const id = await db.tx(async (t) => {
-    const info = await t.run("INSERT INTO accounts (name,kind,user_id) VALUES (?,?,?) RETURNING id", b.name, kind, uid);
-    await applyEntry(t, uid, info.id ?? null, balance, { date: todayLocal(), kind: "acilis", note: "Açılış bakiyesi" });
+    const info = await t.run("INSERT INTO accounts (kind,enc,user_id) VALUES (?,?,?) RETURNING id", kind, enc, uid);
+    await applyEntry(t, uid, info.id ?? null, acilis, { date: todayLocal(), kind: "acilis" });
     return info.id;
   });
   return c.json({ id });
@@ -424,13 +577,17 @@ api.put("/accounts/:id", async (c) => {
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
   const uid = c.get("user").id, id = c.req.param("id");
-  /* `balance` dalı KALDIRILDI (Faz 42): eski bakiyeyi kolondan okuyup fark hesaplıyordu.
-     Kayıp yok — arayüz bu uca hiç bakiye göndermiyordu (yalnız name/kind) ve elle
-     düzeltmenin desteklenen yolu zaten mutabakat; asistanın SKIPPED gerekçesi de bunu söylüyor. */
+  /* `balance` dalı KALDIRILDI (E2EE aşama 1a): eski bakiyeyi kolondan okuyup fark
+     hesaplıyordu, şifreli tutarla yapılamaz. Kayıp yok — arayüz bu uca hiç bakiye
+     göndermiyordu (yalnız name/kind) ve elle düzeltmenin desteklenen yolu zaten
+     mutabakat; asistanın SKIPPED gerekçesi de bunu söylüyor. */
   const found = await db.tx(async (t) => {
     const old = await t.get<{ id: number }>("SELECT id FROM accounts WHERE id=? AND user_id=?", id, uid);
     if (!old) return false;
-    if (b.name !== undefined) await t.run("UPDATE accounts SET name=? WHERE id=? AND user_id=?", b.name, id, uid);
+    if (b.enc !== undefined) {
+      if (!zarfGecerli(b.enc)) return false;
+      await t.run("UPDATE accounts SET enc=? WHERE id=? AND user_id=?", b.enc, id, uid); // ad zarfta
+    }
     if (b.kind !== undefined && ACCOUNT_KINDS.includes(b.kind)) await t.run("UPDATE accounts SET kind=? WHERE id=? AND user_id=?", b.kind, id, uid);
     return true;
   });
@@ -452,29 +609,22 @@ api.delete("/accounts/:id", async (c) => {
 api.post("/accounts/:id/reconcile", async (c) => {
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
-  const real = Number(b.balance);
-  if (!Number.isFinite(real)) return c.json({ error: "geçersiz bakiye" }, 400);
-  /* Kayıtlı bakiye DEFTERDEN toplanır (Faz 42: kolon yok). Fark hep sunucuda hesaplanır,
-     istemciden alınmaz — asistanın `hesap_mutabakat` aracı da bu uca yalnız gerçek bakiyeyi
-     gönderir (tutarı model değil sunucu hesaplar kuralı). */
+  /* Gerçek bakiye hesabın zarfında (`last_recon_balance`), fark düzeltme hareketinin zarfında —
+     ikisini de istemci kurar (gerçek − defterden türeyen bakiye). Sunucu yalnız günü damgalar.
+     Fark 0 ise hareket gelmez ve yazılmaz; damga yine atılır ("doğruladım, tutuyor"). */
+  const enc = zarfAl(b.enc), duzeltme = zarfAl(b.entry_enc);
+  if (!enc || duzeltme === false) return c.json({ error: "mutabakat zarfı gerekli" }, 400);
   const uid = c.get("user").id, id = Number(c.req.param("id"));
   const date = typeof b.date === "string" && b.date ? b.date : todayLocal();
   const res = await db.tx(async (t) => {
-    const acc = await t.get<{ bakiye: number }>(
-      `SELECT COALESCE(SUM(e.amount), 0) AS bakiye
-         FROM accounts a LEFT JOIN account_entries e ON e.account_id = a.id AND e.user_id = a.user_id
-        WHERE a.id = ? AND a.user_id = ? GROUP BY a.id`, id, uid);
+    const acc = await t.get<{ id: number }>("SELECT id FROM accounts WHERE id=? AND user_id=?", id, uid);
     if (!acc) return null;
-    const diff = real - Number(acc.bakiye);
-    await applyEntry(t, uid, id, diff, {
-      date, kind: "duzeltme",
-      note: b.note ? `Mutabakat: ${String(b.note).slice(0, 120)}` : "Mutabakat farkı",
-    });
-    await t.run("UPDATE accounts SET last_recon_date=?, last_recon_balance=? WHERE id=? AND user_id=?", date, real, id, uid);
-    return { diff };
+    await applyEntry(t, uid, id, duzeltme, { date, kind: "duzeltme" });
+    await t.run("UPDATE accounts SET last_recon_date=?, enc=? WHERE id=? AND user_id=?", date, enc, id, uid);
+    return true;
   });
   if (!res) return c.json({ error: "kayıt yok" }, 404);
-  return c.json({ ok: true, diff: res.diff });
+  return c.json({ ok: true });
 });
 
 /* ---- virman (Faz 16) ----
@@ -483,40 +633,34 @@ api.post("/accounts/:id/reconcile", async (c) => {
    yan etkili uçlarla aynı: revertEntries ile YAZILMIŞ bacaklar geri alınır, yenisi uygulanır —
    böylece hesaplar değişse bile geri alma doğru satırları hedefler.
    NOT: başkasına gönderilen para virman değildir (net varlıktan çıkar) — o `transactions`'ta gider. */
-async function validTransfer(c: any): Promise<{ err: string } | { date: string; from: number; to: number; amount: number; note: string | null }> {
+async function validTransfer(c: any): Promise<{ err: string } | { date: string; from: number; to: number; enc: string; cikis: string; giris: string }> {
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return { err: "geçersiz gövde" };
-  const from = Number(b.from_account_id), to = Number(b.to_account_id), amount = Number(b.amount);
+  const from = Number(b.from_account_id), to = Number(b.to_account_id);
   if (!b.date) return { err: "date zorunlu" };
   if (!Number.isInteger(from) || !Number.isInteger(to)) return { err: "hesaplar zorunlu" };
   if (from === to) return { err: "kaynak ve hedef hesap aynı olamaz" };
-  if (!Number.isFinite(amount) || amount <= 0) return { err: "tutar 0'dan büyük olmalı" };
-  return { date: String(b.date), from, to, amount, note: b.note ? String(b.note).slice(0, 200) : null };
+  /* Tutar ve not zarfta; "tutar > 0" denetimi istemcide (yazim/zarf.ts). Sunucu iki bacağın
+     İKİSİNİ de ister — yarım virman (tek bacak) bakiyeyi kaydırırdı. */
+  const enc = zarfAl(b.enc), cikis = zarfAl(b.entry_from_enc), giris = zarfAl(b.entry_to_enc);
+  if (!enc || !cikis || !giris) return { err: "virman zarfları gerekli (kayıt + iki bacak)" };
+  return { date: String(b.date), from, to, enc, cikis, giris };
 }
-/** İki hesabın da bu kullanıcıya ait olduğunu doğrular — aksi halde başkasının hesabına para yazılabilirdi */
+/** Virmanın iki hesabı da bu kullanıcının mı (başkasının hesabına bacak yazılmasın). */
 async function ownsAccounts(t: TxClient, uid: number, ids: number[]): Promise<boolean> {
   const rows = await t.all<{ id: number }>(
     `SELECT id FROM accounts WHERE user_id=? AND id IN (${ids.map(() => "?").join(",")})`, uid, ...ids,
   );
   return rows.length === ids.length;
 }
-/** Virmanın iki bacağını yazar (kaynak −, hedef +); ikisi de aynı transfer'e bağlı olduğundan
-    revertEntries tek çağrıda ikisini birden geri alır. */
+/* Virman: TEK kayıt, İKİ hareket (kaynak −, hedef +). Bacakların tutar ve notunu istemci kurar. */
 async function applyTransfer(
   t: TxClient, uid: number, id: number,
-  v: { date: string; from: number; to: number; amount: number; note: string | null },
-  fromName: string, toName: string,
+  v: { date: string; from: number; to: number; cikis: string; giris: string },
 ): Promise<void> {
   const meta = { date: v.date, kind: "virman" as const, source_table: "transfers", source_id: id };
-  await applyEntry(t, uid, v.from, -v.amount, { ...meta, note: v.note ?? `→ ${toName}` });
-  await applyEntry(t, uid, v.to, v.amount, { ...meta, note: v.note ?? `← ${fromName}` });
-}
-/** Bacak notlarında kullanılan hesap adları ("→ Nakit cüzdan") */
-async function accountNames(t: TxClient, uid: number, ids: number[]): Promise<Map<number, string>> {
-  const rows = await t.all<{ id: number; name: string }>(
-    `SELECT id, name FROM accounts WHERE user_id=? AND id IN (${ids.map(() => "?").join(",")})`, uid, ...ids,
-  );
-  return new Map(rows.map((r) => [r.id, r.name]));
+  await applyEntry(t, uid, v.from, v.cikis, meta);
+  await applyEntry(t, uid, v.to, v.giris, meta);
 }
 api.post("/transfers", async (c) => {
   const v = await validTransfer(c);
@@ -524,12 +668,11 @@ api.post("/transfers", async (c) => {
   const uid = c.get("user").id;
   const res = await db.tx(async (t) => {
     if (!(await ownsAccounts(t, uid, [v.from, v.to]))) return null;
-    const names = await accountNames(t, uid, [v.from, v.to]);
     const info = await t.run(
-      "INSERT INTO transfers (date,from_account_id,to_account_id,amount,note,user_id) VALUES (?,?,?,?,?,?) RETURNING id",
-      v.date, v.from, v.to, v.amount, v.note, uid,
+      "INSERT INTO transfers (date,from_account_id,to_account_id,enc,user_id) VALUES (?,?,?,?,?) RETURNING id",
+      v.date, v.from, v.to, v.enc, uid,
     );
-    await applyTransfer(t, uid, info.id!, v, names.get(v.from) ?? "", names.get(v.to) ?? "");
+    await applyTransfer(t, uid, info.id!, v);
     return info.id;
   });
   if (res == null) return c.json({ error: "hesap bulunamadı" }, 400);
@@ -543,12 +686,11 @@ api.put("/transfers/:id", async (c) => {
     const row = await t.get<{ id: number }>("SELECT id FROM transfers WHERE id=? AND user_id=?", id, uid);
     if (!row || !(await ownsAccounts(t, uid, [v.from, v.to]))) return false;
     await revertEntries(t, uid, "transfers", id); // eski iki bacak birden geri alınır
-    const names = await accountNames(t, uid, [v.from, v.to]);
     await t.run(
-      "UPDATE transfers SET date=?, from_account_id=?, to_account_id=?, amount=?, note=? WHERE id=? AND user_id=?",
-      v.date, v.from, v.to, v.amount, v.note, id, uid,
+      "UPDATE transfers SET date=?, from_account_id=?, to_account_id=?, enc=? WHERE id=? AND user_id=?",
+      v.date, v.from, v.to, v.enc, id, uid,
     );
-    await applyTransfer(t, uid, id, v, names.get(v.from) ?? "", names.get(v.to) ?? "");
+    await applyTransfer(t, uid, id, v);
     return true;
   });
   if (!ok) return c.json({ error: "kayıt yok veya hesap bulunamadı" }, 404);
@@ -567,25 +709,27 @@ api.delete("/transfers/:id", async (c) => {
    Kimlik (recurring) ile tutar (recurring_amounts zaman çizelgesi) ayrı tablolarda yaşadığından
    jenerik crud yetmez: POST iki tabloya atomik yazar (gövde eski şekliyle amount taşır — form
    değişmedi), PUT yalnız kimlik kolonlarını günceller, tutar değişikliği /recurring/:id/amount'tan. */
-const REC_ID_COLS = ["kind", "name", "day", "from_month", "to_month", "account_id", "card_id", "category_id", "auto"] as const;
+/* E2EE aşama 5c: ad zarfta (`enc`); tür, gün, yaşam penceresi ve hedefler düz — takvim onlara bakıyor. */
+const REC_ID_COLS = ["kind", "enc", "day", "from_month", "to_month", "account_id", "card_id", "category_id", "auto"] as const;
 /** Otomatik talimat = `auto` + bir hedef; hedefsiz kalem yalnız tahmindir (bkz. talimatDamgasi). */
 const recAktif = (r: Record<string, any>) => !!r.auto && (r.account_id != null || r.card_id != null);
 api.post("/recurring", async (c) => {
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
-  for (const n of ["kind", "name", "day"]) if (b[n] === undefined || b[n] === "") return c.json({ error: `${n} zorunlu` }, 400);
-  if (!(Number(b.amount) > 0)) return c.json({ error: "amount zorunlu" }, 400);
+  for (const n of ["kind", "day"]) if (b[n] === undefined || b[n] === "") return c.json({ error: `${n} zorunlu` }, 400);
+  // ad kalemin zarfında, ilk tutar zaman çizelgesinin zarfında ("tutar > 0" istemcide denetlenir)
+  if (!zarfGecerli(b.enc) || !zarfGecerli(b.amount_enc)) return c.json({ error: "kalem ve tutar zarfları gerekli" }, 400);
   const uid = c.get("user").id;
   const id = await db.tx(async (t) => {
     const info = await t.run(
       `INSERT INTO recurring (${REC_ID_COLS.join(",")},auto_since,user_id) VALUES (${REC_ID_COLS.map(() => "?").join(",")},?,?) RETURNING id`,
-      b.kind, b.name, b.day, b.from_month ?? null, b.to_month ?? null,
+      b.kind, b.enc, b.day, b.from_month ?? null, b.to_month ?? null,
       b.account_id ?? null, b.card_id ?? null, b.category_id ?? null, b.auto ?? false,
       talimatDamgasi(false, null, recAktif(b)), uid,
     );
     await t.run(
-      "INSERT INTO recurring_amounts (recurring_id, from_month, amount, user_id) VALUES (?,?,?,?)",
-      info.id, REC_AMOUNT_BEGIN, Number(b.amount), uid,
+      "INSERT INTO recurring_amounts (recurring_id, from_month, enc, user_id) VALUES (?,?,?,?)",
+      info.id, REC_AMOUNT_BEGIN, b.amount_enc, uid,
     );
     return info.id;
   });
@@ -596,6 +740,7 @@ api.put("/recurring/:id", async (c) => {
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
   const names = REC_ID_COLS.filter((n) => b[n] !== undefined); // amount bilinçli listede yok → sessizce yok sayılır
   if (!names.length) return c.json({ error: "boş" }, 400);
+  if (b.enc !== undefined && !zarfGecerli(b.enc)) return c.json({ error: "geçersiz zarf" }, 400);
   const id = c.req.param("id"), uid = c.get("user").id;
   const bulundu = await db.tx(async (t) => {
     const eski = await t.get<Record<string, any>>("SELECT * FROM recurring WHERE id=? AND user_id=? FOR UPDATE", id, uid);
@@ -620,16 +765,15 @@ api.post("/recurring/:id/amount", async (c) => {
   const uid = c.get("user").id;
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
-  const amount = Number(b.amount);
-  if (!(amount > 0)) return c.json({ error: "amount > 0 olmalı" }, 400);
+  if (!zarfGecerli(b.enc)) return c.json({ error: "tutar zarfı gerekli" }, 400); // "> 0" istemcide
   const fromMonth = b.from_month ? String(b.from_month) : REC_AMOUNT_BEGIN;
   if (fromMonth !== REC_AMOUNT_BEGIN && !YM_RE.test(fromMonth)) return c.json({ error: "from_month 'YYYY-MM' olmalı" }, 400);
   const r = await db.get("SELECT id FROM recurring WHERE id=? AND user_id=?", c.req.param("id"), uid);
   if (!r) return c.json({ error: "kalem yok" }, 404);
   await db.run(
-    `INSERT INTO recurring_amounts (recurring_id, from_month, amount, user_id) VALUES (?,?,?,?)
-     ON CONFLICT (recurring_id, from_month) DO UPDATE SET amount = excluded.amount`,
-    r.id, fromMonth, amount, uid,
+    `INSERT INTO recurring_amounts (recurring_id, from_month, enc, user_id) VALUES (?,?,?,?)
+     ON CONFLICT (recurring_id, from_month) DO UPDATE SET enc = excluded.enc`,
+    r.id, fromMonth, b.enc, uid,
   );
   return c.json({ ok: true });
 });
@@ -673,15 +817,12 @@ function occurrenceDate(ym: string, day: number): string {
 }
 /** Tek tx içinde, idempotent. Yeni işaretlendiyse true; zaten gerçekleşmişse false döner. */
 async function realizeOccurrence(
-  t: TxClient, uid: number, r: RecurringRow, ym: string, opts?: { account_id?: number | null; category_id?: number | null },
+  t: TxClient, uid: number, r: RecurringRow, ym: string,
+  opts: { account_id?: number | null; category_id?: number | null; kayit_enc: string; entry_enc: string | null },
 ): Promise<boolean> {
-  /* tutar hedef ayın zaman çizelgesinden çözülür — İŞARETLEMEDEN ÖNCE: tutarı olmayan kalem
-     "gerçekleşti ama kayıt yok" durumuna düşmesin */
-  const amt = await t.get<{ amount: number }>(
-    "SELECT amount FROM recurring_amounts WHERE recurring_id=? AND from_month<=? ORDER BY from_month DESC LIMIT 1",
-    r.id, ym,
-  );
-  if (!amt) return false;
+  /* Kaydın kendisini (ad + o ayın işaretli tutarı) İSTEMCİ kurar (yazim/zarf.ts): sunucu eskiden
+     adı kalemden, tutarı zaman çizelgesinden okuyordu — ikisi de artık zarfta. Dal ayrımı
+     (kart mı hesap mı) iki tarafta aynı kuraldır; sunucu yalnız hangi tabloya yazacağını seçer. */
   const mark = await t.run(
     "INSERT INTO recurring_realized (recurring_id, ym, created_at, user_id) VALUES (?,?,?,?) ON CONFLICT (recurring_id, ym) DO NOTHING",
     r.id, ym, nowLocal(), uid,
@@ -693,19 +834,18 @@ async function realizeOccurrence(
        kategorisi tanımlı bir düzenli gider karta düştüğünde kategorisi SESSİZCE kayboluyordu
        (hesaba düşen aynı kalem kategoriyi koruyordu); aynı kalemin iki hedefi farklı davranıyordu. */
     const info = await t.run(
-      "INSERT INTO card_txs (card_id,date,name,amount,installments,category_id,user_id) VALUES (?,?,?,?,?,?,?) RETURNING id",
-      r.card_id, date, r.name, amt.amount, 1, opts?.category_id ?? r.category_id ?? null, uid,
+      "INSERT INTO card_txs (card_id,date,enc,category_id,user_id) VALUES (?,?,?,?,?) RETURNING id",
+      r.card_id, date, opts.kayit_enc, opts.category_id ?? r.category_id ?? null, uid,
     );
     await t.run("UPDATE recurring_realized SET card_tx_id=? WHERE recurring_id=? AND ym=?", info.id, r.id, ym);
   } else {
-    const signed = (r.kind === "income" ? 1 : -1) * amt.amount;
-    const accountId = opts?.account_id ?? r.account_id ?? null;
-    const categoryId = opts?.category_id ?? r.category_id ?? null;
+    const accountId = opts.account_id ?? r.account_id ?? null;
+    const categoryId = opts.category_id ?? r.category_id ?? null;
     const info = await t.run(
-      "INSERT INTO transactions (date,name,amount,category_id,account_id,user_id) VALUES (?,?,?,?,?,?) RETURNING id",
-      date, r.name, signed, categoryId, accountId, uid,
+      "INSERT INTO transactions (date,enc,category_id,account_id,user_id) VALUES (?,?,?,?,?) RETURNING id",
+      date, opts.kayit_enc, categoryId, accountId, uid,
     );
-    await applyEntry(t, uid, accountId, signed, { date, kind: "islem", note: r.name, source_table: "transactions", source_id: info.id });
+    await applyEntry(t, uid, accountId, opts.entry_enc, { date, kind: "islem", source_table: "transactions", source_id: info.id });
     await t.run("UPDATE recurring_realized SET tx_id=? WHERE recurring_id=? AND ym=?", info.id, r.id, ym);
   }
   return true;
@@ -721,8 +861,11 @@ api.post("/recurring/:id/realize", async (c) => {
   if (!recActiveInYm(r, ym)) return c.json({ error: "kalem o ay aktif değil" }, 400);
   const acc = (b as any).account_id != null && (b as any).account_id !== "" ? Number((b as any).account_id) : undefined;
   const cat = (b as any).category_id != null && (b as any).category_id !== "" ? Number((b as any).category_id) : undefined;
-  const created = await db.tx((t) => realizeOccurrence(t, uid, r, ym, { account_id: acc, category_id: cat }));
-  if (created) console.log(`[audit] Düzenli işlem/ödeme gerçekleşti: ${r.name} (ay: ${ym}, id:${uid})`);
+  const kayit = zarfAl((b as any).kayit_enc), hareketZarfi = zarfAl((b as any).entry_enc);
+  if (!kayit || hareketZarfi === false) return c.json({ error: "tutar gerekli (o ay için tanımlı tutar yoksa gerçekleştirilemez)" }, 400);
+  const created = await db.tx((t) => realizeOccurrence(t, uid, r, ym, { account_id: acc, category_id: cat, kayit_enc: kayit, entry_enc: hareketZarfi }));
+  // denetim logu ad/tutar BASMAZ (zarfta; basılsaydı log sızıntı olurdu)
+  if (created) console.log(`[audit] Düzenli kalem gerçekleşti: #${r.id} (ay: ${ym}, id:${uid})`);
   return c.json({ ok: true, already: !created });
 });
 
@@ -743,64 +886,51 @@ api.delete("/recurring/:id/realize/:ym", async (c) => {
   });
   return c.json({ ok: true });
 });
-crud("loans", "loans", [
-  { name: "name", required: true }, { name: "amount", required: true },
-  { name: "first_date", required: true }, { name: "total", required: true },
-]);
-crud("oneoffs", "oneoffs", [
-  { name: "date", required: true }, { name: "name", required: true }, { name: "amount", required: true },
-]);
+/* E2EE aşama 5: ad, tutar ve taksit sayısı ZARFTA (`enc`); sunucu yalnız tarihi görür. */
+crud("loans", "loans", [{ name: "enc", required: true }, { name: "first_date", required: true }]);
+crud("oneoffs", "oneoffs", [{ name: "date", required: true }, { name: "enc", required: true }]); // ad + tutar zarfta
 /* trades: jenerik crud yerine elle — transactions gibi opsiyonel yan etkisi var.
    account_id verilmişse SATIŞ/TEMETTÜ hesabın bakiyesini artırır, ALIŞ azaltır, BEDELSİZ hiç
    dokunmaz; DELETE geri alır. İkisi de atomik (tx).
    Bakiye etkisi YALNIZ TRY işlemde: hesaplar TRY, USD çevrimi güncel FX'e bağlı olurdu ve
    DELETE'te FX değişirse geri-alım tutmaz (kayma) → USD portföy akışı bilinçli olarak elle kalır.
-   qty/price/fee/side'dan deterministik türetildiği için ekle/geri-al her zaman eşitlenir.
-   Faz 21: işaret mantığı engine'deki `cashDelta`'dan gelir — sunucuda ikinci bir kopya tutmak,
-   yeni bir olay türü eklendiğinde ikisinin ayrışması demekti (eski hâli "SATIŞ değilse alış"
-   varsaydığından TEMETTÜ'de parayı hesaptan DÜŞERDİ). */
-const tradeBalanceDelta = (side: TradeSide, qty: number, price: number, fee: number) =>
-  cashDelta({ side, qty, price, fee });
+   Hesap etkisinin tutarı (`entry_amount`) İSTEMCİDEN gelir — engine'in `cashDelta`'sı ile
+   yazim/tutar.ts'te hesaplanır (E2EE aşama 5a). Sunucudaki `tradeBalanceDelta` kopyası silindi;
+   Faz 21'in "iki kopya ayrışır" dersinin son uygulaması. */
 
 const TRADE_SIDES: readonly string[] = ["ALIŞ", "SATIŞ", "TEMETTÜ", "BEDELSİZ"];
-/** Türe özgü kurallar: BEDELSİZ bedelsizdir (fiyat 0 olmalı — aksi hâli sessizce ücretsiz hisse
-    yaratıp maliyeti bozardı); diğerlerinde adet ve fiyat pozitif olmalı. */
-function validateSide(side: string, qty: number, price: number): string | null {
-  if (!Number.isFinite(qty) || qty <= 0) return "adet 0'dan büyük olmalı";
-  if (!Number.isFinite(price) || price < 0) return "geçersiz fiyat";
-  if (side === "BEDELSİZ") return price === 0 ? null : "bedelsizde birim fiyat 0 olmalı";
-  return price > 0 ? null : "birim fiyat 0'dan büyük olmalı";
-}
+/* `validateSide` (adet > 0, bedelsizde fiyat 0) istemciye taşındı: yazim/zarf.ts — adet ve fiyat
+   artık zarfta, sunucu onları göremez (E2EE aşama 5c). Kural silinmedi, yer değiştirdi. */
 
 api.post("/trades", async (c) => {
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
-  for (const f of ["date", "asset_type", "symbol", "side", "qty", "price"])
+  /* Adet, fiyat ve komisyon ZARFTA (E2EE aşama 5c); tür kuralları (adet > 0, bedelsizde fiyat 0)
+     istemcinin boru hattında denetlenir (yazim/zarf.ts) — sunucu artık o sayıları göremez.
+     Sembol, tür ve para birimi düz: fiyat cron'u ve hesap etkisi kuralı onlara bakıyor. */
+  for (const f of ["date", "asset_type", "symbol", "side"])
     if (b[f] === undefined || b[f] === "") return c.json({ error: `${f} zorunlu` }, 400);
+  const enc = zarfAl(b.enc), hareketZarfi = zarfAl(b.entry_enc);
+  if (!enc || hareketZarfi === false) return c.json({ error: "işlem zarfı gerekli (adet/fiyat)" }, 400);
   const uid = c.get("user").id;
   const currency = b.currency ?? "TRY";
-  const qty = Number(b.qty), price = Number(b.price), fee = Number(b.fee ?? 0);
   if (!TRADE_SIDES.includes(b.side)) return c.json({ error: "geçersiz işlem türü" }, 400);
-  const sideErr = validateSide(b.side, qty, price);
-  if (sideErr) return c.json({ error: sideErr }, 400);
   const accountId = b.account_id != null && b.account_id !== "" ? Number(b.account_id) : null;
   const portfolioId = b.portfolio_id != null && b.portfolio_id !== "" ? Number(b.portfolio_id) : null; // null = "Gruplanmamış"
   const affects = currency === "TRY" && accountId != null; // bakiye etkisi yalnız TRY işlemde
+  if (affects && !hareketZarfi) return c.json({ error: "hesap hareketi gerekli (hesaba bağlı TRY işlem)" }, 400);
   if (portfolioId != null && !(await db.get("SELECT id FROM portfolios WHERE id=? AND user_id=?", portfolioId, uid))) {
     return c.json({ error: "geçersiz portföy" }, 400);
   }
   const id = await db.tx(async (t) => {
     const info = await t.run(
-      "INSERT INTO trades (date,asset_type,symbol,side,qty,price,fee,currency,account_id,portfolio_id,user_id) VALUES (?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
-      b.date, b.asset_type, b.symbol, b.side, qty, price, fee, currency, accountId, portfolioId, uid,
+      "INSERT INTO trades (date,asset_type,symbol,side,currency,account_id,portfolio_id,enc,user_id) VALUES (?,?,?,?,?,?,?,?,?) RETURNING id",
+      b.date, b.asset_type, b.symbol, b.side, currency, accountId, portfolioId, enc, uid,
     );
-    if (affects) {
-      await applyEntry(t, uid, accountId, tradeBalanceDelta(b.side, qty, price, fee),
-        { date: b.date, kind: "portfoy", note: `${b.symbol} ${b.side}`, source_table: "trades", source_id: info.id });
-    }
+    if (affects) await applyEntry(t, uid, accountId, hareketZarfi, { date: b.date, kind: "portfoy", source_table: "trades", source_id: info.id });
     return info.id;
   });
-  console.log(`[audit] Borsa işlemi eklendi: ${b.symbol} ${b.side} (adet: ${qty}, fiyat: ${price}, id:${uid})`);
+  console.log(`[audit] Borsa işlemi eklendi: ${b.symbol} ${b.side} (id:${uid})`); // adet/fiyat zarfta — loga basılmaz
   return c.json({ id });
 });
 
@@ -825,39 +955,33 @@ api.put("/trades/:id/portfolio", async (c) => {
 api.put("/trades/:id", async (c) => {
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
-  for (const f of ["date", "asset_type", "symbol", "side", "qty", "price"])
+  for (const f of ["date", "asset_type", "symbol", "side"])
     if (b[f] === undefined || b[f] === "") return c.json({ error: `${f} zorunlu` }, 400);
+  const enc = zarfAl(b.enc), hareketZarfi = zarfAl(b.entry_enc);
+  if (!enc || hareketZarfi === false) return c.json({ error: "işlem zarfı gerekli (adet/fiyat)" }, 400);
   const uid = c.get("user").id;
   const id = c.req.param("id");
   const currency = b.currency ?? "TRY";
-  const qty = Number(b.qty), price = Number(b.price), fee = Number(b.fee ?? 0);
-  if (![qty, price, fee].every(Number.isFinite)) return c.json({ error: "geçersiz sayı" }, 400);
   if (!TRADE_SIDES.includes(b.side)) return c.json({ error: "geçersiz işlem türü" }, 400);
-  const sideErr = validateSide(b.side, qty, price);
-  if (sideErr) return c.json({ error: sideErr }, 400);
   const accountId = b.account_id != null && b.account_id !== "" ? Number(b.account_id) : null;
   const portfolioId = b.portfolio_id != null && b.portfolio_id !== "" ? Number(b.portfolio_id) : null;
   if (portfolioId != null && !(await db.get("SELECT id FROM portfolios WHERE id=? AND user_id=?", portfolioId, uid))) {
     return c.json({ error: "geçersiz portföy" }, 400);
   }
+  if (currency === "TRY" && accountId != null && !hareketZarfi) return c.json({ error: "hesap hareketi gerekli (hesaba bağlı TRY işlem)" }, 400);
   const found = await db.tx(async (t) => {
-    const old = await t.get<{ side: string; qty: number; price: number; fee: number; currency: string; account_id: number | null }>(
-      "SELECT side, qty, price, fee, currency, account_id FROM trades WHERE id=? AND user_id=?", id, uid,
-    );
+    const old = await t.get<{ id: number }>("SELECT id FROM trades WHERE id=? AND user_id=?", id, uid);
     if (!old) return false;
     await revertEntries(t, uid, "trades", id);
     await t.run(
-      "UPDATE trades SET date=?, asset_type=?, symbol=?, side=?, qty=?, price=?, fee=?, currency=?, account_id=?, portfolio_id=? WHERE id=? AND user_id=?",
-      b.date, b.asset_type, b.symbol, b.side, qty, price, fee, currency, accountId, portfolioId, id, uid,
+      "UPDATE trades SET date=?, asset_type=?, symbol=?, side=?, currency=?, account_id=?, portfolio_id=?, enc=? WHERE id=? AND user_id=?",
+      b.date, b.asset_type, b.symbol, b.side, currency, accountId, portfolioId, enc, id, uid,
     );
-    if (currency === "TRY") {
-      await applyEntry(t, uid, accountId, tradeBalanceDelta(b.side, qty, price, fee),
-        { date: b.date, kind: "portfoy", note: `${b.symbol} ${b.side}`, source_table: "trades", source_id: Number(id) });
-    }
+    if (currency === "TRY") await applyEntry(t, uid, accountId, hareketZarfi, { date: b.date, kind: "portfoy", source_table: "trades", source_id: Number(id) });
     return true;
   });
   if (!found) return c.json({ error: "kayıt yok" }, 404);
-  console.log(`[audit] Borsa işlemi düzenlendi: ${b.symbol} ${b.side} (adet: ${qty}, fiyat: ${price}, id:${uid})`);
+  console.log(`[audit] Borsa işlemi düzenlendi: ${b.symbol} ${b.side} (id:${uid})`);
   return c.json({ ok: true });
 });
 api.delete("/trades/:id", async (c) => {
@@ -874,25 +998,22 @@ api.delete("/trades/:id", async (c) => {
 api.post("/deposits", async (c) => {
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
-  for (const f of ["name", "principal", "rate", "open_date", "term_days"])
-    if (b[f] === undefined || b[f] === "") return c.json({ error: `${f} zorunlu` }, 400);
+  if (!b.open_date) return c.json({ error: "open_date zorunlu" }, 400);
   const uid = c.get("user").id;
-  const principal = Number(b.principal), rate = Number(b.rate), termDays = Math.trunc(Number(b.term_days));
-  const withholding = Number(b.withholding ?? 0);
-  if (!(principal > 0) || !(termDays >= 1) || rate < 0 || withholding < 0 || withholding > 100)
-    return c.json({ error: "geçersiz değer" }, 400);
+  /* Ad, anapara, faiz, vade günü ve stopaj ZARFTA; değer kuralları istemcide (yazim/zarf.ts). */
+  const enc = zarfAl(b.enc), hareketZarfi = zarfAl(b.entry_enc);
+  if (!enc || hareketZarfi === false) return c.json({ error: "mevduat zarfı gerekli" }, 400);
   const accountId = b.account_id != null && b.account_id !== "" ? Number(b.account_id) : null;
-  const portfolioId = b.portfolio_id != null && b.portfolio_id !== "" ? Number(b.portfolio_id) : null; // null = "Gruplanmamış"
+  if (accountId != null && !hareketZarfi) return c.json({ error: "hesap hareketi gerekli (hesaba bağlı mevduat)" }, 400);
   const id = await db.tx(async (t) => {
     const info = await t.run(
-      "INSERT INTO deposits (name,principal,rate,open_date,term_days,withholding,account_id,user_id) VALUES (?,?,?,?,?,?,?,?) RETURNING id",
-      b.name, principal, rate, b.open_date, termDays, withholding, accountId, uid,
+      "INSERT INTO deposits (open_date,account_id,enc,user_id) VALUES (?,?,?,?) RETURNING id",
+      b.open_date, accountId, enc, uid,
     );
-    await applyEntry(t, uid, accountId, -principal,
-      { date: b.open_date, kind: "mevduat", note: `${b.name} (vadeli açılış)`, source_table: "deposits", source_id: info.id });
+    await applyEntry(t, uid, accountId, hareketZarfi, { date: b.open_date, kind: "mevduat", source_table: "deposits", source_id: info.id });
     return info.id;
   });
-  console.log(`[audit] Vadeli hesap (mevduat) açıldı: ${b.name} (anapara: ${principal}, id:${uid})`);
+  console.log(`[audit] Vadeli hesap (mevduat) açıldı (id:${uid})`); // ad/anapara zarfta — loga basılmaz
   return c.json({ id });
 });
 
@@ -903,28 +1024,26 @@ api.post("/deposits", async (c) => {
 api.put("/deposits/:id", async (c) => {
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
-  for (const f of ["name", "principal", "rate", "open_date", "term_days"])
-    if (b[f] === undefined || b[f] === "") return c.json({ error: `${f} zorunlu` }, 400);
+  if (!b.open_date) return c.json({ error: "open_date zorunlu" }, 400);
   const uid = c.get("user").id, id = Number(c.req.param("id"));
-  const principal = Number(b.principal), rate = Number(b.rate), termDays = Math.trunc(Number(b.term_days));
-  const withholding = Number(b.withholding ?? 0);
-  if (!(principal > 0) || !(termDays >= 1) || rate < 0 || withholding < 0 || withholding > 100)
-    return c.json({ error: "geçersiz değer" }, 400);
+  /* Ad, anapara, faiz, vade günü ve stopaj ZARFTA; değer kuralları istemcide (yazim/zarf.ts). */
+  const enc = zarfAl(b.enc), hareketZarfi = zarfAl(b.entry_enc);
+  if (!enc || hareketZarfi === false) return c.json({ error: "mevduat zarfı gerekli" }, 400);
   const accountId = b.account_id != null && b.account_id !== "" ? Number(b.account_id) : null;
+  if (accountId != null && !hareketZarfi) return c.json({ error: "hesap hareketi gerekli (hesaba bağlı mevduat)" }, 400);
   const found = await db.tx(async (t) => {
     const old = await t.get<{ id: number }>("SELECT id FROM deposits WHERE id=? AND user_id=?", id, uid);
     if (!old) return false;
     await revertEntries(t, uid, "deposits", id);
     await t.run(
-      "UPDATE deposits SET name=?, principal=?, rate=?, open_date=?, term_days=?, withholding=?, account_id=? WHERE id=? AND user_id=?",
-      b.name, principal, rate, b.open_date, termDays, withholding, accountId, id, uid,
+      "UPDATE deposits SET open_date=?, account_id=?, enc=? WHERE id=? AND user_id=?",
+      b.open_date, accountId, enc, id, uid,
     );
-    await applyEntry(t, uid, accountId, -principal,
-      { date: b.open_date, kind: "mevduat", note: `${b.name} (vadeli açılış)`, source_table: "deposits", source_id: id });
+    await applyEntry(t, uid, accountId, hareketZarfi, { date: b.open_date, kind: "mevduat", source_table: "deposits", source_id: id });
     return true;
   });
   if (!found) return c.json({ error: "kayıt yok" }, 404);
-  console.log(`[audit] Vadeli hesap düzenlendi: ${b.name} (anapara: ${principal}, id:${uid})`);
+  console.log(`[audit] Vadeli hesap düzenlendi (id:${uid})`);
   return c.json({ ok: true });
 });
 
@@ -937,14 +1056,15 @@ api.delete("/deposits/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+/* Kart adı ve limiti ZARFTA; kesim/son ödeme günleri düz — ekstre takvimi onlara bakıyor. */
 crud("cards", "cards", [
-  { name: "name", required: true }, { name: "limit_amount" },
-  { name: "statement_day", required: true }, { name: "due_day", required: true },
-  { name: "pay_account_id" }, // otomatik ödeme talimatı hesabı (ops.)
+  { name: "enc", required: true }, { name: "statement_day", required: true }, { name: "due_day", required: true },
+  { name: "pay_account_id" },
 ], { kolon: "pay_since", aktif: (r) => r.pay_account_id != null });
+/* Harcamanın adı, tutarı ve taksit sayısı ZARFTA. Kategori (FK) düz: toplu kategorilemede yalnız
+   o değişir ve zarfa dokunmadan yazılabilir. */
 crud("cardtxs", "card_txs", [
-  { name: "card_id", required: true }, { name: "date", required: true },
-  { name: "name", required: true }, { name: "amount", required: true }, { name: "installments" },
+  { name: "card_id", required: true }, { name: "date", required: true }, { name: "enc", required: true },
   { name: "category_id" }, // Faz 39 (ops.) — kategorisiz kart harcaması hâlâ geçerli bir kayıt
 ]);
 
@@ -959,20 +1079,26 @@ const DUE_RE = /^\d{4}-\d{2}-\d{2}$/;
 /** Tek tx içinde idempotent ekstre ödemesi (elle "Ödedim" + otomatik talimat ortak yazıcısı).
     Yeni ödendiyse true; (card, due) zaten işaretliyse false döner. */
 async function payStatementTx(
-  t: TxClient, uid: number, card: { id: number; name: string }, dueK: string, amount: number,
-  accountId: number | null, categoryId: number | null,
+  t: TxClient, uid: number, card: { id: number }, dueK: string, kayitEnc: string, hareketEnc: string | null,
+  accountId: number | null, categoryId: number | null, date?: string,
 ): Promise<boolean> {
+  /* "X ekstresi" adlı gider kaydını ve hareketini İSTEMCİ kurar (kart adı ve tutar zarfta). */
+  /* Kayıt tarihi: elle ödemede BUGÜN (kullanıcı şimdi ödedi), ödeme talimatında VADE GÜNÜ.
+     Ayrım E2EE aşama 2'de gerekti: otomatik ödeme artık uygulama açılışında yazılıyor, yani
+     günler sonra da yazılabilir — todayLocal() kullansaydı talimatla ödenen bir ekstre
+     bankanın çektiği günde değil, uygulamayı açtığın günde görünürdü. Vade günü zaten
+     doğrusu: talimat o gün işler. */
+  const tarih = date ?? todayLocal();
   const mark = await t.run(
     "INSERT INTO statement_payments (card_id, due, created_at, user_id) VALUES (?,?,?,?) ON CONFLICT (card_id, due) DO NOTHING",
     card.id, dueK, nowLocal(), uid,
   );
   if (!mark.changes) return false;
   const info = await t.run(
-    "INSERT INTO transactions (date,name,amount,category_id,account_id,user_id) VALUES (?,?,?,?,?,?) RETURNING id",
-    todayLocal(), `${card.name} ekstresi`, -amount, categoryId, accountId, uid,
+    "INSERT INTO transactions (date,enc,category_id,account_id,user_id) VALUES (?,?,?,?,?) RETURNING id",
+    tarih, kayitEnc, categoryId, accountId, uid,
   );
-  await applyEntry(t, uid, accountId, -amount,
-    { date: todayLocal(), kind: "islem", note: `${card.name} ekstresi`, source_table: "transactions", source_id: info.id });
+  await applyEntry(t, uid, accountId, hareketEnc, { date: tarih, kind: "islem", source_table: "transactions", source_id: info.id });
   await t.run("UPDATE statement_payments SET tx_id=? WHERE card_id=? AND due=?", info.id, card.id, dueK);
   return true;
 }
@@ -982,16 +1108,19 @@ api.post("/cards/:id/pay-statement", async (c) => {
   const b = await c.req.json().catch(() => ({}));
   const due = String((b as any).due ?? "");
   if (!DUE_RE.test(due)) return c.json({ error: "due 'YYYY-MM-DD' olmalı" }, 400);
-  const card = await db.get<Card>("SELECT * FROM cards WHERE id=? AND user_id=?", c.req.param("id"), uid);
+  const card = await db.get<{ id: number }>("SELECT id FROM cards WHERE id=? AND user_id=?", c.req.param("id"), uid);
   if (!card) return c.json({ error: "kart yok" }, 404);
-  const txs = await db.all<CardTx>("SELECT * FROM card_txs WHERE card_id=? AND user_id=?", card.id, uid);
-  const amount = statementAmount(card, txs, due);
-  if (!(amount > 0)) return c.json({ error: "bu tarihte ekstre yok" }, 400);
+  /* Ekstre tutarı (statementAmount) ve "X ekstresi" kaydı İSTEMCİDE kurulur (yazim/tutar.ts +
+     zarf.ts); "bu tarihte ekstre yok" denetimi de orada. Faz 8.2 tutarı bilerek sunucuya almıştı
+     ("istemciden gelen tutara güvenilmez") — o gerekçe sıfır bilgi modelinde düşüyor. */
+  const kayit = zarfAl((b as any).kayit_enc), hareketZarfi = zarfAl((b as any).entry_enc);
+  if (!kayit || hareketZarfi === false) return c.json({ error: "ekstre kaydı zarfı gerekli" }, 400);
   const accountId = (b as any).account_id != null && (b as any).account_id !== "" ? Number((b as any).account_id) : null;
   const categoryId = (b as any).category_id != null && (b as any).category_id !== "" ? Number((b as any).category_id) : null;
-  const created = await db.tx((t) => payStatementTx(t, uid, card, due, amount, accountId, categoryId));
-  if (created) console.log(`[audit] Kredi kartı ekstresi ödendi: ${card.name} (vade: ${due}, tutar: ${amount}, id:${uid})`);
-  return c.json({ ok: true, already: !created, amount });
+  const tarih = typeof (b as any).date === "string" && DUE_RE.test((b as any).date) ? (b as any).date : undefined;
+  const created = await db.tx((t) => payStatementTx(t, uid, card, due, kayit, hareketZarfi, accountId, categoryId, tarih));
+  if (created) console.log(`[audit] Kredi kartı ekstresi ödendi: kart #${card.id} (vade: ${due}, id:${uid})`);
+  return c.json({ ok: true, already: !created });
 });
 
 api.delete("/cards/:id/pay-statement/:due", async (c) => {
@@ -1012,11 +1141,12 @@ api.delete("/cards/:id/pay-statement/:due", async (c) => {
 });
 /* Faz 11 — portföy grupları (tanım tablosu; jenerik crud yeterli, yan etkisi yok).
    Silinince trades.portfolio_id ON DELETE SET NULL ile "Gruplanmamış"a düşer, işlem kaybolmaz. */
-crud("portfolios", "portfolios", [{ name: "name", required: true }, { name: "note" }]);
+crud("portfolios", "portfolios", [{ name: "enc", required: true }]); // ad + not zarfta
 
-crud("categories", "categories", [
-  { name: "name", required: true }, { name: "kind", required: true }, { name: "color" },
-]);
+/* Kategori ADI zarfta. Sonuç: aynı adlı iki kategoriyi sunucu artık AYIRT EDEMEZ (eski
+   UNIQUE (user_id, name) kısıtı adla birlikte düştü) — denetim istemcide (Tanımlar,
+   KategoriAlani). Tür ve renk düz: filtre ve seçici onlara bakıyor, kişisel bir şey söylemiyor. */
+crud("categories", "categories", [{ name: "enc", required: true }, { name: "kind", required: true }, { name: "color" }]);
 
 /* ---- gerçekleşen işlemler (transactions): hesaba bağlıysa bakiyeyi de oynatır ----
    Jenerik crud() yerine özel rotalar: amount işaretlidir (gider −, gelir +);
@@ -1025,20 +1155,20 @@ crud("categories", "categories", [
 api.post("/transactions", async (c) => {
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
-  for (const f of ["date", "name", "amount"]) if (b[f] === undefined || b[f] === "") {
-    return c.json({ error: `${f} zorunlu` }, 400);
-  }
+  if (!b.date) return c.json({ error: "date zorunlu" }, 400);
+  /* Ad ve tutar ZARFTA; hesaba bağlıysa hareketi (not = işlemin adı) istemci kurar. */
+  const enc = zarfAl(b.enc), hareketZarfi = zarfAl(b.entry_enc);
+  if (!enc || hareketZarfi === false) return c.json({ error: "işlem zarfı gerekli (ad + tutar)" }, 400);
   const uid = c.get("user").id;
   const id = await db.tx(async (t) => {
     const info = await t.run(
-      "INSERT INTO transactions (date,name,amount,category_id,account_id,user_id) VALUES (?,?,?,?,?,?) RETURNING id",
-      b.date, b.name, b.amount, b.category_id ?? null, b.account_id ?? null, uid,
+      "INSERT INTO transactions (date,enc,category_id,account_id,user_id) VALUES (?,?,?,?,?) RETURNING id",
+      b.date, enc, b.category_id ?? null, b.account_id ?? null, uid,
     );
-    await applyEntry(t, uid, b.account_id ?? null, Number(b.amount),
-      { date: b.date, kind: "islem", note: b.name, source_table: "transactions", source_id: info.id });
+    await applyEntry(t, uid, b.account_id ?? null, hareketZarfi, { date: b.date, kind: "islem", source_table: "transactions", source_id: info.id });
     return info.id;
   });
-  console.log(`[audit] İşlem/Transfer eklendi: ${b.name} (tutar: ${b.amount}, id:${uid})`);
+  console.log(`[audit] İşlem eklendi (id:${uid})`); // ad/tutar zarfta — eskiden loga açık basılıyordu
   return c.json({ id });
 });
 /* Toplu içe aktarma (ekstre yapıştırma): tek istekte N gerçekleşen kayıt, tek transaction içinde.
@@ -1054,8 +1184,8 @@ api.post("/transactions/bulk", async (c) => {
   const uid = c.get("user").id;
   for (const r of rows) {
     if (!r || typeof r !== "object") return c.json({ error: "geçersiz satır" }, 400);
-    if (!r.date || !r.name || typeof r.amount !== "number" || !Number.isFinite(r.amount)) {
-      return c.json({ error: "her satırda tarih, ad ve sayısal tutar zorunlu" }, 400);
+    if (!r.date || !zarfGecerli(r.enc) || zarfAl(r.entry_enc) === false) {
+      return c.json({ error: "her satırda tarih ve işlem zarfı zorunlu" }, 400);
     }
   }
   const own = async (table: string, ids: number[]) => {
@@ -1072,11 +1202,10 @@ api.post("/transactions/bulk", async (c) => {
   await db.tx(async (t) => {
     for (const r of rows) {
       const info = await t.run(
-        "INSERT INTO transactions (date,name,amount,category_id,account_id,user_id) VALUES (?,?,?,?,?,?) RETURNING id",
-        r.date, r.name, r.amount, r.category_id ?? null, r.account_id ?? null, uid,
+        "INSERT INTO transactions (date,enc,category_id,account_id,user_id) VALUES (?,?,?,?,?) RETURNING id",
+        r.date, r.enc, r.category_id ?? null, r.account_id ?? null, uid,
       );
-      await applyEntry(t, uid, r.account_id ?? null, r.amount,
-        { date: r.date, kind: "islem", note: r.name, source_table: "transactions", source_id: info.id });
+      await applyEntry(t, uid, r.account_id ?? null, zarfAl(r.entry_enc) || null, { date: r.date, kind: "islem", source_table: "transactions", source_id: info.id });
     }
   });
   console.log(`[audit] Toplu içe aktarma: ${rows.length} kayıt (id:${uid})`);
@@ -1089,31 +1218,26 @@ api.post("/transactions/bulk", async (c) => {
 api.put("/transactions/:id", async (c) => {
   const b = await c.req.json().catch(() => null);
   if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
-  for (const f of ["date", "name", "amount"]) if (b[f] === undefined || b[f] === "") {
-    return c.json({ error: `${f} zorunlu` }, 400);
-  }
-  const amount = Number(b.amount);
-  if (!Number.isFinite(amount)) return c.json({ error: "geçersiz tutar" }, 400);
+  if (!b.date) return c.json({ error: "date zorunlu" }, 400);
+  const enc = zarfAl(b.enc), hareketZarfi = zarfAl(b.entry_enc);
+  if (!enc || hareketZarfi === false) return c.json({ error: "işlem zarfı gerekli (ad + tutar)" }, 400);
   const uid = c.get("user").id;
   const id = c.req.param("id");
   const accountId = b.account_id != null && b.account_id !== "" ? Number(b.account_id) : null;
   const categoryId = b.category_id != null && b.category_id !== "" ? Number(b.category_id) : null;
   const found = await db.tx(async (t) => {
-    const old = await t.get<{ amount: number; account_id: number | null }>(
-      "SELECT amount, account_id FROM transactions WHERE id=? AND user_id=?", id, uid,
-    );
+    const old = await t.get<{ id: number }>("SELECT id FROM transactions WHERE id=? AND user_id=?", id, uid);
     if (!old) return false;
     await revertEntries(t, uid, "transactions", id);
     await t.run(
-      "UPDATE transactions SET date=?, name=?, amount=?, category_id=?, account_id=? WHERE id=? AND user_id=?",
-      b.date, b.name, amount, categoryId, accountId, id, uid,
+      "UPDATE transactions SET date=?, enc=?, category_id=?, account_id=? WHERE id=? AND user_id=?",
+      b.date, enc, categoryId, accountId, id, uid,
     );
-    await applyEntry(t, uid, accountId, amount,
-      { date: b.date, kind: "islem", note: b.name, source_table: "transactions", source_id: Number(id) });
+    await applyEntry(t, uid, accountId, hareketZarfi, { date: b.date, kind: "islem", source_table: "transactions", source_id: Number(id) });
     return true;
   });
   if (!found) return c.json({ error: "kayıt yok" }, 404);
-  console.log(`[audit] İşlem düzenlendi: ${b.name} (tutar: ${amount}, id:${uid})`);
+  console.log(`[audit] İşlem düzenlendi (id:${uid})`);
   return c.json({ ok: true });
 });
 api.delete("/transactions/:id", async (c) => {
@@ -1191,7 +1315,7 @@ api.get("/export", async (c) => {
     await Promise.all([
       db.all("SELECT * FROM accounts WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM recurring WHERE user_id=? ORDER BY id", uid),
-      db.all("SELECT recurring_id, from_month, amount FROM recurring_amounts WHERE user_id=? ORDER BY recurring_id, from_month", uid),
+      db.all("SELECT recurring_id, from_month, enc FROM recurring_amounts WHERE user_id=? ORDER BY recurring_id, from_month", uid),
       db.all("SELECT * FROM loans WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM oneoffs WHERE user_id=? ORDER BY id", uid),
       db.all("SELECT * FROM trades WHERE user_id=? ORDER BY id", uid),
@@ -1224,36 +1348,137 @@ api.get("/export", async (c) => {
 });
 
 /* ---- KVKK: hesabı ve tüm verisini sil (parola onaylı; ON DELETE CASCADE ile tenant verisi + oturumlar) ---- */
+/* ================= E2EE aşama 6: tarayıcıda şifreleme göçü =================
+   Aşama 5'in göçü veriyi SUNUCUDA düz metin zarflara (`p1:`) topladı; şifreli zarfa (`v1:`)
+   çevirmeyi sunucu YAPAMAZ — anahtar yok. Kullanıcı giriş yapınca tarayıcı düz zarfları
+   çeker, şifreler, geri yazar; hepsi bitince `tamam` der ve düz zarf kapısı kapanır.
+   Uçların hiçbiri içerik görmez: sunucu yalnız "hangi satır hâlâ düz" sorusunu cevaplar ve
+   şifreli paketi yerine koyar. */
+const GOC_TABLOLARI = Object.keys(ZARF) as ZarfliTablo[];
+const gocAnahtari = (t: ZarfliTablo): string[] =>
+  t === "recurring_amounts" ? ["recurring_id", "from_month"] : t === "ai_plans" ? ["plan_id"] : ["id"];
+const GOC_SAYFA = 400;
+
+/* Kurtarma paketi YALNIZ YOKSA yazılır. Değiştirmek (kodu yenilemek) oturumu çalınmış
+   birinin gerçek kodu geçersiz kılmasına izin verirdi — o ayrı, parola onaylı bir akış olur. */
+api.post("/e2ee/kurtarma", async (c) => {
+  const uid = c.get("user").id;
+  const { dek_wrapped_rk } = await c.req.json().catch(() => ({}));
+  if (typeof dek_wrapped_rk !== "string" || !PAKET.test(dek_wrapped_rk)) return c.json({ error: "geçersiz kurtarma paketi" }, 400);
+  const r = await db.run("UPDATE users SET dek_wrapped_rk=? WHERE id=? AND dek_wrapped_rk IS NULL", dek_wrapped_rk, uid);
+  if (!r.changes) return c.json({ error: "kurtarma kodu zaten kayıtlı" }, 409);
+  console.log(`[audit] Kurtarma kodu kaydedildi: (id:${uid})`);
+  return c.json({ ok: true });
+});
+
+api.get("/e2ee/bekleyen", async (c) => {
+  const uid = c.get("user").id;
+  const satirlar: { tablo: ZarfliTablo; anahtar: Record<string, unknown>; enc: string }[] = [];
+  for (const t of GOC_TABLOLARI) {
+    if (satirlar.length >= GOC_SAYFA) break;
+    const k = gocAnahtari(t);
+    const rows = await db.all<Record<string, unknown>>(
+      `SELECT ${k.join(", ")}, enc FROM ${t} WHERE user_id=? AND enc LIKE 'p1:%' LIMIT ?`, uid, GOC_SAYFA - satirlar.length);
+    for (const r of rows) satirlar.push({ tablo: t, anahtar: Object.fromEntries(k.map((x) => [x, r[x]])), enc: String(r.enc) });
+  }
+  return c.json({ tamam: c.get("user").e2ee, satirlar });
+});
+
+/* Şifreli paketi yerine koyar. Koşul `enc LIKE 'p1:%'`: arada aynı satır (başka sekmeden)
+   zaten şifreli yazıldıysa ÜZERİNE YAZILMAZ — o yazım daha yenidir. */
+api.put("/e2ee/satirlar", async (c) => {
+  const uid = c.get("user").id;
+  const b = await c.req.json().catch(() => null);
+  const satirlar = b?.satirlar;
+  if (!Array.isArray(satirlar) || !satirlar.length || satirlar.length > GOC_SAYFA) return c.json({ error: "geçersiz istek" }, 400);
+  for (const x of satirlar) {
+    if (!GOC_TABLOLARI.includes(x?.tablo)) return c.json({ error: "bilinmeyen tablo" }, 400);
+    if (typeof x.enc !== "string" || !x.enc.startsWith("v1:") || !zarfGecerli(x.enc, 64_000)) return c.json({ error: "şifreli zarf gerekli" }, 400);
+    if (!x.anahtar || typeof x.anahtar !== "object" || gocAnahtari(x.tablo).some((k) => x.anahtar[k] == null)) return c.json({ error: "satır anahtarı eksik" }, 400);
+  }
+  let guncellenen = 0;
+  await db.tx(async (t) => {
+    for (const x of satirlar as { tablo: ZarfliTablo; anahtar: Record<string, unknown>; enc: string }[]) {
+      const k = gocAnahtari(x.tablo);
+      const r = await t.run(
+        `UPDATE ${x.tablo} SET enc=? WHERE user_id=? AND enc LIKE 'p1:%' AND ${k.map((c) => `${c}=?`).join(" AND ")}`,
+        x.enc, uid, ...k.map((c) => x.anahtar[c]));
+      guncellenen += r.changes;
+    }
+  });
+  return c.json({ guncellenen });
+});
+
+/* Göç bitti. Sunucu İSTEMCİYE GÜVENMEZ: düz zarf gerçekten kalmadığını kendisi sayar.
+   Kurtarma paketi yoksa da bitmez — şifreli veri tek anahtara (parolaya) bağlı kalmamalı. */
+api.post("/e2ee/tamam", async (c) => {
+  const uid = c.get("user").id;
+  const u = await db.get<{ rk: boolean }>("SELECT dek_wrapped_rk IS NOT NULL AS rk FROM users WHERE id=?", uid);
+  if (!u?.rk) return c.json({ error: "önce kurtarma kodu kaydedilmeli" }, 409);
+  let kalan = 0;
+  for (const t of GOC_TABLOLARI)
+    kalan += (await db.get<{ n: number }>(`SELECT count(*)::int AS n FROM ${t} WHERE user_id=? AND enc LIKE 'p1:%'`, uid))!.n;
+  if (kalan) return c.json({ error: `${kalan} satır hâlâ şifrelenmemiş`, kalan }, 409);
+  await db.run("UPDATE users SET e2ee_migrated_at=? WHERE id=? AND e2ee_migrated_at IS NULL", nowLocal(), uid);
+  console.log(`[audit] Veri tamamen şifreli (göç bitti): (id:${uid})`);
+  return c.json({ ok: true });
+});
+
+/* ————— Parola değişimi (E2EE aşama 6) —————
+   Veri YENİDEN ŞİFRELENMEZ: DEK aynı kalır, yalnız yeni parolanın KEK'iyle yeniden sarılır
+   (anahtar zincirinin ucuz olduğu tek yer). İki adım, çünkü yeniden sarmayı tarayıcı yapar:
+   (1) sarılı paketi al, (2) yeni malzemeyi yaz. Paket OTURUMA değil ESKİ PAROLANIN KANITINA
+   verilir: çalınmış bir oturum onu alıp çevrimdışı parola denemesine başlayamasın. */
+const eskiParolaDogru = async (uid: number, token: unknown): Promise<boolean> => {
+  const u = await db.get<{ password_hash: string; password_kdf: string }>("SELECT password_hash, password_kdf FROM users WHERE id=?", uid);
+  return !!u && u.password_kdf === "v2" && typeof token === "string" && (await verifyPassword(token, u.password_hash));
+};
+api.post("/account/parola-paket", async (c) => {
+  const uid = c.get("user").id;
+  if (rateLimited(`parola:${uid}`, 10, 15 * 60_000)) return c.json({ error: "Çok fazla deneme, biraz sonra tekrar dene" }, 429);
+  const { auth_token } = await c.req.json().catch(() => ({}));
+  if (!(await eskiParolaDogru(uid, auth_token))) return c.json({ error: "Mevcut parola hatalı" }, 401);
+  const u = await db.get<{ p: string | null }>("SELECT dek_wrapped_pw AS p FROM users WHERE id=?", uid);
+  return c.json({ dek_wrapped_pw: u?.p ?? null });
+});
+api.post("/account/parola", async (c) => {
+  const uid = c.get("user").id;
+  if (rateLimited(`parola:${uid}`, 10, 15 * 60_000)) return c.json({ error: "Çok fazla deneme, biraz sonra tekrar dene" }, 429);
+  const b = await c.req.json().catch(() => ({}));
+  if (!(await eskiParolaDogru(uid, b.eski_auth_token))) return c.json({ error: "Mevcut parola hatalı" }, 401);
+  const m = e2eeMalzemeDogrula(b);
+  if (typeof m === "string") return c.json({ error: m }, 400);
+  // kurtarma paketi DEĞİŞMEZ (aynı DEK'i sarıyor, parolaya bağlı değil)
+  await db.run("UPDATE users SET password_hash=?, kdf_salt=?, kdf_params=?, dek_wrapped_pw=? WHERE id=?",
+    await hashPassword(m.auth_token), m.kdf_salt, m.kdf_params, m.dek_wrapped_pw, uid);
+  /* Diğer cihazların oturumları düşer (eski parolayı bilen biri oturum açmış olabilir — parola
+     değiştirmenin en yaygın sebebi bu); bu cihaz yeni bir oturumla devam eder. */
+  await revokeUserSessions(uid);
+  const { token, expires } = await createSession(uid);
+  setSessionCookie(c, token, expires);
+  console.log(`[audit] Parola değiştirildi: (id:${uid})`);
+  return c.json({ ok: true });
+});
+
 api.post("/account/delete", async (c) => {
   const uid = c.get("user").id;
-  const { password } = await c.req.json().catch(() => ({}));
-  const u = await db.get<{ password_hash: string }>("SELECT password_hash FROM users WHERE id=?", uid);
-  if (!u || !(await verifyPassword(password ?? "", u.password_hash))) return c.json({ error: "Parola hatalı" }, 401);
+  const { password, auth_token } = await c.req.json().catch(() => ({}));
+  const u = await db.get<{ password_hash: string; password_kdf: string }>("SELECT password_hash, password_kdf FROM users WHERE id=?", uid);
+  // v2 hesapta parola yerine auth_token doğrulanır (parola sunucuya gelmez); yol hesap türüyle eşleşmeli.
+  const gizli = u?.password_kdf === "v2" ? auth_token : password;
+  if (!u || typeof gizli !== "string" || !(await verifyPassword(gizli, u.password_hash))) return c.json({ error: "Parola hatalı" }, 401);
   await db.run("DELETE FROM users WHERE id=?", uid); // cascade: tüm veri + sessions + user_settings
   deleteCookie(c, SESSION_COOKIE, { path: "/" });
   console.log(`[audit] Hesap kalıcı olarak silindi (KVKK Delete): (id:${uid})`);
   return c.json({ ok: true });
 });
 
-/* ---- AI asistan (Faz 22) ----
-   Asistanın onayladığın işlemleri "iç istek" olarak aynı uygulamaya gönderilir:
-   kullanıcının kendi oturum çerezi taşınır (guard yeniden doğrular → tenant-scope,
-   doğrulama ve bakiye/defter yan etkileri ucun kendi kodundan gelir; asistana özel
-   bir yazma yolu YOKTUR). İstemcinin IP'si de taşınır ki iç istekler kullanıcının
-   kendi rate-limit bütçesinden düşsün, ortak "local" kovasından değil. */
-const invoke: Invoke = async (c, method, path, body) => {
-  const res = await app.request(`/api${path}`, {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-      cookie: c.req.header("cookie") ?? "",
-      "x-forwarded-for": clientIp(c),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  return { status: res.status, data: await res.json().catch(() => ({})) };
-};
-mountAi(api, { invoke, rateLimited });
+/* ---- AI asistan (Faz 22; E2EE aşama 4'te sunucu = röle + depo) ----
+   Eskiden onaylanan işlemler burada "iç istek" olarak (`app.request`, kullanıcının çerezi
+   taşınarak) aynı uygulamaya gönderiliyordu. O yol aşama 4e'de SİLİNDİ: ajan döngüsü artık
+   tarayıcıda koşuyor ve yazma işlemleri normal API uçlarına kullanıcının kendi oturumuyla,
+   doğrudan gidiyor. Asistana özel bir yazma yolu diye bir şey kalmadı. */
+mountAi(api, { rateLimited });
 
 app.route("/api", api);
 
@@ -1305,76 +1530,28 @@ app.get("/app", serveApp);
 app.use("/*", serveStatic({ root: "../web/dist" }));
 app.get("*", serveApp);
 
-/* ---- otonom gerçekleştirme: auto=true + hedefli düzenli kalemleri günü gelince gerçek kayda çevir ----
-   Geriye dönük sınır talimatın başladığı gündür (`auto_since`, bkz. talimatDamgasi — Faz 42):
-   o günden bugüne günü gelmiş HER occurrence yazılır, öncesine dokunulmaz; damgasız satıra hiç
-   dokunulmaz. Önceden sabit 45 günlük pencereydi — sunucu daha uzun kapalı kalırsa kaçan ay bir
-   daha yazılmıyordu. recurring_realized PK'si ile idempotent; zaten yazılmış aylar önden tek
-   sorguyla elenir ki her tur talimatın bütün geçmişini yeniden denemesin. */
-async function materializeDueRecurring(): Promise<void> {
-  const today = todayLocal();
-  const ymCur = today.slice(0, 7);
-  const sonrakiAy = (ym: string) => { const [y, m] = ym.split("-").map(Number); return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`; };
-  const rows = await db.all<RecurringRow & { user_id: number; auto_since: string }>(
-    "SELECT * FROM recurring WHERE auto = true AND (account_id IS NOT NULL OR card_id IS NOT NULL) AND auto_since IS NOT NULL",
-  );
-  if (!rows.length) return;
-  const yazilmis = new Set((await db.all<{ recurring_id: number; ym: string }>(
-    "SELECT recurring_id, ym FROM recurring_realized WHERE recurring_id = ANY(?)", rows.map((r) => r.id),
-  )).map((x) => `${x.recurring_id}:${x.ym}`));
-  for (const r of rows) {
-    for (let ym = r.auto_since.slice(0, 7); ym <= ymCur; ym = sonrakiAy(ym)) {
-      if (yazilmis.has(`${r.id}:${ym}`) || !recActiveInYm(r, ym)) continue;
-      const date = occurrenceDate(ym, r.day);
-      if (date > today || date < r.auto_since) continue; // günü gelmemiş / talimattan önce
-      await db.tx((t) => realizeOccurrence(t, r.user_id, r, ym)).catch((e) => console.error("[recurring] auto gerçekleştirme hatası:", e));
-    }
-  }
-}
+/* Otomatik gerçekleştirme (auto düzenli kalemler + ekstre ödeme talimatı) BURADAN KALKTI
+   (E2EE aşama 2). İkisi de tutarı OKUMAK zorundaydı (`recurring_amounts.amount`,
+   `card_txs.amount`) ve şifreli dünyada yapamayacakları tek şey bu.
 
-/* ---- otomatik ekstre ödeme talimatı: pay_account_id tanımlı kartların vadesi gelen ekstrelerini öde ----
-   Banka talimatı gibi: son ödeme günü geldiğinde ödenmemiş ekstre kartın hesabından ödenir. Geriye
-   dönük sınır talimatın başladığı gündür (`pay_since`, Faz 42) — önceden sabit 10 günlük pencereydi,
-   sunucu daha uzun kapalı kalırsa vadesi geçen ekstre hiç ödenmiyor ve geçmiş vadeli ekstre borçtan
-   düştüğü için bakiye sessizce şişik kalıyordu. statement_payments PK'si ile idempotent; hesap
-   kullanıcıda yoksa (silinmiş vb.) atlanır. */
-async function materializeDueStatements(): Promise<void> {
-  const today = todayLocal();
-  const cards = await db.all<Card & { user_id: number; pay_account_id: number; pay_since: string }>(
-    "SELECT * FROM cards WHERE pay_account_id IS NOT NULL AND pay_since IS NOT NULL",
-  );
-  for (const card of cards) {
-    const account = await db.get("SELECT id FROM accounts WHERE id=? AND user_id=?", card.pay_account_id, card.user_id);
-    if (!account) continue; // talimat hesabı yok/başkasının — otomatik ödeme yapma
-    const [txs, odenmis] = await Promise.all([
-      db.all<CardTx>("SELECT * FROM card_txs WHERE card_id=? AND user_id=?", card.id, card.user_id),
-      db.all<{ due: string }>("SELECT due FROM statement_payments WHERE card_id=? AND user_id=?", card.id, card.user_id),
-    ]);
-    const odendi = new Set(odenmis.map((x) => x.due));
-    /* talimattan bugüne vadesi gelmiş, henüz ödenmemiş ekstreler ve tutarları */
-    const dues = new Map<string, number>();
-    for (const t of txs) for (const sh of txShares(t, card)) {
-      const k = keyOf(sh.due);
-      if (k <= today && k >= card.pay_since && !odendi.has(k)) dues.set(k, (dues.get(k) || 0) + sh.amount);
-    }
-    for (const [dueK, amount] of dues) {
-      if (!(amount > 0)) continue;
-      await db.tx((t) => payStatementTx(t, card.user_id, card, dueK, amount, card.pay_account_id, null))
-        .catch((e) => console.error("[kart] otomatik ekstre ödeme hatası:", e));
-    }
-  }
-}
+   Sunucuda tutmanın tek yolu, tutarın önceden şifrelenmiş İKİNCİ bir kopyasını kalem
+   tanımının yanında taşımaktı; o kopya beş şekilde bayatlar (tutar/hedef/gün değişir,
+   kalem silinir, bitiş ayı konur) ve bayatladığında cron sessizce YANLIŞ bir finansal
+   kayıt yazardı. Geç yazmak yanlış yazmaktan iyidir — üstelik gecikme görünür.
 
-/* her 30 dk fiyat tazele (piyasa dışı saatlerde de zararsız) + otonom kalemleri/ekstreleri işle.
+   Karar artık engine'de (`otomatik.ts`: `bekleyenDuzenli` / `bekleyenEkstreler`, 22 testli),
+   sürücüsü uygulama açılışında. Defter yalnız istemci üzerinden okunduğu için ekranda
+   eksik rakam oluşmuyor. Geriye dönük sınır sabit bir pencere değil, talimatın başladığı gündür
+   (`pay_since` / `auto_since`, bkz. talimatDamgasi). */
+
+/* her 30 dk fiyat tazele (piyasa dışı saatlerde de zararsız) + tüketilmiş e-posta token'larını buda.
    30 dk, 15 değil: her tur DB'ye dokunur (portföy boşken bile SELECT + fx UPSERT) ve Neon
    compute'u 5 dk boşta kalınca uyuttuğu için her tur en az 5 dk'lık pencere satın alır —
    15 dk'da ≈240 compute-saat/ay ediyordu, ücretsiz kota 191.9 (2026-09'da kota bitti,
-   prod durdu). 30 dk ≈120. Kayıp yok: gerçekleştirme talimatın başladığı günden itibaren telafi eder
-   (Faz 42), fiyat rozeti zaten gecikmeyi yazıyor, "Fiyatları yenile" elle anında tazeler. */
+   prod durdu). 30 dk ≈120. Kayıp yok: fiyat rozeti zaten gecikmeyi yazıyor, "Fiyatları
+   yenile" elle anında tazeler. */
 const runScheduledJobs = () => {
   refreshAll().catch(() => {});
-  materializeDueRecurring().catch(() => {});
-  materializeDueStatements().catch(() => {});
   purgeStaleEmailTokens().catch(() => {}); // tüketilmiş/süresi geçmiş aktivasyon-sıfırlama token'ları
 };
 
@@ -1472,6 +1649,6 @@ refreshCompanyEvents()
 
 /* Başlangıç catch-up'ı: Render free tier trafik yokken süreci uyutur; uyanışta node-cron ilk 15-dk
    tıkına dek beklerdi → kullanıcı bayat fiyat/işlenmemiş otonom kalem görürdü. Sunar sunmaz bir kez
-   çalıştır — uykuda kaçan vadeler talimatın başladığı günden itibaren yakalanır. Sık uyanışlar zararsız:
-   TEFAS günde-bir/geri-çekilme kapıları DB'de, otonom işler idempotent (PK'ler çift kaydı engeller). */
+   çalıştır. Sık uyanışlar zararsız: TEFAS günde-bir/geri-çekilme kapıları DB'de. (Otonom kalem/ekstre
+   yazımı artık burada değil, uygulama açılışında — bkz. engine/otomatik.ts.) */
 setTimeout(runScheduledJobs, 3_000).unref();

@@ -12,7 +12,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { ROUTE_TOOLS, SKIPPED } from "../ai/tools.js";
+import { ROUTE_TOOLS, SKIPPED } from "@finans/asistan";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const sources = ["../index.ts", "../ai/index.ts"].map((p) => readFileSync(join(here, p), "utf8"));

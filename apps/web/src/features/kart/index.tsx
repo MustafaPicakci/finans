@@ -60,6 +60,10 @@ export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => 
     await api.payStatement(paying.cardId, paying.dueK, {
       account_id: pp.account_id ? +pp.account_id : null,
       category_id: pp.category_id ? +pp.category_id : null,
+      /* Tutar artık İSTEMCİDEN gider (E2EE aşama 1b). Ekranda zaten bu rakam yazıyor ve
+         `statementAmount`'tan geliyor — yani kullanıcının onayladığı tutarla yazılan tutar
+         tanım gereği aynı; sunucunun ikinci kez hesaplaması bir kopyaydı. */
+      amount: paying.amount,
     });
     setPaying(null); setPp({ account_id: "", category_id: "" }); reload();
   };
@@ -206,9 +210,10 @@ export function Kartlar({ data, reload, onAdd }: { data: AllData; reload: () => 
                 </div>
               </div>
             )}
-            {/* otomatik ödeme talimatı: hesap seçiliyse vadesi gelen ekstre cron ile o hesaptan ödenir */}
+            {/* otomatik ödeme talimatı: hesap seçiliyse vadesi gelen ekstre o hesaptan ödenir (uygulama
+                açılışında, vade tarihiyle); talimattan önceki ekstrelere dokunulmaz (bkz. engine/otomatik.ts) */}
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, fontSize: 12, color: T.mut }}>
-              <span title="Vade günü geldiğinde ekstre seçili hesaptan kendiliğinden ödenir (bakiye düşer, gider kaydı oluşur). Talimat verildiği günden önceki ekstrelere dokunulmaz.">
+              <span title="Vade günü geldiğinde ekstre seçili hesaptan kendiliğinden ödenir (bakiye düşer, vade tarihli gider kaydı oluşur). Talimat verildiği günden önceki ekstrelere dokunulmaz.">
                 {ci.card.pay_account_id ? <span style={{ color: T.acc }}>⚡</span> : null} otomatik ödeme:
               </span>
               <select style={{ ...css.input, width: "auto", padding: "4px 8px", fontSize: 12 }} value={ci.card.pay_account_id ?? ""}

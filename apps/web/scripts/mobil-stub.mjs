@@ -27,7 +27,7 @@ const categories = [
   { id: 4, name: "Faturalar", kind: "expense", color: null },
 ];
 const cards = [
-  { id: 1, name: "Akbank Axess", limit_amount: 60000, statement_day: 25, due_day: 10, pay_account_id: 1 },
+  { id: 1, name: "Akbank Axess", limit_amount: 60000, statement_day: 25, due_day: 10, pay_account_id: 1, pay_since: d(-10) }, // talimat başlangıcı (engine/otomatik.ts)
   { id: 2, name: "Garanti Bonus", limit_amount: 35000, statement_day: 15, due_day: 3, pay_account_id: null },
 ];
 /* Faz 39 — kategori İKİ HÂLİYLE duruyor (company_events'in `tahmini` fikstürüyle aynı gerekçe):
@@ -110,9 +110,9 @@ const transactions = [
   { id: 6, date: d(-4), name: "FATURALAR", amount: -2350, category_id: null, account_id: 1 },
 ];
 const recurring = [
-  { id: 1, kind: "income", name: "Maaş", day: 15, from_month: null, to_month: null, account_id: 2, card_id: null, category_id: 3, auto: true },
+  { id: 1, kind: "income", name: "Maaş", day: 15, from_month: null, to_month: null, account_id: 2, card_id: null, category_id: 3, auto: true, auto_since: d(-45) },
   { id: 2, kind: "expense", name: "Kira", day: 5, from_month: null, to_month: null, account_id: 1, card_id: null, category_id: null, auto: false },
-  { id: 3, kind: "expense", name: "Netflix aboneliği", day: 20, from_month: null, to_month: null, account_id: null, card_id: 1, category_id: null, auto: true },
+  { id: 3, kind: "expense", name: "Netflix aboneliği", day: 20, from_month: null, to_month: null, account_id: null, card_id: 1, category_id: null, auto: true, auto_since: d(-45) },
 ];
 const all = {
   accounts, categories, cards, card_txs, trades, prices, price_history, benchmark_history, transactions, recurring,
@@ -164,7 +164,7 @@ const all = {
   ],
 };
 
-/* ————— AÇILIŞ BAKİYELERİ TÜRETİLİR (Faz 42) —————
+/* ————— AÇILIŞ BAKİYELERİ TÜRETİLİR (E2EE aşama 1a) —————
    `accounts.balance` kolonu kalktı; bakiye `account_entries`'ten geliyor. Fikstürde bakiye
    hâlâ okunur biçimde yazılı ("Garanti Vadesiz 48.250,75") ama artık bir AÇILIŞ HAREKETİNE
    çevriliyor — tıpkı gerçek `POST /accounts`'un yaptığı gibi.
@@ -222,6 +222,17 @@ const aiKonusmalar = [
   },
 ];
 
+/* E2EE aşama 6 — SIFIR BİLGİ GİRİŞİ. Uygulama artık cihazda veri anahtarı olmadan açılmıyor,
+   yani stub'ın da gerçek bir giriş sunması gerekiyor. Kripto KODU yok: aşağıdaki sabit salt ve
+   sarılı anahtar `Stub-Parola-2026` parolasıyla bir kez üretildi (packages/crypto ile) ve buraya
+   yazıldı. Tarayıcı parolayı türetip bu paketi GERÇEKTEN açar — yani giriş akışının kripto
+   tarafı stub'da da uçtan uca çalışır. Parola yanlışsa paket açılmaz, uygulama bunu söyler.
+   Oturum bir çerezdir; `mobil-cek.mjs` giriş ekranını görürse bu parolayla kendisi girer. */
+const STUB_SALT = "c3R1Yi1maWtzdHVyLTIwMg";
+export const STUB_PAROLA = "Stub-Parola-2026";
+const STUB_PAKET = "v1:PGcQve4JweliLcuH:ChWDtuqKDDa_r_fUuEq5Gv4f9Y8YHUHM6blOrCHrXpVnIb5O914XhmGpR6gEGkgp";
+const oturumVar = (req) => /(?:^|;\s*)stub_oturum=1/.test(req.headers.cookie ?? "");
+
 createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
   const json = (o, code = 200) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
@@ -234,48 +245,92 @@ createServer(async (req, res) => {
     return json({ error: process.env.HATA === "503" ? "Veritabanına şu an ulaşılamıyor" : "Sunucu hatası" }, Number(process.env.HATA));
   }
   if (url.pathname === "/api/auth/me") {
-    return json({ user: process.env.CIKIS ? null : { id: 1, email: "demo@finans.local" } });
+    // `stubGiris`: mobil-cek'e "giriş ekranını gördüysen kendin gir" işareti (CIKIS modunda girmez)
+    return json({ user: !process.env.CIKIS && oturumVar(req) ? { id: 1, email: "demo@finans.local", e2ee: true } : null, stubGiris: !process.env.CIKIS });
   }
+  if (url.pathname === "/api/auth/prelogin") return json({ kdf: "v2", salt: STUB_SALT, params: { alg: "PBKDF2-SHA256", iter: 600000 } });
+  if (url.pathname === "/api/auth/login") {
+    if (process.env.CIKIS) return json({ error: "E-posta veya parola hatalı" }, 401);
+    res.writeHead(200, { "content-type": "application/json", "set-cookie": "stub_oturum=1; Path=/; HttpOnly; SameSite=Lax" });
+    return res.end(JSON.stringify({ user: { id: 1, email: "demo@finans.local" }, yukseltildi: false, dek_wrapped_pw: STUB_PAKET, kurtarma: true }));
+  }
+  if (url.pathname === "/api/auth/logout") {
+    res.writeHead(200, { "content-type": "application/json", "set-cookie": "stub_oturum=; Path=/; Max-Age=0" });
+    return res.end("{\"ok\":true}");
+  }
+  if (url.pathname === "/api/e2ee/bekleyen") return json({ tamam: true, satirlar: [] }); // stub verisi zarfsız: göçecek bir şey yok
   if (url.pathname === "/api/all") return json(all);
-  if (url.pathname === "/api/ai/status") return json({ enabled: true, model: "gemini/gemini-3.6-flash (2 anahtar)" });
+  /* Durum ucu gerçek sunucuyla AYNI kuralı uygular (`ai_enabled` yoksa AÇIK, "0" ise kapalı)
+     ve `neden` döner — yoksa Hesabım'daki anahtarı kapatıp Asistan'a bakınca stub "AI_API_KEY
+     eksik" ekranını gösterirdi, yani denetlenmek istenen ekranın yanlış hâli. */
+  if (url.pathname === "/api/ai/status") {
+    const model = "gemini/gemini-3.6-flash (2 anahtar)";
+    return json(all.settings.ai_enabled === "0"
+      ? { enabled: false, model, neden: "kapali" }
+      : { enabled: true, model, neden: null });
+  }
   /* Asistan (Faz 34): sohbet sunucuda yaşadığından stub'ın da bir sohbeti olması gerekir —
      yoksa sekme boş açılır ve mobilde asıl bakılacak şeyler (sohbet listesi, onay kartı,
      mesaj altındaki "geri al") hiç render edilmez. Bellekte küçük bir depo yeter: model
      yok, ağ yok, ne gönderilirse gönderilsin sabit iki adımlık bir plan döner. */
   if (url.pathname === "/api/ai/conversations" && req.method === "GET") {
-    return json({ conversations: aiKonusmalar.map(({ id, title, at, messages, undoable }) => ({ id, title, at, messages: messages.length, undoable })), more: false });
+    /* Zarflar AÇILMADAN saklanır ve olduğu gibi geri verilir (onları tarayıcı açar — gerçek
+       sunucunun yaptığı da tam olarak bu). Fikstür satırları düz: istemci zarfsız satırı geçirir. */
+    return json({ conversations: aiKonusmalar.map(({ id, title, enc, at, messages, undoable }) => ({ id, ...(enc ? { enc } : { title }), at, messages: messages.length, undoable })), more: false });
   }
   if (url.pathname.startsWith("/api/ai/conversations/")) {
     const id = Number(url.pathname.split("/").pop());
     const k = aiKonusmalar.find((x) => x.id === id);
     if (!k) return json({ error: "konuşma bulunamadı" }, 404);
     if (req.method === "DELETE") { aiKonusmalar.splice(aiKonusmalar.indexOf(k), 1); return json({ ok: true }); }
-    if (req.method === "PUT") { k.title = "Yeniden adlandırıldı"; return json({ ok: true, title: k.title }); }
-    return json({ id: k.id, title: k.title, messages: k.messages, truncated: false, plans: k.plans, pending: k.pending });
+    if (req.method === "PUT") { const b = await (async () => { let g = ""; for await (const x of req) g += x; return JSON.parse(g || "{}"); })(); k.enc = b.enc; delete k.title; return json({ ok: true }); }
+    return json({ id: k.id, ...(k.enc ? { enc: k.enc } : { title: k.title }), messages: k.messages, truncated: false, plans: k.plans, pending: k.pending });
   }
-  if (url.pathname === "/api/ai/chat") {
-    const k = aiKonusmalar[0];
-    k.messages.push({ id: ++aiMesajNo, role: "user", content: "dün markete 1.250 TL harcadım, Axess'le", at: aiSimdi(), planId: null });
-    k.messages.push({ id: ++aiMesajNo, role: "assistant", content: "Anladım. Aşağıdaki iki kaydı oluşturacağım, onayına sunuyorum.", at: aiSimdi(), planId: null });
-    k.pending = {
-      planId: "stub-plan", at: aiSimdi(),
-      actions: [
-        { tool: "kart_harcamasi", summary: "Akbank Axess kartına 1.250,00 ₺ market harcaması (3 taksit), 6 Eyl", args: {} },
-        { tool: "gelir_gider", summary: "Garanti Vadesiz hesabından 480,00 ₺ ulaşım gideri, bugün", args: {} },
-      ],
-    };
-    return json({ conversationId: k.id, reply: "Anladım.", pending: k.pending.actions, model: "gemini/gemini-3.6-flash", planId: "stub-plan" });
+  /* E2EE aşama 4: ajan döngüsü TARAYICIDA koşuyor; sunucu yalnız röle + depo. Stub da bu
+     sözleşmeyi taklit eder — eski /ai/chat taklidi kalsaydı arayüz onu hiç çağırmaz ve asistan
+     sekmesi mobil denetimde kırık görünürdü. Röle kullanıcı mesajına bir YAZMA aracıyla,
+     araç sonucuna düz metinle cevap verir: onay kartı böylece gerçekten istemcideki döngünün
+     planından doğar (stub'ın elle kurduğu bir karttan değil). */
+  const govdeOku = async () => { let g = ""; for await (const x of req) g += x; try { return JSON.parse(g || "{}"); } catch { return {}; } };
+  if (url.pathname === "/api/ai/relay") {
+    const b = await govdeOku();
+    const son = (b.messages ?? []).at(-1);
+    if (son?.role === "user") {
+      return json({ text: "", model: "gemini/gemini-3.6-flash", toolCalls: [{ id: "c1", name: "islem_ekle",
+        args: { date: new Date().toISOString().slice(0, 10), name: "Market", amount: -480, account_id: 1 } }] });
+    }
+    return json({ text: "Aşağıdaki kaydı hazırladım, onaylarsan uygulayayım.", toolCalls: [], model: "gemini/gemini-3.6-flash" });
   }
-  if (url.pathname === "/api/ai/execute") {
-    const k = aiKonusmalar[0];
-    k.messages.push({ id: ++aiMesajNo, role: "assistant", content: "✓ Akbank Axess · Market · 1.250,00 ₺\n✓ Gider: Ulaşım · 480,00 ₺", at: aiSimdi(), planId: "stub-plan" });
-    k.plans = [{ planId: "stub-plan", at: aiSimdi(), total: 2, undoable: 2, summary: "Akbank Axess kartına 1.250,00 ₺ market harcaması" }]; k.pending = null; k.undoable = 2;
-    return json({ conversationId: k.id, results: [], undoable: 2 });
+  if (url.pathname === "/api/ai/messages") {
+    const b = await govdeOku();
+    let k = aiKonusmalar.find((x) => x.id === Number(b.conversationId));
+    if (!k) { k = { id: 100 + aiKonusmalar.length, enc: b.title_enc, at: aiSimdi(), undoable: 0, messages: [], plans: [], pending: null }; aiKonusmalar.unshift(k); }
+    k.messages.push({ id: ++aiMesajNo, role: b.role, enc: b.enc, at: aiSimdi(), planId: b.planId ?? null });
+    return json({ conversationId: k.id });
   }
-  if (url.pathname === "/api/ai/undo") {
-    const k = aiKonusmalar[0];
-    k.plans = k.plans.map((p) => ({ ...p, undoable: 0 })); k.undoable = 0;
-    return json({ conversationId: k.id, results: [] });
+  if (url.pathname === "/api/ai/plans" && req.method === "POST") {
+    const b = await govdeOku();
+    const k = aiKonusmalar.find((x) => x.id === Number(b.conversationId));
+    if (!k) return json({ error: "konuşma bulunamadı" }, 404);
+    k.pending = { planId: `stub-${aiMesajNo}`, at: aiSimdi(), enc: b.enc };
+    return json({ planId: k.pending.planId });
+  }
+  const aiPlan = url.pathname.match(/^\/api\/ai\/plans\/([^/]+)\/(consume|actions|undone)$/);
+  if (aiPlan) {
+    const [, planId, is] = aiPlan;
+    const k = aiKonusmalar.find((x) => x.pending?.planId === planId || x.plans.some((p) => p.planId === planId));
+    if (is === "consume") {
+      if (!k?.pending || k.pending.planId !== planId) return json({ error: "Bu plan zaten uygulandı" }, 409);
+      const { actions, enc } = k.pending; k.pending = null;
+      return json({ conversationId: k.id, ...(enc ? { enc } : { actions }) });
+    }
+    if (is === "actions" && req.method === "POST") {
+      const b = await govdeOku();
+      if (k) { k.plans = [{ planId, at: aiSimdi(), total: b.items.length, undoable: b.items.length, enc: b.items[0].enc }, ...k.plans]; k.undoable = b.items.length; }
+      return json({ ok: true });
+    }
+    if (is === "actions") return json({ actions: [] }); // stub'da geri alınacak gerçek kayıt yok
+    return json({ ok: true });
   }
   /* AYAR YAZMALARI GERÇEKTEN UYGULANIR — aşağıdaki catch-all'a düşseydi stub {ok:true} der,
      değeri saklamaz ve arayüz reload'dan sonra ESKİ değeri geri okurdu. Sonuç: "nakit say",

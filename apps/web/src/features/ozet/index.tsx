@@ -51,7 +51,7 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAcc
   /** Faz 36 — kaçırılan kurumsal olayı önden dolu işlem formuyla açar */
   onKurumsalOlay: (p: TradePrefill) => void;
 }) {
-  // bakiye kolonu yok, defterden türetilir (Faz 42)
+  // bakiye kolonu yok, defterden türetilir (E2EE aşama 1a)
   const hesapBakiyeleri = balancesByAccount(data.account_entries);
   /* "Ödeme öncesi fon boz" önerisi (Faz 17): saf nakit önümüzdeki hafta eksiye düşüyorsa,
      nakit sayılan fondan ne kadar bozulacağını hesaplar. Bkz. funds.ts — tutar pencerenin

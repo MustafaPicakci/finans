@@ -14,7 +14,7 @@
    bağlıdır, yani yeni/değişen bir uç asistana tanıtılmadan CI'dan geçemez.
    Prompt'a elle yazılmış bir API dokümanı güncel kalmazdı; bu kalır. */
 
-import type { JsonSchema } from "./provider.js";
+import type { JsonSchema } from "./types.js";
 
 export type ArgVals = Record<string, unknown>;
 /** Onay kartında gösterilecek insan-okur özet için ad çözücüler (id → ad) */
@@ -322,6 +322,13 @@ export const ROUTE_TOOLS: RouteTool[] = [
    olmalı. Yeni bir uç eklendiğinde build "karar ver" diye durur. */
 export const SKIPPED: { route: string; reason: string }[] = [
   { route: "POST /auth/register", reason: "kimlik: oturum akışı asistanın işi değil" },
+  { route: "POST /auth/prelogin", reason: "kimlik: sıfır bilgi girişinin salt adımı (E2EE aşama 3b)" },
+  { route: "POST /auth/reset-bilgi", reason: "kimlik: e-postadaki sıfırlama bağlantısının durumu (E2EE aşama 6)" },
+  { route: "POST /account/parola-paket", reason: "kimlik: parola değişiminin ilk adımı, parola kanıtı ister (E2EE aşama 6)" },
+  { route: "POST /account/parola", reason: "kimlik: parola değişimi — asistana açılmaz (E2EE aşama 6)" },
+  { route: "POST /e2ee/kurtarma", reason: "anahtar yönetimi: kurtarma kodu yalnız kullanıcıya GÖSTERİLEREK kurulur — bir modelin kararı olamaz (E2EE aşama 6)" },
+  { route: "PUT /e2ee/satirlar", reason: "şifreleme göçü: tarayıcının kendi bakım işi, kayıt anlamı yok (E2EE aşama 6)" },
+  { route: "POST /e2ee/tamam", reason: "şifreleme göçü: bitiş işareti, sunucu kendisi sayar (E2EE aşama 6)" },
   { route: "POST /auth/login", reason: "kimlik" },
   { route: "POST /auth/logout", reason: "kimlik" },
   { route: "POST /auth/forgot", reason: "kimlik" },
@@ -358,9 +365,12 @@ export const SKIPPED: { route: string; reason: string }[] = [
   { route: "PUT /categories/:id", reason: "kategori arayüzde satır içinde düzenlenir" },
   { route: "DELETE /categories/:id", reason: "silme arayüzden" },
   { route: "DELETE /prices/:asset_type/:symbol", reason: "elle fiyatı sıfırlama arayüzdeki rozetten" },
-  { route: "POST /ai/chat", reason: "asistanın kendi ucu" },
-  { route: "POST /ai/execute", reason: "asistanın kendi ucu" },
-  { route: "POST /ai/undo", reason: "asistanın kendi ucu (uygulanan planı geri alır; modelin çağırdığı bir araç değil)" },
+  { route: "POST /ai/relay", reason: "asistanın kendi ucu: model rölesi (E2EE aşama 4)" },
+  { route: "POST /ai/messages", reason: "asistanın kendi ucu: sohbet deposu" },
+  { route: "POST /ai/plans", reason: "asistanın kendi ucu: onay bekleyen plan deposu" },
+  { route: "POST /ai/plans/:id/consume", reason: "asistanın kendi ucu: planın tek kullanımlık kilidi" },
+  { route: "POST /ai/plans/:id/actions", reason: "asistanın kendi ucu: uygulama günlüğü" },
+  { route: "POST /ai/plans/:id/undone", reason: "asistanın kendi ucu: geri alma işareti" },
   { route: "PUT /ai/conversations/:id", reason: "asistanın kendi ucu: sohbetin adını kullanıcı koyar, modelin kendi konuşmasını yeniden adlandırması istenmez" },
   { route: "DELETE /ai/conversations/:id", reason: "asistanın kendi ucu: sohbeti silmek kullanıcı eylemidir, modelin kendi geçmişini silmesi istenmez" },
 ];

@@ -1,5 +1,6 @@
 import "dotenv/config";
 import pg from "pg";
+import { ZARF, ZARF_DUZ } from "@finans/crypto/map";
 
 /* Faz 5.0: SQLite (node:sqlite) → PostgreSQL geçişi. Veri modeli/davranış birebir korunur;
    yalnız taban değişir. Bağlantı DATABASE_URL env değişkeninden (bkz. .env.example). */
@@ -76,6 +77,14 @@ export type TxClient = {
    sunucu yerel saatini JS'te üretip parametre olarak geçiriyoruz (lehçe bağımsız + TZ net).
    Biçim SQLite ile birebir: 'YYYY-MM-DD HH:MM:SS' ve 'YYYY-MM-DD'. */
 const pad = (n: number) => String(n).padStart(2, "0");
+/** Zarfın BİÇİMİ doğrulanır, içeriği değil (sunucu aşama 6'da içeriği okuyamaz): düz metin
+    zarf `p1:`+JSON, şifreli zarf `v1:iv:ct`. Çöp yazılıp satır okunamaz hâle gelmesin.
+    `tavan` karakter sınırıdır: kayıt satırları için 20k bol; asistan mesajı/planı daha uzun
+    olabilir (8.000 karakterlik bir yanıt + şifrelemenin base64 büyümesi). Sunucu içeriği
+    okuyamadığından eskiden içerik üzerinde yaptığı uzunluk kırpması artık istemcide. */
+export const zarfGecerli = (v: unknown, tavan = 20_000): boolean =>
+  typeof v === "string" && v.length <= tavan && (/^p1:\{.*\}$/s.test(v) || /^v1:[A-Za-z0-9_-]{16}:[A-Za-z0-9_-]+$/.test(v));
+
 export function nowLocal(): string {
   const d = new Date();
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
@@ -103,7 +112,7 @@ export async function initDb(): Promise<void> {
 /* kind (Faz 16): nakit cüzdanı ve aracı kurum da birer hesaptır — ATM'den çekilen ya da Midas'a
    atılan para böylece sistemden çıkmaz, virmanla yer değiştirir. last_recon_* = son mutabakat
    (kullanıcının "gerçek bakiye buydu" dediği an); fark 'duzeltme' hareketi olarak deftere yazılır. */
-/* balance kolonu YOK (Faz 42): bakiye = Σ account_entries, türetilir.
+/* balance kolonu YOK (E2EE aşama 1a): bakiye = Σ account_entries, türetilir.
    Eski kurulumlarda kolon initDb sonunda DRIFT KONTROLÜNDEN GEÇEREK düşürülür.
    (Bu blok bir SQL şablon dizesi — yoruma backtick yazma, diziyi sonlandırır.) */
 CREATE TABLE IF NOT EXISTS accounts (
@@ -352,9 +361,9 @@ ALTER TABLE recurring ADD COLUMN IF NOT EXISTS category_id integer REFERENCES ca
 ALTER TABLE recurring ADD COLUMN IF NOT EXISTS auto boolean NOT NULL DEFAULT false;
 -- Faz 8.2: kart otomatik ödeme talimatı — doluysa vadesi gelen ekstre cron ile bu hesaptan ödenir
 ALTER TABLE cards ADD COLUMN IF NOT EXISTS pay_account_id integer REFERENCES accounts(id) ON DELETE SET NULL;
--- Faz 42: otomatik talimatların BAŞLANGIÇ günü ('YYYY-MM-DD'). Cron bu günden önceki vadelere/
--- occurrence'lara dokunmaz — sabit 10/45 günlük telafi penceresinin yerini aldı. Talimat pasiften
--- aktife geçtiğinde sunucu damgalar, kapanınca NULL'lanır (index.ts talimatDamgasi).
+-- Otomatik talimatların BAŞLANGIÇ günü ('YYYY-MM-DD'). Otomatik yazma (tarayıcıda, otomatik.ts)
+-- bu günden önceki vadelere/occurrence'lara dokunmaz — sabit 10/45 günlük pencerenin yerini aldı.
+-- Talimat pasiften aktife geçtiğinde sunucu damgalar, kapanınca NULL'lanır (index.ts talimatDamgasi).
 ALTER TABLE cards ADD COLUMN IF NOT EXISTS pay_since text;
 ALTER TABLE recurring ADD COLUMN IF NOT EXISTS auto_since text;
 -- Faz 39: kart harcamasının kategorisi. ON DELETE SET NULL (transactions.category_id ile aynı
@@ -370,11 +379,32 @@ ALTER TABLE trades ADD CONSTRAINT trades_side_check CHECK (side IN ('ALIŞ','SAT
 -- Faz 16: hesap türü (mevcut hesapların hepsi 'banka' sayılır) + son mutabakat damgası
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'banka';
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS last_recon_date text;
-ALTER TABLE accounts ADD COLUMN IF NOT EXISTS last_recon_balance double precision;
+-- last_recon_balance burada GERİ EKLENMEZ (E2EE aşama 5c): zarfa taşındı; geri eklense her açılışta
+-- boş olarak dönerdi (bkz. check-zarf-sema.ts). CREATE TABLE'da var, çok eski kurulumda yoksa göç atlar.
 -- Faz 6: e-posta doğrulama. ADD ... DEFAULT true → MEVCUT (owner) kullanıcılar doğrulanmış sayılır
 -- (kilitlenmesin); ardından default'u false'a çevir → YENİ kayıtlar aktivasyon ister. İkisi de idempotent.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified boolean NOT NULL DEFAULT true;
 ALTER TABLE users ALTER COLUMN email_verified SET DEFAULT false;
+-- E2EE aşama 3b: sıfır bilgi girişi. password_kdf='legacy' → password_hash = scrypt(PAROLA)
+-- (eski yol); 'v2' → password_hash = scrypt(AUTH_TOKEN) ve parola sunucuya hiç gelmez.
+-- MEVCUT kullanıcılar legacy doğar ve ilk girişlerinde AYNI İSTEKTE sessizce v2'ye geçer.
+-- kdf_salt/kdf_params gizli değildir (girişte istemciye verilir). dek_wrapped_* sarılı
+-- veri anahtarıdır — sunucu açamaz, yalnız saklar.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_kdf text NOT NULL DEFAULT 'legacy';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS kdf_salt text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS kdf_params text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS dek_wrapped_pw text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS dek_wrapped_rk text;
+-- E2EE aşama 6: bu kullanıcının TÜM zarfları şifreli (v1) — tarayıcı göçü bitirdi. Doluyken
+-- sunucu bu kullanıcıdan düz metin zarf (p1) KABUL ETMEZ (index.ts, guard'tan sonraki kapı).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS e2ee_migrated_at text;
+-- Sunucunun kendi sırları. AYRI tablo ve bu bilinçli: settings'e konamazdı, çünkü
+-- /api/all global ayarların HEPSİNİ her giriş yapmış istemciye gönderiyor (data.ts) —
+-- sır orada dursaydı her kullanıcı onu okurdu. Bu tablo hiçbir uçtan okunmaz.
+CREATE TABLE IF NOT EXISTS server_secrets (
+  key text PRIMARY KEY,
+  value text NOT NULL
+);
 -- e-posta token'ları: hem aktivasyon ('verify') hem şifre sıfırlama ('reset')
 CREATE TABLE IF NOT EXISTS email_tokens (
   token text PRIMARY KEY,
@@ -468,8 +498,12 @@ ALTER TABLE ai_actions ADD COLUMN IF NOT EXISTS conversation_id integer REFERENC
 
 -- kategori adı artık KULLANICI BAŞINA benzersiz (eski global UNIQUE düşürülür)
 ALTER TABLE categories DROP CONSTRAINT IF EXISTS categories_name_key;
+-- E2EE aşama 5: kategori adı zarfa taşınınca name kolonu YOK — kısıt da onunla düştü ve bu
+-- blok onu her açılışta yeniden eklemeye çalışıp sunucuyu ÇÖKERTİRDİ. Yalnız kolon varken
+-- (göç öncesi) eklenir. Ad benzersizliği artık istemcide denetleniyor.
 DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'categories_user_name_key') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'categories_user_name_key')
+     AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'categories' AND column_name = 'name') THEN
     ALTER TABLE categories ADD CONSTRAINT categories_user_name_key UNIQUE (user_id, name);
   END IF;
 END $$;
@@ -491,6 +525,17 @@ ALTER TABLE recurring DROP COLUMN amount;
 `);
   }
 
+  /* Bu kolonlardan ÖNCE açılmış talimatların gerçek başlangıç günü bilinmiyor. Eski kuralın
+     (10 gün ekstre / 45 gün kalem) bu an hâlâ yakalayacağı en eski gün yazılır: göç anında
+     davranış birebir aynı kalır — sonrasında sınır sabittir, pencere gibi kaymaz. Yalnız AKTİF
+     ve damgasız satırlara dokunur; yeni yazmalar hep damgalandığından sonraki açılışlarda no-op. */
+  const gunOnce = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+  await pool.query("UPDATE cards SET pay_since=$1 WHERE pay_account_id IS NOT NULL AND pay_since IS NULL", [gunOnce(10)]);
+  await pool.query(
+    "UPDATE recurring SET auto_since=$1 WHERE auto AND (account_id IS NOT NULL OR card_id IS NOT NULL) AND auto_since IS NULL",
+    [gunOnce(45)],
+  );
+
   await pool.query(`
 CREATE INDEX IF NOT EXISTS account_entries_acc_date ON account_entries (account_id, date);
 CREATE INDEX IF NOT EXISTS account_entries_source ON account_entries (source_table, source_id);
@@ -508,7 +553,12 @@ CREATE INDEX IF NOT EXISTS account_entries_source ON account_entries (source_tab
      kaydıdır, sohbetle birlikte silinmez), ölçüt o olsaydı kullanıcının sildiği sohbet
      bir sonraki açılışta arşiv olarak geri gelirdi. */
   const archived = await pool.query("SELECT 1 FROM settings WHERE key='ai_actions_archived'");
-  if (!archived.rowCount) {
+  /* E2EE aşama 5d: bu SQL düz `summary`/`title`/`content` kolonlarına yazar, yani yalnız
+     zarf göçünden ÖNCE koşabilir (initDb'de zarfGoc'tan önce durması bu yüzden). Bayrak
+     her kurulumun ilk açılışında atıldığından normalde hiç sorun olmaz; bayrak bir şekilde
+     kaybolmuş ve kolonlar düşmüşse arşivleme ATLANIR (bağsız satırlar o durumda silinmiş
+     sohbetlerindir — arşivlemek silinen sohbeti geri getirirdi) ve bayrak yeniden atılır. */
+  if (!archived.rowCount && await kolonVarMi("ai_actions", "summary")) {
     const orphans = await pool.query<{ user_id: number }>(
       "SELECT DISTINCT user_id FROM ai_actions WHERE conversation_id IS NULL",
     );
@@ -527,20 +577,9 @@ CREATE INDEX IF NOT EXISTS account_entries_source ON account_entries (source_tab
         [cid, user_id],
       );
     }
-    await pool.query("INSERT INTO settings (key, value) VALUES ('ai_actions_archived', $1) ON CONFLICT (key) DO NOTHING", [nowLocal()]);
   }
-
-  /* Faz 42 — başlangıç günü kolonlarından ÖNCE açılmış talimatların gerçek başlangıç günü
-     bilinmiyor. Eski kuralın (10 gün ekstre / 45 gün kalem) bu an hâlâ yakalayacağı en eski gün
-     yazılır: göç anında davranış birebir aynı kalır — sonrasında sınır sabittir, pencere gibi
-     kaymaz. Yalnız AKTİF ve damgasız satırlara dokunur; yeni yazmalar hep damgalandığından
-     sonraki açılışlarda no-op. */
-  const gunOnce = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
-  await pool.query("UPDATE cards SET pay_since=$1 WHERE pay_account_id IS NOT NULL AND pay_since IS NULL", [gunOnce(10)]);
-  await pool.query(
-    "UPDATE recurring SET auto_since=$1 WHERE auto AND (account_id IS NOT NULL OR card_id IS NOT NULL) AND auto_since IS NULL",
-    [gunOnce(45)],
-  );
+  if (!archived.rowCount)
+    await pool.query("INSERT INTO settings (key, value) VALUES ('ai_actions_archived', $1) ON CONFLICT (key) DO NOTHING", [nowLocal()]);
 
   /* Faz 15 — hareket defterini mevcut veriden bir kez doldur. Defterin kuralı balance = Σ entries
      olduğundan, geçmişten üretilebilen hareketler (hesaba bağlı işlemler, TRY portföy işlemleri,
@@ -579,7 +618,7 @@ INSERT INTO settings (key, value) VALUES ('account_entries_backfilled', '${today
 `);
   }
 
-  /* ————— `accounts.balance` kolonunu düşür (Faz 42) —————
+  /* ————— `accounts.balance` kolonunu düşür (E2EE aşama 1a) —————
      Bakiye artık defterden türetiliyor; kolon ikinci bir gerçek olarak duruyor ve
      yazılmadığı için bayatlıyor (yeni hesapta 0 kalır, /api/export'a öyle girer).
 
@@ -606,6 +645,57 @@ INSERT INTO settings (key, value) VALUES ('account_entries_backfilled', '${today
       await pool.query("ALTER TABLE accounts DROP COLUMN IF EXISTS balance");
       console.log("[db] accounts.balance düşürüldü (defter temizdi) — bakiye artık yalnız account_entries'ten türetiliyor.");
     }
+  }
+
+  await zarfGoc();
+}
+
+/* ————— Hassas kolonları zarfa taşı (E2EE aşama 5) —————
+   Tablo ve kolon listesi ELLE yazılmıyor, alan haritasından (`@finans/crypto/map`) türüyor:
+   elle yazılmış bir göç, istemcinin zarfı açarken baktığı listeyle ayrışabilirdi.
+
+   Veri bu noktada DÜZ METİN olduğu için göçü sunucu yapabiliyor: kolonlar bir `p1:` zarfına
+   (düz JSON) toplanıp düşürülüyor. Aşama 6'da `p1` → `v1` (şifreli) dönüşümünü sunucu
+   YAPAMAZ — anahtar yok; o dönüşüm kullanıcı giriş yaptığında tarayıcıda olur.
+
+   Kendini koşullar ve yeniden çalıştırılabilir: taşınacak kolon kalmamışsa hiçbir şey yapmaz.
+   Haritaya SONRADAN eklenen bir alan için mevcut `p1` zarfına BİRLEŞTİRİR (jsonb ||) — ama
+   birleştirme YIKICI DEĞİLDİR: kolondaki NULL, zarftaki değerin üzerine yazılmaz. Sebep: bir
+   `ADD COLUMN IF NOT EXISTS` satırı zarfa taşınmış bir kolonu her açılışta BOŞ olarak geri
+   eklerse, düz birleştirme gerçek değeri sessizce NULL'la ezerdi (her yeniden başlatmada).
+   Bunu derleme kapısı da ayrıca yakalar (scripts/check-zarf-sema.ts). Ayrıca
+   şifreli (`v1`) zarfa sunucu alan ekleyemez — öyle bir satırda o kolon doluysa kolonu
+   DÜŞÜRMEZ ve loglar (veri kaybından iyidir; o durumda göç istemcide yapılmalı).
+   Her tablo kendi işleminde: yarıda kalırsa o tablo hiç değişmemiş olur. */
+async function zarfGoc(): Promise<void> {
+  for (const [tablo, alanlar] of Object.entries(ZARF) as [string, readonly string[]][]) {
+    const kalan: string[] = [];
+    for (const a of alanlar) if (await kolonVarMi(tablo, a)) kalan.push(a);
+    if (!kalan.length) continue;
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(`ALTER TABLE ${tablo} ADD COLUMN IF NOT EXISTS enc text`);
+      const obj = `jsonb_build_object(${kalan.map((a) => `'${a}', ${a}`).join(", ")})`;
+      const r = await client.query(
+        `UPDATE ${tablo}
+            SET enc = $1 || (CASE WHEN enc IS NULL THEN ${obj}
+                                  ELSE substr(enc, 4)::jsonb || jsonb_strip_nulls(${obj}) END)::text
+          WHERE enc IS NULL OR enc LIKE 'p1:%'`, [ZARF_DUZ]);
+      const sifreliDolu = await client.query(
+        `SELECT count(*)::int AS n FROM ${tablo} WHERE enc NOT LIKE 'p1:%' AND (${kalan.map((a) => `${a} IS NOT NULL`).join(" OR ")})`);
+      if (sifreliDolu.rows[0].n > 0) {
+        await client.query("COMMIT");
+        console.error(`[db] ${tablo}: ${sifreliDolu.rows[0].n} şifreli satırda ${kalan.join(",")} dolu — sunucu şifreli zarfa ekleyemez, kolonlar DÜŞÜRÜLMEDİ (istemci göçü gerekli).`);
+        continue;
+      }
+      await client.query(`ALTER TABLE ${tablo} ${kalan.map((a) => `DROP COLUMN ${a}`).join(", ")}`);
+      await client.query("COMMIT");
+      console.log(`[db] ${tablo}: ${kalan.join(",")} zarfa taşındı (${r.rowCount} satır, p1).`);
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw e; // yarım göçle açılmaktansa açılmamak — veri bütünlüğü sunucunun ayakta olmasından önemli
+    } finally { client.release(); }
   }
 }
 

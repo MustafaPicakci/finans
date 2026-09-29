@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { project, positions, cardInfos, stmtKey, loanRemaining, portfolioValueTry, depositValueOn, totalCash, convert, type Currency } from "@finans/engine";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { project, positions, cardInfos, stmtKey, loanRemaining, portfolioValueTry, depositValueOn, totalCash, convert,
+  bekleyenDuzenli, bekleyenEkstreler, todayStr, type Currency } from "@finans/engine";
 import { api, ApiError, type SessionUser } from "./api";
 import { T, css, fmtMoney, fiyatYasi, FIYAT_YASI_IPUCU, themeCSS, THEME_KEY, CCY_KEY, type ThemeMode } from "./theme";
 import { Center } from "./ui";
@@ -17,6 +18,9 @@ import { Kartlar } from "./features/kart";
 import { Portfoy } from "./features/portfoy";
 import { Kayitlar } from "./features/kayitlar";
 import { Asistan, clearChat } from "./features/asistan";
+import { anahtarYukle, anahtarSil } from "./yazim/anahtar";
+import { ZAYIF_PAROLA_KEY } from "./features/auth/e2ee";
+import { sifrelemeGocu } from "./yazim/goc";
 import { AddSheet, type AddState, type KalemPrefill, type TradePrefill } from "./AddSheet";
 
 /* ————— ana uygulama ————— */
@@ -52,19 +56,54 @@ export default function App() {
   });
 
   const reload = useCallback(() => api.all().then(setData).catch((e) => {
-    if (e instanceof ApiError && e.status === 401) { setUser(null); setData(null); } // oturum düştü → giriş ekranı
+    if (e instanceof ApiError && e.status === 401) { anahtarSil(); setUser(null); setData(null); } // oturum düştü → giriş ekranı
     else setErr(e);
   }), []);
-  const boot = useCallback(() => {
-    api.me().then(({ user }) => { setUser(user); if (user) reload(); }).catch(setErr);
+
+  /* E2EE aşama 6 — oturum açıldıktan sonra, veriyi göstermeden önce: düz zarf kaldıysa
+     (aşama 5'ten gelen veri) tarayıcıda şifrele. Birkaç yüz satır bir-iki saniye sürer.
+     Başarısız olursa uygulama YİNE açılır: okuma yolu düz ve şifreli zarfı yan yana okur,
+     kalan satırlar bir sonraki açılışta şifrelenir — ama hata SESSİZ geçmez, gösterilir. */
+  const [goc, setGoc] = useState<string | null>(null);
+  const [gocHata, setGocHata] = useState<string | null>(null);
+  const oturumuBaslat = useCallback(async (u: SessionUser) => {
+    if (!u.e2ee) {
+      setGoc("Verilerin şifreleniyor…");
+      try { await sifrelemeGocu((n) => setGoc(`Verilerin şifreleniyor… ${n} kayıt`)); }
+      catch (e) { console.error("[e2ee] şifreleme göçü:", e); setGocHata(String((e as Error).message ?? e)); }
+      setGoc(null);
+    }
+    await reload();
   }, [reload]);
+
+  /* Oturum var ama bu cihazda veri anahtarı yoksa (IndexedDB temizlenmiş, aşama 6 öncesinden
+     kalma oturum, gizli pencere) uygulama AÇILMAZ: anahtarsız oturum şifreli veriyi ne okur
+     ne yazar. Oturum kapatılır ve parola bir kez daha sorulur. */
+  const [girisNotu, setGirisNotu] = useState<string | undefined>(undefined);
+  /* Girişte parola bugünkü kurala uymuyorsa (Auth işaretler) sekmelerin üstünde bir satır.
+     Kapatılınca bu oturumda bir daha çıkmaz; Hesabım'daki parola kartı söylemeye devam eder.
+     Bayrak girişte (Auth) yazılır — App o sırada zaten kurulu olduğundan burada tutulan yalnız
+     "kapattı mı"dır, bayrağın kendisi her render'da okunur. */
+  const [zayifKapatildi, setZayifKapatildi] = useState(false);
+  const boot = useCallback(() => {
+    api.me().then(async ({ user }) => {
+      if (user && !(await anahtarYukle(user.id))) {
+        await api.logout().catch(() => {});
+        setGirisNotu("Güvenliğin için bu cihazda bir kez daha giriş yapman gerekiyor.");
+        setUser(null);
+        return;
+      }
+      setUser(user);
+      if (user) oturumuBaslat(user);
+    }).catch(setErr);
+  }, [oturumuBaslat]);
   useEffect(boot, [boot]);
   const retry = useCallback(() => { setErr(null); setUser(undefined); setData(null); boot(); }, [boot]);
   /* Sohbetler Faz 34'ten beri sunucuda ve kullanıcıya scope'lu, yani çıkışta SİLİNMEZ
      (başka cihazdan devam edilebilsin diye). Temizlenen yalnız bu cihazın "en son şu
      sohbetteydim" işaretçisi + Faz 22-33'ün artık okunmayan localStorage sohbeti —
      ortak cihazda sonraki kullanıcı öncekinin konuşmasının açıldığını görmesin. */
-  const logout = useCallback(async () => { await api.logout().catch(() => {}); clearChat(); setUser(null); setData(null); }, []);
+  const logout = useCallback(async () => { await api.logout().catch(() => {}); await anahtarSil(); clearChat(); setUser(null); setData(null); }, []);
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try { await api.refreshPrices(); await reload(); } catch { /* best-effort */ } finally { setRefreshing(false); }
@@ -89,10 +128,72 @@ export default function App() {
   }, [menuOpen]);
   useEffect(() => { setMenuOpen(false); }, [tab]); // sekme değişince açık menü asılı kalmasın
 
+  /* ————— OTOMATİK GERÇEKLEŞTİRME (E2EE aşama 2) —————
+     15 dakikalık sunucu cron'u buraya taşındı: tutarı okumak zorundaydı ve şifreli dünyada
+     yapamayacağı tek şey buydu. Karar engine'de (`otomatik.ts`), burası yalnız sürücü.
+
+     Döngü riski yok: denenen her occurrence anahtarıyla işaretlenir, yani başarısız bir
+     yazma bu oturumda tekrar denenmez (sonraki açılışta denenir). Başarılı olanlar zaten
+     `recurring_realized` / `statement_payments` işaretiyle listeden düşer.
+
+     Ekstre ödemesine VADE GÜNÜ tarihi gönderilir: talimat o gün işler, uygulamayı açtığın
+     gün değil. Düzenli kalemde buna gerek yok — kaydın tarihi zaten occurrence tarihinden
+     geliyor, yani geç yazılan kayıt zamanında yazılanla birebir aynı. */
+  const otoDenenen = useRef<Set<string>>(new Set());
+  const otoCalisiyor = useRef(false);
+  useEffect(() => {
+    if (!data || otoCalisiyor.current) return;
+    const bugun = todayStr();
+    const kalemler = bekleyenDuzenli(data, bugun).filter((k) => !otoDenenen.current.has(`r:${k.recurring_id}:${k.ym}`));
+    const ekstreler = bekleyenEkstreler(data, bugun).filter((e) => !otoDenenen.current.has(`s:${e.card_id}:${e.due}`));
+    if (!kalemler.length && !ekstreler.length) return;
+    otoCalisiyor.current = true;
+    (async () => {
+      try {
+        for (const k of kalemler) {
+          otoDenenen.current.add(`r:${k.recurring_id}:${k.ym}`); // hata olsa da bu oturumda tekrarlanmasın
+          await api.realizeRecurring(k.recurring_id, k.ym, {
+            account_id: k.account_id, category_id: k.category_id, amount: k.amount,
+          }).catch((e) => console.warn("[oto] düzenli kalem gerçekleştirilemedi:", e));
+        }
+        /* Karta düşen düzenli kalem az önce yazıldıysa ekstre tutarı BÜYÜMÜŞTÜR: listeyi
+           taze veriden yeniden kur. Açılıştaki anlık görüntüyle ödemek ekstreyi eksik öder ve
+           ödeme işareti düştüğü için eksik bir daha kapanmaz (ölçüldü: 300+75 kartta 300
+           ödendi). Eski sunucu cron'u iki adımı ayrı sorgularla yaptığından bu sorun yoktu. */
+        const guncelEkstreler = kalemler.length
+          ? bekleyenEkstreler(await api.all(), bugun).filter((e) => !otoDenenen.current.has(`s:${e.card_id}:${e.due}`))
+          : ekstreler;
+        for (const e of guncelEkstreler) {
+          otoDenenen.current.add(`s:${e.card_id}:${e.due}`);
+          await api.payStatement(e.card_id, e.due, { account_id: e.account_id, amount: e.amount, date: e.due })
+            .catch((err) => console.warn("[oto] ekstre ödenemedi:", err));
+        }
+        await reload();
+      } finally { otoCalisiyor.current = false; }
+    })();
+  }, [data, reload]);
+
+  /* Uygulama açık unutulup GÜN DEĞİŞİRSE veriyi tazele (PWA'da olağan): yukarıdaki efekt
+     `data`'ya bağlı, yani kendiliğinden yeniden koşmaz ve o günün kalemleri yazılmazdı.
+     Koşul gün değişimi — her sekme dönüşünde tazelemek `/api/all`'ı boşuna çağırırdı
+     (o uç kullanıcının tüm verisini çeker, ucuz değil). */
+  const sonGun = useRef(todayStr());
+  useEffect(() => {
+    const kontrol = () => {
+      if (document.visibilityState !== "visible") return;
+      const bugun = todayStr();
+      if (bugun === sonGun.current) return;
+      sonGun.current = bugun;
+      reload();
+    };
+    document.addEventListener("visibilitychange", kontrol);
+    return () => document.removeEventListener("visibilitychange", kontrol);
+  }, [reload]);
+
   const rates = useMemo(() => ({ usdTry: Number(data?.settings.fx_usd_try || 0) }), [data]);
   const days = useMemo(() => (data ? project(data, Number(data.settings.horizon || 6), rates) : []), [data, rates]);
   const pos = useMemo(() => (data ? positions(data.trades, data.prices) : []), [data]);
-  // bakiye kolonu yok; nakit defterden türetilir (Faz 42)
+  // bakiye kolonu yok; nakit defterden türetilir (E2EE aşama 1a)
   const cash = useMemo(() => (data ? totalCash(data.account_entries) : 0), [data]);
   /* Fiyat boru hattının yaşı — "Fiyatları yenile"nin yanında durur, çünkü cevabı olduğu soru
      ("yenilemem gerekiyor mu?") o düğmeye basmadan önce sorulur.
@@ -129,9 +230,19 @@ export default function App() {
 
   if (err) return <HataEkrani err={err} onRetry={retry} />;
   // E-posta bağlantısıyla gelen reset/verify token'ı: oturum yüklenmesini beklemeden Auth ekranını göster
-  if (urlAuth) return <Auth urlAuth={urlAuth} onAuthed={(u) => { setUser(u); setErr(null); setUrlAuth(null); reload(); }} />;
+  if (urlAuth) return <Auth urlAuth={urlAuth} onAuthed={(u) => { setUser(u); setErr(null); setUrlAuth(null); oturumuBaslat(u); }} />;
   if (user === undefined) return <Center>Yükleniyor…</Center>;
-  if (user === null) return <Auth onAuthed={(u) => { setUser(u); setErr(null); reload(); }} />;
+  if (user === null) return <Auth bilgi={girisNotu} onAuthed={(u) => { setUser(u); setErr(null); setGirisNotu(undefined); oturumuBaslat(u); }} />;
+  if (goc) return <Center>{goc}</Center>;
+  if (gocHata) return (
+    <Center>
+      <div style={{ maxWidth: 360, textAlign: "center", lineHeight: 1.6 }}>
+        Verilerinin bir kısmı şifrelenemedi ({gocHata}). Uygulama çalışmaya devam eder;
+        kalan kayıtlar bir sonraki açılışta yeniden denenir.
+        <div style={{ marginTop: 12 }}><button style={css.btn} onClick={() => setGocHata(null)}>Devam et</button></div>
+      </div>
+    </Center>
+  );
   if (!data) return <Center>Yükleniyor…</Center>;
 
   // TRY canonical; görüntü para birimi saf sunum katmanı — nihai TRY rakamını çevirir
@@ -470,20 +581,28 @@ export default function App() {
         </div>
 
         <div className="content-pad" style={{ flex: 1, padding: "26px 32px 56px", maxWidth: 1180, width: "100%", margin: "0 auto" }}>
+          {/* bayrak her render'da yeniden okunur: Hesabım'da parola değişince (bayrak silinir) uyarı da kalkar */}
+          {!zayifKapatildi && tab !== "profil" && (() => { try { return sessionStorage.getItem(ZAYIF_PAROLA_KEY) === "1"; } catch { return false; } })() && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", marginBottom: 12, borderRadius: 12, border: `1px solid ${T.warn}`, background: T.warnSoft, fontSize: 13 }}>
+              <span style={{ flex: 1, minWidth: 0 }}>Parolan bugünkü güvenlik kurallarına uymuyor. Verilerin parolanla korunduğu için değiştirmeni öneririz.</span>
+              <button style={{ ...css.ghost, padding: "6px 10px", whiteSpace: "nowrap" }} onClick={() => setTab("profil")}>Değiştir</button>
+              <button aria-label="Kapat" title="Kapat" style={{ ...css.del, fontSize: 14 }} onClick={() => setZayifKapatildi(true)}>✕</button>
+            </div>
+          )}
           <div key={tab} className="tab-grid" style={{ animation: "fadeUp .4s ease both", display: "grid", gap: 16 }}>
             {tab === "ozet" && <Ozet data={data} days={days} pos={pos} cash={cash} rates={rates} reload={reload} summary={summary} m={m} onGoAccounts={() => setTab("hesaplar")}
               onGoPortfolio={() => setTab("portfoy")}
               onSellFund={(p: TradePrefill) => setAdd({ kind: "trade", tradePrefill: p })}
               onKurumsalOlay={(p: TradePrefill) => setAdd({ kind: "trade", tradePrefill: p })} />}
             {tab === "hesaplar" && <Hesaplar data={data} reload={reload} />}
-            {tab === "profil" && <Profil user={user} onDeleted={() => { setUser(null); setData(null); }} />}
+            {tab === "profil" && <Profil user={user} data={data} reload={reload} onDeleted={() => { anahtarSil(); setUser(null); setData(null); }} />}
             {tab === "tanimlar" && <Tanimlar data={data} reload={reload} />}
             {tab === "nakit" && <Nakit days={days} data={data} />}
             {tab === "plan" && <Plan data={data} reload={reload} onRealize={(p) => openAdd("kalem", p)} />}
             {tab === "kart" && <Kartlar data={data} reload={reload} onAdd={(k) => openAdd(k)} />}
             {tab === "portfoy" && <Portfoy data={data} pos={pos} rates={rates} ccy={ccy} reload={reload} />}
             {tab === "kayitlar" && <Kayitlar data={data} reload={reload} />}
-            {tab === "asistan" && <Asistan reload={reload} initialText={shared} onConsumed={() => setShared(null)} />}
+            {tab === "asistan" && <Asistan data={data} reload={reload} initialText={shared} onConsumed={() => setShared(null)} />}
           </div>
         </div>
       </main>
@@ -520,12 +639,15 @@ export default function App() {
    tarayıcı konsolu ve sunucu log'u var). Hata üç cinse indirilir çünkü kullanıcının yapabileceği şey
    cinse göre değişir; 503'ü sunucu yalnız DB'ye ULAŞILAMADIĞINDA döner (bkz. index.ts onError). */
 function HataEkrani({ err, onRetry }: { err: unknown; onRetry: () => void }) {
-  const status = err instanceof ApiError ? err.status : 0; // 0 = istek hiç cevap almadı (ağ)
+  /* `fetch` ağ hatasında TypeError fırlatır; E2EE'de yükleme şifre çözmede de patlayabilir —
+     o ağ sorunu değildir, "bağlantını kontrol et" demek yanlış yere yönlendirirdi. */
+  const status = err instanceof ApiError ? err.status : 0;
+  const ag = !status && err instanceof TypeError;
   const [baslik, metin] =
     status === 503 ? ["Hizmete şu an ulaşılamıyor", "Veritabanı geçici olarak yanıt vermiyor. Verilerin güvende — birkaç dakika sonra tekrar dene."]
     : status >= 500 ? ["Bir sorun oluştu", "Sunucu isteği tamamlayamadı. Verilerin güvende — biraz sonra tekrar dene."]
-    : status ? ["Bir sorun oluştu", "İstek tamamlanamadı. Sayfayı yeniden deneyebilirsin."]
-    : ["Sunucuya ulaşılamadı", "İnternet bağlantını kontrol edip tekrar dene."];
+    : ag ? ["Sunucuya ulaşılamadı", "İnternet bağlantını kontrol edip tekrar dene."]
+    : ["Bir sorun oluştu", "Veriler yüklenemedi. Tekrar deneyebilirsin."];
   return (
     <Center>
       <style>{themeCSS}</style>{/* erken dönüş: kabuğun <style>'ı henüz render edilmedi (Auth'taki gibi) */}

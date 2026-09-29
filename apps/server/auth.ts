@@ -1,4 +1,4 @@
-import { scrypt, randomBytes, timingSafeEqual, createHash } from "node:crypto";
+import { scrypt, randomBytes, timingSafeEqual, createHash, createHmac } from "node:crypto";
 import { promisify } from "node:util";
 import { db } from "./db.js";
 
@@ -30,7 +30,8 @@ export const SESSION_COOKIE = "finans_session";
 
 const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
 
-export type SessionUser = { id: number; email: string };
+/** `e2ee`: kullanıcının verisi tamamen şifreli (göç bitti) — düz zarf kapısı buna bakar. */
+export type SessionUser = { id: number; email: string; e2ee: boolean };
 
 export async function createSession(userId: number): Promise<{ token: string; expires: Date }> {
   const token = randomBytes(32).toString("hex");
@@ -46,8 +47,8 @@ export async function createSession(userId: number): Promise<{ token: string; ex
 /** Geçerli (süresi dolmamış) oturumun kullanıcısını döner; yoksa null. Süresi dolmuşsa temizler. */
 export async function getSessionUser(token: string | undefined): Promise<SessionUser | null> {
   if (!token) return null;
-  const row = await db.get<{ id: number; email: string; expires_at: string }>(
-    "SELECT u.id, u.email, s.expires_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?",
+  const row = await db.get<{ id: number; email: string; expires_at: string; e2ee: boolean }>(
+    "SELECT u.id, u.email, s.expires_at, u.e2ee_migrated_at IS NOT NULL AS e2ee FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?",
     hashToken(token),
   );
   if (!row) return null;
@@ -55,7 +56,7 @@ export async function getSessionUser(token: string | undefined): Promise<Session
     await deleteSession(token);
     return null;
   }
-  return { id: row.id, email: row.email };
+  return { id: row.id, email: row.email, e2ee: !!row.e2ee };
 }
 
 export async function deleteSession(token: string | undefined): Promise<void> {
@@ -90,6 +91,18 @@ export async function createEmailToken(userId: number, kind: EmailTokenKind, ttl
 }
 
 /** Token'ı doğrular ve TÜKETİR (tek kullanımlık); geçerliyse user_id, değilse null döner. */
+/** Token'ı TÜKETMEDEN doğrular. Şifre sıfırlamada iki iş için: bağlantı açılınca hesabın
+    durumunu göstermek (şifreli mi, kurtarma kodu var mı) ve reddedilen bir denemenin
+    (ör. kurtarma kodu gerekiyordu) bağlantıyı yakmaması. */
+export async function peekEmailToken(token: string, kind: EmailTokenKind): Promise<number | null> {
+  if (!token) return null;
+  const row = await db.get<{ user_id: number; expires_at: string; used: boolean }>(
+    "SELECT user_id, expires_at, used FROM email_tokens WHERE token = ? AND kind = ?", hashToken(token), kind,
+  );
+  if (!row || row.used || row.expires_at <= new Date().toISOString()) return null;
+  return row.user_id;
+}
+
 export async function consumeEmailToken(token: string, kind: EmailTokenKind): Promise<number | null> {
   if (!token) return null;
   const th = hashToken(token);
@@ -110,4 +123,53 @@ export async function purgeStaleEmailTokens(): Promise<number> {
     "DELETE FROM email_tokens WHERE used = true OR expires_at <= ?", new Date().toISOString(),
   );
   return r.changes;
+}
+
+/* ————— SIFIR BİLGİ GİRİŞİ (E2EE aşama 3b) —————
+   Parola sunucuya GELMEZ. İstemci önce bu e-postanın salt'ını ister (`/auth/prelogin`),
+   paroladan KEK + auth_token türetir, yalnız auth_token'ı gönderir. Sunucu onu scrypt'leyip
+   saklar — yani sızan bir veritabanından elde edilen hash parolaya değil token'a götürür ve
+   token KEK'i vermez (bkz. packages/crypto/src/keys.ts). */
+
+let _sir: Buffer | null = null;
+/** Sunucunun kalıcı sırrı — ilk ihtiyaçta üretilir, `server_secrets`'te saklanır. */
+async function prelogin_sirri(): Promise<Buffer> {
+  if (_sir) return _sir;
+  await db.run("INSERT INTO server_secrets (key, value) VALUES ('prelogin', ?) ON CONFLICT (key) DO NOTHING", randomBytes(32).toString("hex"));
+  const r = await db.get<{ value: string }>("SELECT value FROM server_secrets WHERE key='prelogin'");
+  _sir = Buffer.from(r!.value, "hex");
+  return _sir;
+}
+
+/** Kayıtlı OLMAYAN e-posta için tutarlı sahte salt. Yoksa `/auth/prelogin` "bu e-posta kayıtlı
+    mı" sorusunu cevaplardı (salt dönüyor mu, dönmüyor mu). Gizli anahtarla türetilmek ZORUNDA:
+    düz SHA256(email) olsaydı saldırgan kendisi hesaplayıp karşılaştırır ve yine ayırt ederdi.
+    Aynı e-posta her seferinde aynı sahte salt'ı alır — yani tekrar sorarak da ayırt edilemez. */
+export async function sahteSalt(email: string): Promise<string> {
+  return createHmac("sha256", await prelogin_sirri()).update(`salt:${email}`).digest().subarray(0, 16).toString("base64url");
+}
+
+/** İstemcinin gönderdiği E2EE malzemesinin BİÇİM doğrulaması. Sunucu içeriği okuyamaz ve
+    okumamalı; yalnız "bu gerçekten bizim biçimimiz mi" diye bakar ki çöp yazılıp kullanıcı
+    bir sonraki girişte açılamayan bir anahtarla kalmasın. */
+const B64U = /^[A-Za-z0-9_-]+$/;
+export const PAKET = /^v1:[A-Za-z0-9_-]{16}:[A-Za-z0-9_-]{40,}$/;
+export type E2eeMalzeme = { auth_token: string; kdf_salt: string; kdf_params: string; dek_wrapped_pw: string; dek_wrapped_rk: string | null };
+export function e2eeMalzemeDogrula(b: any): E2eeMalzeme | string {
+  if (!b || typeof b !== "object") return "şifreleme bilgileri eksik";
+  const { auth_token, kdf_salt, kdf_params, dek_wrapped_pw, dek_wrapped_rk } = b;
+  if (typeof auth_token !== "string" || auth_token.length !== 43 || !B64U.test(auth_token)) return "geçersiz auth_token";
+  if (typeof kdf_salt !== "string" || kdf_salt.length !== 22 || !B64U.test(kdf_salt)) return "geçersiz salt";
+  let p: any;
+  try { p = JSON.parse(String(kdf_params)); } catch { return "geçersiz KDF parametresi"; }
+  /* Alt sınır SUNUCUDA da zorlanır: istemci 1 iterasyonla kayıt olursa sızan veritabanındaki
+     sarılı DEK anında kırılırdı. Parolanın kendisini göremeyiz ama maliyetini görebiliriz. */
+  if (p?.alg !== "PBKDF2-SHA256" || !Number.isInteger(p?.iter) || p.iter < 600_000) return "KDF parametresi çok zayıf";
+  if (typeof dek_wrapped_pw !== "string" || !PAKET.test(dek_wrapped_pw)) return "geçersiz sarılı anahtar (pw)";
+  /* Kurtarma paketi aşama 3b'de İSTEĞE BAĞLI ve bu bilinçli: veri henüz şifreli değil, yani
+     kullanıcıya "bu kodu kaybedersen verin gider" demek bugün DOĞRU olmazdı — üstelik e-postayla
+     sıfırlama bu aşamada yeni bir DEK üretiyor, kaydettiği kod da geçersizleşirdi. Kod,
+     şifrelemenin gerçekten başladığı an (aşama 6, göç) gösterilir ve orada ZORUNLU olur. */
+  if (dek_wrapped_rk != null && (typeof dek_wrapped_rk !== "string" || !PAKET.test(dek_wrapped_rk))) return "geçersiz sarılı anahtar (rk)";
+  return { auth_token, kdf_salt, kdf_params: JSON.stringify({ alg: p.alg, iter: p.iter }), dek_wrapped_pw, dek_wrapped_rk: dek_wrapped_rk ?? null };
 }

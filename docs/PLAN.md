@@ -414,48 +414,6 @@ oluştu", `fetch`'in kendisi patladıysa → "bağlantını kontrol et"; hepsind
 düğmesi (eskiden tek çare sayfayı yenilemekti). `npm run dev` ipucu yalnız localhost'ta kalıyor
 — orada hâlâ doğru ipucu o.
 
-## Faz 42 — Şifreleme dalından main'e alınanlar ✅
-
-`e2ee` dalı (sıfır bilgi şifreleme, henüz birleştirilmedi) şifrelemeden bağımsız da işe yarayan
-değişiklikler biriktirmişti. Birleştirme kararı açık dururken bunlar main'e ayrıca alındı; hiçbiri
-şifreleme iddiası taşımıyor.
-
-- **Bakiye kolondan değil defterden** (e2ee `711f62b` + `963244e`). `accounts.balance` Faz 15'ten
-  beri defterin ikinci kopyasıydı ve tek işi `applyEntry`/`revertEntries`'in onu eşit tutmasıydı.
-  Kolon kalktı, bakiye `accountBalance`/`totalCash` ile türüyor; `ledgerDrift` tanım gereği 0
-  olduğundan silindi. Düşürme koşullu: `initDb` önce "kolon = Σ hareketler"i 1e-9 eşiğiyle ölçer,
-  temiz değilse kolonu bırakıp ayrışan hesapları loglar. Mutabakat farkı artık hep sunucuda,
-  defterden hesaplanıyor (istemcinin gönderdiği `diff` yok sayılır).
-- **Otomatik talimatın sınırı başlangıç günü** (e2ee `67fb9de`'nin sunucu cron'una uyarlaması).
-  `cards.pay_since` / `recurring.auto_since` — sunucu damgalar (`talimatDamgasi`): pasif→aktif
-  bugün, aktif kalırken dokunulmaz, pasif NULL, FK silinmesiyle pasifleşip yeniden açılan satır
-  taze damga alır. Cron talimattan sonraki HER vadeyi yazar, öncesine dokunmaz. Sabit 10/45 günlük
-  pencere iki yönden yanlıştı: sunucu (Render uykusu, 41.6'daki Neon kesintisi gibi) pencereden
-  uzun kapalı kalırsa vade bir daha yazılmıyor ve bakiye sessizce şişik kalıyordu; talimatı yeni
-  veren kullanıcının pencere içindeki eski vadeleri ise geriye dönük ödeniyordu. Göç: mevcut
-  talimatlara eski kuralın o gün yakalayacağı en eski gün yazıldı (bugün−10 / bugün−45), yani
-  geçiş anında davranış aynı. Zaten yazılmış vadeler önden tek sorguyla elenir — her 30 dakikalık
-  tur talimatın bütün geçmişini yeniden denemesin.
-- **Asistan onay beklerken "kaydedildi" demiyor** (e2ee `d236374`'ün asistan yarısı). Prompt kuralı
-  + araç sonucunda "HENÜZ UYGULANMADI" + deterministik emniyet `tamamlandiDiyor` (4 test).
-- **Gizlilik politikasındaki yanlış**: Faz 34'ten beri sunucuda duran asistan sohbeti hâlâ
-  "yalnızca tarayıcının belleğinde tutulur, sunucuya gönderilmez" diye yazıyordu. Düzeltildi;
-  sohbetler toplanan veriler tablosuna girdi, yapay zekâ satırına bakiyelerin ve sohbet
-  geçmişinin de gittiği eklendi.
-- **Açılış sayfası metni sadeleşti** (e2ee `024078f`'in şifreleme dışı kısmı): şifreleme bölümü,
-  rozeti ve üç SSS maddesi alınmadı; "Parolamı unutursam" ve "Verilerim nerede" main'in gerçeğine
-  göre yazıldı.
-- **Hata ekranı** ham hata metnini localhost'ta da basmıyor (e2ee `d451475`).
-
-**Doğrulama**: `pnpm build` temiz; 330 engine + 33 sunucu testi yeşil. `finans_prod` kopyasından
-açılan kum havuzunda (`finans_main`): kolon drift'siz düştü ve dört gerçek hesabın bakiyesi
-kolondakiyle birebir; göç damgaları bugün−10/−45; talimatı geriye çekilen kartta pencerenin
-dışında kalan vade (eski kuralın kaçıracağı) ödendi, talimattan önceki vadelere dokunulmadı.
-Uçtan: damga yedi geçişte doğru (açma, hesap A→B, ad değişimi, kapama, yeniden açma, FK silme
-sonrası yeniden açma, yok olan kayıt 404); işlem ekle/düzenle/sil bakiyeyi defterle doğru
-oynatıyor; mutabakat istemcinin `diff`'ini yok sayıp farkı kendisi hesaplıyor. Hesaplar, Özet
-ve Kartlar gerçek sunucuda açıldı (masaüstü + 390px): konsol hatası ve taşma yok.
-
 ---
 
 ## Faz 42.1 — Kurumsal olay akışının uçtan uca denemesi ✅
@@ -1210,6 +1168,71 @@ eklendi — **iki hâliyle** (duyurulmuş + tahmini), yoksa `~` işaretinin yerl
 denetlenemezdi.
 
 
+
+## Faz 42 — Sıfır bilgi şifreleme (E2EE) ✅ yerelde doğrulandı, merge kullanıcı onayı bekliyor
+
+**Neden.** Uygulamayı denemesi istenen kişiler gerçek verilerini girmek istemedi. İlk teşhis
+("deneme zor, demo veri lazım") **reddedildi**: sorun gerçek kullanıcının verisinin güvende
+olduğunun garanti edilememesiydi — operatör `DATABASE_URL` ile her satırı düz okuyabiliyordu.
+Kullanıcının iki şartı: *"ben bile göremeyeyim"* ve *"her şey de client'a taşınmasın"*; asistan
+kalacak (varsayılan açık), semboller düz kalacak, önemli olan harcama/maaş/bakiye/adlar. Aktif
+kötü niyetli sunucu (kötü JS sunmak) 2026-09-25'te bilinçli olarak kapsam dışı bırakıldı. Tasarım
+ve gerekçeler: [E2EE.md](E2EE.md). Tüm iş `e2ee` branch'inde; kural: **her şey önce yerelde
+doğrulanır, merge yalnız kullanıcının son onayıyla.**
+
+**Aşamalar** (her biri ayrı commit):
+- **0** asistan kullanıcı başına kapatılabilir (`user_settings.ai_enabled`, varsayılan açık).
+- **1a** `accounts.balance` kalktı, bakiye defterden türer (`accountBalance`/`totalCash`); kolon
+  yalnız defter bakiyeyi kuruşu kuruşuna açıklıyorsa düşer. **1b / 5a** sunucudaki ikinci tutar
+  hesabı silindi (ekstre, `tradeBalanceDelta`, mevduat, gerçekleştirme, açılış) — tutarı tarayıcı
+  aynı engine fonksiyonlarıyla hesaplar (`yazim/tutar.ts`).
+- **2** otomatik gerçekleştirme sunucu cron'undan uygulama açılışına taşındı (`otomatik.ts`).
+  Plan "sunucuda etkinleştirici" diyordu; önceden üretilen satırların bayatlaması ikinci bir
+  senkron protokolü gerektireceği için bu yol seçildi (kullanıcıya soruldu).
+- **2b** (2026-09-27, kullanıcı kararı) sabit 10/45 günlük telafi pencereleri kaldırıldı: sınır talimatın başladığı gün (`pay_since`/`auto_since`, sunucu damgalar). Pencere cron'da zararsızdı, açılışa taşınınca 10 gün açılmayan uygulamada ekstre bir daha yazılmıyor ve bakiye sessizce şişik kalıyordu. Mevcut talimatlara göçte eski kuralın o gün yakalayacağı en eski gün yazıldı.
+- **3** `packages/crypto` (WebCrypto, npm kripto paketi yok, altın vektörlü testler) ve sıfır bilgi
+  girişi: parola tarayıcıdan çıkmaz, sunucuya `auth_token` gider; legacy hesaplar ilk girişte
+  aynı istekte v2'ye geçer. Yeni parola kuralı 12+ karakter.
+- **4** asistanın beyni `packages/asistan`'a, döngüsü tarayıcıya taşındı; sunucu = röle + depo +
+  atomik kilit; `/ai/chat|execute|undo` ve iç istek yolu silindi.
+- **5b–5d** satır zarfı (`enc`) — 18 tablo; sunucu açılışta kolonları `p1:` düz zarfa toplayıp
+  düşürür (şema kapısı, sızıntı testi, yazma boru hattı kapısı).
+- **6a** gerçek şifreleme (AES-GCM, AAD `tablo:user_id`, 32 bayt dolgu), cihazda anahtar,
+  zorunlu kurtarma kodu, tarayıcıda `p1→v1` göçü, göç sonrası düz zarf reddi. **6b** şifremi
+  unuttum: kurtarma koduyla ya da açık onayla veri silinerek. **6c** parola değiştirme, zayıf
+  parola hatırlatması, performans ölçümü, stub'ın sıfır bilgi girişi, belgeler.
+
+**Tasarımdan sapmalar** (gerekçeleri E2EE.md'de): önbellek yapılmadı (ölçüldü: 8.000 satırda
+çözme masaüstü ~50 ms, CPU×4 ~215 ms; eşik 300 ms — cihazda düz metin bedeline değmedi), göç
+yazma kilidi yok (düz yazan istemci kalmadı), göç öncesi yedek önerilir ama zorunlu değil
+(indirilen JSON geri yüklenemiyor — zorunluluk güvence değil his verirdi), `num` codec'i yerine
+JSON + kova dolgusu.
+
+**Yol üstünde bulunan hatalar**: (1) otomatik gerçekleştirme karta düşen kalemi yazmadan önceki
+anlık görüntüyle ekstre ödüyordu — ekstre eksik ödenip "ödendi" işaretleniyordu (300+75'te 300;
+aşama 5a'da girmişti, 5c'de düzeltildi); (2) `POST /ai/plans` kimliksiz istekte boş bir sohbet
+açıp 404 dönüyordu; (3) kategori `UNIQUE` kısıtını her açılışta yeniden ekleyen blok, ad zarfa
+taşınınca sunucuyu çökertecekti (kolon kontrolüyle korundu).
+
+**Doğrulama**: `pnpm build` temiz (kapılar: ai-routes, no-crypto, zarf-şema, yazım), 502 test
+(engine 352, crypto 27, asistan 32, web 84, server 7). Kum havuzu (`finans_e2ee`, kullanıcının
+`finans` veritabanına dokunulmadı) üzerinde gerçek arayüzden: tüm defter yazma/düzenleme/silme
+yolları bakiye kontrolüyle, asistan (gerçek model) alım/ekstre/virman/mutabakat/geri al, kurtarma
+adımı, göç, anahtarsız oturum, çıkış, kayıt, üç sıfırlama yolu, parola değişimi. **Prod kopyası**
+(`finans_prod` şablonundan) üzerinde deploy zincirinin tamamı: sunucu açılışında 1a→5d tek
+seferde (217 satır sıfır fark, bakiyeler eski kolonla birebir, ikinci açılış boş), ardından
+legacy hesapla gerçek arayüzden giriş → v2 yükseltme → kurtarma kodu → tarayıcı göçü, çözülen veri
+göç öncesiyle alan alan **sıfır fark**.
+
+**Aynı dalda iki ek (kullanıcı isteği)**: gizlilik sayfası şifrelemeye göre yeniden yazıldı (neyin şifreli neyin şifresiz kaldığı, kurtarma kodu, parolanın sunucuya gitmemesi, asistan verisinin yolu ve kapatılabilmesi, dürüst sınır cümlesi; ayrıca Faz 34'ten beri yanlış olan "asistan sohbeti tarayıcıda tutulur" ifadesi düzeltildi). Asistan onay kartının üstüne "kaydedildi" yazıyordu — prompt + araç sonucu düzeltildi, üstüne plan varken tamamlanmış gibi konuşan yanıtı nötrleyen deterministik emniyet (gerçek modelle dört akışta da artık "hazırladım, onaylarsan kaydedeceğim").
+
+**Deploy'da ne olur (kullanıcı için)**: sunucu ilk açılışta şemayı kendisi dönüştürür (veri kaybı
+yok, iki kez çalışması zararsız). Her kullanıcı bir sonraki girişinde bir kez kurtarma kodunu
+görür ve kaydeder; verisi o an tarayıcıda şifrelenir (birkaç yüz satır, saniyenin altında).
+Açık oturumlar bir kez parola ister (cihazda anahtar yok). Kurtarma kodunu kaybedip parolasını
+unutan kullanıcının verisi kurtarılamaz — bu, "biz bile okuyamayız"ın doğrudan sonucu.
+
+
 ## Doğrulama
 
 - **Faz 0**: ✅ `pnpm build` temiz; 46 engine vitest testi yeşil; gerçek `data/finans.db` ile prod sunucu smoke test edildi (API verisi + derlenmiş arayüz doğrulandı).
@@ -1223,7 +1246,7 @@ denetlenemezdi.
 
 ## Sıralama
 
-Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Faz 0–42 tamamlandı (Faz 5 yayına, 10–13 ürün derinleşmesine, 21+ asistan ve portföy derinleşmesine kadar); yukarıdaki nota bakın — 22-33'ün günlüğü burada değil, CLAUDE.md/README'de.
+Fazlar sıralı; her faz kendi başına çalışan uygulama bırakır. Faz 0–41 tamamlandı (Faz 5 yayına, 10–13 ürün derinleşmesine, 21+ asistan ve portföy derinleşmesine kadar); yukarıdaki nota bakın — 22-33'ün günlüğü burada değil, CLAUDE.md/README'de.
 
 **Sıradaki iş — numaralı faz değil, açık kalan kalemler (öncelik sırasıyla):**
 1. ~~E-posta teslim edilebilirliği~~ — **çözüldü (Faz 28)**: gönderim yolu `MAIL_PROVIDER` ile

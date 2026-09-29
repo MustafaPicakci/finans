@@ -409,6 +409,8 @@ export function DepositForm({ data, reload, onClose, edit }: FormProps & { edit?
       name: f.name, principal: num(f.principal), rate: num(f.rate), open_date: f.open_date,
       term_days: +f.term_days, withholding: num(f.withholding),
       account_id: f.account_id ? +f.account_id : null,
+      // defter hareketi: anapara hesaptan ÇIKAR (E2EE aşama 1b — sunucu artık türetmiyor)
+      entry_amount: -num(f.principal),
     };
     if (edit) { await api.put(`deposits/${edit.id}`, body); reload(); onClose(); return; }
     await api.post("deposits", body);
@@ -496,6 +498,7 @@ export function BedelliForm({ data, reload, onClose }: FormProps) {
       qty: plan.qty, price: num(f.bedel), fee: 0, currency: pos.currency,
       account_id: f.account_id ? +f.account_id : null,
       portfolio_id: f.portfolio_id ? +f.portfolio_id : null,
+      entry_amount: cashDelta({ side: "ALIŞ", qty: plan.qty, price: num(f.bedel), fee: 0 }),
     });
     reload();
     onClose();
@@ -568,7 +571,7 @@ export function TransferForm({ data, reload, onClose, edit }: FormProps & { edit
     }
     : { date: todayStr(), from_account_id: "", to_account_id: "", amount: "", note: "" });
   const amountRef = useRef<HTMLInputElement>(null);
-  // bakiye kolonu yok, defterden türetilir (Faz 42)
+  // bakiye kolonu yok, defterden türetilir (E2EE aşama 1a)
   const bakiyeler = balancesByAccount(data.account_entries);
   const bakiye = (id: number) => bakiyeler.get(id) ?? 0;
   const from = f.from_account_id ? data.accounts.find((a) => a.id === +f.from_account_id) : null;
@@ -754,6 +757,10 @@ export function TradeForm({ data, reload, onClose, edit, prefill }: FormProps & 
       ...f, symbol: f.symbol.trim(), qty, price, fee, currency: f.currency,
       account_id: f.currency === "TRY" && f.account_id ? +f.account_id : null,
       portfolio_id: f.portfolio_id ? +f.portfolio_id : null,
+      /* Hesaba giren/çıkan para (E2EE aşama 1b). `cashDelta` ZATEN bu dosyada kullanılıyor
+         (tutar↔adet çevirimi için), yani sunucudaki `tradeBalanceDelta` onun kopyasıydı —
+         kaldırılan şey ikinci kopya, eklenen bir hesap değil. */
+      entry_amount: cashDelta({ side: f.side, qty, price, fee }),
     };
     if (edit) { await api.put(`trades/${edit.id}`, body); reload(); onClose(); return; }
     await api.post("trades", body);

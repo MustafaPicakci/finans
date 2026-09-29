@@ -20,7 +20,7 @@ import { EditSheet, type EditTarget } from "../../EditSheet";
 export function Hesaplar({ data, reload }: { data: AllData; reload: () => void }) {
   const [editing, setEditing] = useState<EditTarget | null>(null);
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  /* Bakiye artık kolonda değil defterde (Faz 42). Tek geçişte hepsi çıkarılır:
+  /* Bakiye artık kolonda değil defterde (E2EE aşama 1a). Tek geçişte hepsi çıkarılır:
      hesap başına `accountBalance` çağırmak liste render'ında N×M gezinti olurdu. */
   const bakiyeler = balancesByAccount(data.account_entries);
   const bakiye = (id: number) => bakiyeler.get(id) ?? 0;
@@ -108,7 +108,7 @@ const KIND_HINT: Record<AccountKind, string> = {
 };
 
 function VadesizHesaplar({ data, reload }: { data: AllData; reload: () => void }) {
-  // bakiye kolonda değil defterde (Faz 42); tek geçişte hepsi
+  // bakiye kolonda değil defterde (E2EE aşama 1a); tek geçişte hepsi
   const bakiyeler = balancesByAccount(data.account_entries);
   const bakiye = (id: number) => bakiyeler.get(id) ?? 0;
   const [acc, setAcc] = useState({ name: "", balance: "", kind: "banka" as AccountKind });
@@ -219,8 +219,8 @@ function Mutabakat({ data, account, reload, onDone }: {
   /* 0 ve eksi geçerli olduğundan `num`'ın "çözemedim → 0" davranışına güvenilemez:
      "abc" yazılıp onaylanırsa bakiye sessizce 0'a çekilirdi. Girdi sayısal görünmeli. */
   const entered = /^-?\s*[\d.,]+$/.test(real.trim());
-  /* Kayıtlı bakiye defterden türetilir (Faz 42). Buradaki fark yalnız önizlemedir —
-     sunucu farkı kendi defterinden yeniden hesaplar, istemcinin rakamına güvenmez. */
+  /* Kayıtlı bakiye defterden türetilir; sunucu artık farkı kendisi hesaplamıyor
+     (şifreli tutarla yapamayacağı için — E2EE aşama 1a), delta ile gönderilir. */
   const mevcut = accountBalance(data.account_entries, account.id);
   const diff = entered ? reconcileDiff(mevcut, num(real)) : 0;
   /* SLICE KALDIRILDI: liste `slice(0, 8)` ile kesiliyordu ama etiket kesilmiş uzunluğu
@@ -232,7 +232,7 @@ function Mutabakat({ data, account, reload, onDone }: {
   const save = async () => {
     if (!entered || busy) return;
     setBusy(true);
-    await api.post(`accounts/${account.id}/reconcile`, { balance: num(real), date: todayStr(), note: note.trim() || null });
+    await api.post(`accounts/${account.id}/reconcile`, { balance: num(real), diff, date: todayStr(), note: note.trim() || null });
     reload(); onDone();
   };
   return (
@@ -284,7 +284,7 @@ function Mutabakat({ data, account, reload, onDone }: {
    Hesabın bakiyesini açıklayan defter: her satır bir hareket + o hareketten sonraki bakiye.
    Hareketler sunucuda yazılır (bakiyeyi oynatan her akış), burada yalnız gösterilir — bu yüzden
    ekranda silme/düzenleme yok: hareket kaynağından (işlem, portföy işlemi, mevduat) düzenlenir.
-   Eskiden burada bir `ledgerDrift` uyarısı vardı; Faz 42'de bakiye defterden TÜRETİLİR
+   Eskiden burada bir `ledgerDrift` uyarısı vardı; E2EE aşama 1a'da bakiye defterden TÜRETİLİR
    olunca fark tanım gereği 0'a düştü, yani uyaracak bir şey kalmadı. */
 const KIND_LABEL: Record<AccountEntry["kind"], string> = {
   islem: "işlem", portfoy: "portföy", mevduat: "vadeli", duzeltme: "düzeltme", acilis: "açılış", virman: "transfer",

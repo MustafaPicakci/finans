@@ -233,11 +233,12 @@
      da tüm soru-cevabı görsün (sayfanın SEO işi bu). */
   var faqs = [
     { q: "Bankamı bağlamam gerekiyor mu?", a: "Hayır. Finans hiçbir banka hesabına bağlanmaz, banka şifrenizi de istemez. Hesaplarınızı ve düzenli ödemelerinizi bir kez girersiniz, sonrasında yeni bir kayıt birkaç saniye sürer." },
-    { q: "Verilerim nerede tutuluyor?", a: "Bulutta, hesabınıza bağlı bir veritabanında. Başka kullanıcılar kayıtlarınızı göremez. İstediğiniz zaman verilerinizin tamamını indirebilir ya da hesabınızı silebilirsiniz. Ayrıntılar Gizlilik Politikası'nda." },
-    { q: "Parolamı unutursam ne olur?", a: "Giriş ekranından e-postanıza bir sıfırlama bağlantısı istersiniz ve yeni parolanızı belirlersiniz. Verileriniz olduğu gibi kalır." },
+    { q: "Verilerim nerede tutuluyor?", a: "Bulutta, şifreli olarak. Tutarları, adları ve notları yalnızca siz okuyabilirsiniz. İstediğiniz zaman verilerinizin tamamını indirebilir ya da hesabınızı silebilirsiniz. Ayrıntılar Gizlilik Politikası'nda." },
+    { q: "Siz verilerimi görebiliyor musunuz?", a: "Hayır. Sakladığımız kayıtlar şifreli ve bizde onları açacak bir anahtar yok. Veritabanını barındıran şirket ya da verileri ele geçiren biri de okuyamaz." },
+    { q: "Parolamı unutursam ne olur?", a: "Hesabı açarken size bir kurtarma kodu veriyoruz. Parolanızı unutursanız bu kodla yeni parola belirlersiniz, verileriniz olduğu gibi kalır. İkisini birden kaybederseniz verilerinizi biz de açamayız ve hesabı sıfırdan başlatmanız gerekir. O yüzden kodu güvenli bir yere not edin." },
     { q: "Döviz ve dolarla alınan yatırımlar nasıl görünüyor?", a: "Her yatırım kendi para biriminde girilir, toplamlar TL olarak hesaplanır. Üstteki ₺/$ düğmesiyle ekranı dolara çevirebilirsiniz." },
     { q: "Taksitler ve kredi ödemeleri hesaba giriyor mu?", a: "Evet. Kart ekstreleri, taksitli alışverişlerin aylık payı ve kredi taksitleri ileriye dönük hesaba kendiliğinden girer. Paranızın en çok azalacağı günü bu yüzden gerçekçi görürsünüz." },
-    { q: "Asistan nasıl çalışıyor?", a: "Ne yaptığınızı yazarsınız ya da söylersiniz, asistan bunu kayda çevirip size gösterir. Siz onaylamadan hiçbir şey kaydedilmez, yaptığınızı sonradan geri de alabilirsiniz. Sesle yazdırırken ses kaydı bize gelmez. Asistan yalnızca uygulamayla ilgili sorulara cevap verir, yatırım tavsiyesi vermez. Kullandığınızda mesajınız yapay zekâ servisine gönderilir. Asistanı hiç kullanmazsanız bu servise hiçbir şey gitmez." },
+    { q: "Asistan nasıl çalışıyor?", a: "Ne yaptığınızı yazarsınız ya da söylersiniz, asistan bunu kayda çevirip size gösterir. Siz onaylamadan hiçbir şey kaydedilmez, yaptığınızı sonradan geri de alabilirsiniz. Sesle yazdırırken ses kaydı bize gelmez. Asistan yalnızca uygulamayla ilgili sorulara cevap verir, yatırım tavsiyesi vermez. Kullandığınızda mesajınız yapay zekâ servisine gönderilir ve saklanmaz; isterseniz asistanı Hesabım'dan kapatabilirsiniz." },
     { q: "Yatırım tavsiyesi veriyor mu?", a: "Hayır. Finans yalnızca girdiğiniz bilgileri düzenler ve hesaplar. Al-sat önerisi ya da getiri tahmini yapmaz." }
   ];
   $("faqList").innerHTML = faqs.map(function (f, i) {
