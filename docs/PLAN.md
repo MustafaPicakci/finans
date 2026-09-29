@@ -450,6 +450,37 @@ Kapsam dışı kalan iki gözlem: TEFAS'ın 0 döndürdüğü fonlar **tahtası 
 (kullanıcı açıkladı; −%100 görünür, değerleme kararı kullanıcıda bekliyor) ve −%93,8 görünen
 KONTR'da kaçırılmış bedelsiz yok — alış fiyatı piyasanın ~10 katı, olası yazım hatası.
 
+## Faz 43 — Kurulum sihirbazı ✅ (yerelde doğrulandı, 2026-09-29)
+
+Pazara çıkış değerlendirmesinde ilk engel "ilk 5 dakika" çıktı: uygulamanın cevap verdiği soru
+("ay sonunda elimde ne kalacak") ancak hesaplar, gelir, kartlar, düzenli giderler ve krediler
+girilince görünüyor; bunlar sekiz sekmeye dağılmış tanım formlarıydı ve yeni kullanıcı boş bir
+Özet'le karşılaşıyordu. `setupGaps` da hiç hesabı olmayana bilerek susuyordu.
+
+Kararlar:
+- **Ayrı yazma yolu yok.** Sihirbaz var olan tanım uçlarına aynı gövdeleri gönderir; E2EE boru
+  hattı (`yaz()`) değişmeden geçerli. Sıra (sihirbaz → bildirim → ekstre) E2EE'nin önce main'e
+  alınmasına bağlandı: özellikleri düz sunucu varsayımıyla yazıp sonra şifrelemeye taşımak
+  iki kez tasarım demekti.
+- **Satır eklendiği an kaydedilir**, adım sonunda toplu değil: maaşın hangi hesaba yattığı
+  önceki adımın id'sine bağlı, ve yarıda bırakılan kurulum kaybolmamalı.
+- **Kredi kullanıcının bildiği şeyle sorulur** (kalan taksit + sıradaki tarih); model aynı kalır.
+- **Kendiliğinden açılma dar**: yalnız hiçbir şey girilmemiş hesap, yalnız Özet'e gelindiğinde,
+  oturum başına bir kez. "Bir kez" ve "Sonra" cihaz VE kullanıcı başınadır; boş hesapta Özet
+  kartı geri dönüş yoludur.
+- Demo/örnek veri bilerek yok (E2EE kararıyla aynı gerekçe: sorun denemek değil, gerçek veriyi
+  güvenle girmek).
+
+Doğrulama: `finans_e2ee_test` üzerinde yeni kullanıcıyla kayıt → giriş → kurtarma kodu →
+sihirbazın altı adımı, 390px'te ekran görüntüleriyle. 11 satırın hepsi `v1:` zarflı, düz metin
+taraması 0; kart talimatı ve otomatik kalemler bugünün damgasını aldı; "Sonra" yolu ve yeniden
+açılma denendi. Bulunan ve düzeltilen: + düğmesi mobilde "İleri"yi örtüyordu; "her 1'i" gibi
+sabit Türkçe ek çoğu günde yanlıştı (Plan'ın "ayın N. günü" kalıbına geçildi). Kullanıcının kendi
+denemesinde bulunan: aynı sekmede çıkıp yeni hesapla girince sihirbaz açılmıyordu — çıkış App'i
+sökmediğinden "açıldı" bayrağı önceki hesaptan dolu kalıyordu ve çıkılan ekranın adresi (`/profil`)
+yeni oturuma taşınıyordu. Bayrak kullanıcıya bağlandı, çıkış Özet'e döner (E2E'de eski kodla
+tekrarlandı, düzeltmeyle geçti).
+
 ## Doğrulama
 `pnpm build` temiz, 57 engine testi yeşil. Kota sıfırlandıktan sonra `returns-by-date` tasarımı gerçek veride **tam** doğrulandı:
 - **Tek istekte 3489 fon fiyatı** toplandı (`prices` + aynı gün `price_history`'de tam senkron) — tahmin edilenin (~150-160) çok üzerinde, TEFAS'ta pay sınıfı/alt kategori dahil gerçekten binlerce fon var.
@@ -1169,7 +1200,7 @@ denetlenemezdi.
 
 
 
-## Faz 42 — Sıfır bilgi şifreleme (E2EE) ✅ yerelde doğrulandı, merge kullanıcı onayı bekliyor
+## Faz 42 — Sıfır bilgi şifreleme (E2EE) ✅ main'e birleştirildi (2026-09-29, `f81e147`; geri dönüş etiketi `pre-e2ee`), prod'a deploy edilmedi
 
 **Neden.** Uygulamayı denemesi istenen kişiler gerçek verilerini girmek istemedi. İlk teşhis
 ("deneme zor, demo veri lazım") **reddedildi**: sorun gerçek kullanıcının verisinin güvende

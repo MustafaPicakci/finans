@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { setupGaps } from "./setup.js";
+import { setupGaps, kurulumGerekli, ilkProjeksiyon } from "./setup.js";
+import type { Day } from "./projection.js";
 import type { AllData, Account, Trade } from "./types.js";
 
 /* `balance` alanı kalktı (E2EE aşama 1a); setupGaps zaten yalnız `kind` ve
@@ -59,5 +60,35 @@ describe("setupGaps", () => {
       expect(g.detail.length).toBeGreaterThan(20); // "neden önemli" boş geçilmesin
       expect(["hesaplar", "portfoy"]).toContain(g.tab);
     }
+  });
+});
+
+describe("kurulumGerekli", () => {
+  it("hiçbir şey girilmemişse sihirbaz gerekir", () => {
+    expect(kurulumGerekli(data())).toBe(true);
+  });
+  it("tek bir tanım ya da kayıt bile varsa gerekmez (kullanıcı ekranından koparılmaz)", () => {
+    expect(kurulumGerekli(data({ accounts: [acc(1)] }))).toBe(false);
+    expect(kurulumGerekli(data({ trades: [trade()] }))).toBe(false);
+    expect(kurulumGerekli(data({ cards: [{ id: 1, name: "K", limit_amount: 0, statement_day: 1, due_day: 10 }] as AllData["cards"] }))).toBe(false);
+  });
+});
+
+describe("ilkProjeksiyon", () => {
+  const gun = (k: string, bal: number) => ({ k, bal } as Day);
+  it("ay sonu = içinde bulunulan ayın son günü; en düşük = penceredeki en dar gün", () => {
+    const days = [gun("2026-09-28", 1000), gun("2026-09-29", 400), gun("2026-09-30", 900), gun("2026-10-01", 300), gun("2026-10-02", 800)];
+    expect(ilkProjeksiyon(days)).toEqual({
+      bugun: 1000,
+      aySonu: { k: "2026-09-30", bal: 900 },
+      enDusuk: { k: "2026-10-01", bal: 300 },
+    });
+  });
+  it("eşit en düşükte İLK gün seçilir (en erken uyarı) ve pencere dışı sayılmaz", () => {
+    const days = [gun("2026-09-01", 500), gun("2026-09-02", 100), gun("2026-09-03", 100), gun("2026-09-04", -50)];
+    expect(ilkProjeksiyon(days, 3)!.enDusuk).toEqual({ k: "2026-09-02", bal: 100 });
+  });
+  it("projeksiyon boşsa null", () => {
+    expect(ilkProjeksiyon([])).toBeNull();
   });
 });

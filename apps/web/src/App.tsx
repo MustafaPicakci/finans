@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { project, positions, cardInfos, stmtKey, loanRemaining, portfolioValueTry, depositValueOn, totalCash, convert,
-  bekleyenDuzenli, bekleyenEkstreler, todayStr, type Currency } from "@finans/engine";
+  bekleyenDuzenli, bekleyenEkstreler, todayStr, kurulumGerekli, type Currency } from "@finans/engine";
 import { api, ApiError, type SessionUser } from "./api";
 import { T, css, fmtMoney, fiyatYasi, FIYAT_YASI_IPUCU, themeCSS, THEME_KEY, CCY_KEY, type ThemeMode } from "./theme";
 import { Center } from "./ui";
-import { NAV, NavIcon, PROFIL_META, TANIMLAR_META } from "./nav";
+import { NAV, NavIcon, PROFIL_META, TANIMLAR_META, KURULUM_META } from "./nav";
 import { useTabRoute } from "./route";
 import { useBalancesHidden, toggleBalancesHidden } from "./privacy";
 import { Auth, type UrlAuth } from "./features/auth";
@@ -17,11 +17,16 @@ import { Plan } from "./features/plan";
 import { Kartlar } from "./features/kart";
 import { Portfoy } from "./features/portfoy";
 import { Kayitlar } from "./features/kayitlar";
+import { Kurulum } from "./features/kurulum";
 import { Asistan, clearChat } from "./features/asistan";
 import { anahtarYukle, anahtarSil } from "./yazim/anahtar";
 import { ZAYIF_PAROLA_KEY } from "./features/auth/e2ee";
 import { sifrelemeGocu } from "./yazim/goc";
 import { AddSheet, type AddState, type KalemPrefill, type TradePrefill } from "./AddSheet";
+
+/** Kurulum sihirbazına "Sonra" denmiş mi — cihaz VE kullanıcı başına: yalnız cihaz başına olsaydı
+    aynı cihazda açılan ikinci hesap birincinin "Sonra"sını miras alırdı */
+const kurulumSonraKey = (uid: number) => `finans-kurulum-sonra:${uid}`;
 
 /* ————— ana uygulama ————— */
 export default function App() {
@@ -103,7 +108,11 @@ export default function App() {
      (başka cihazdan devam edilebilsin diye). Temizlenen yalnız bu cihazın "en son şu
      sohbetteydim" işaretçisi + Faz 22-33'ün artık okunmayan localStorage sohbeti —
      ortak cihazda sonraki kullanıcı öncekinin konuşmasının açıldığını görmesin. */
-  const logout = useCallback(async () => { await api.logout().catch(() => {}); await anahtarSil(); clearChat(); setUser(null); setData(null); }, []);
+  const logout = useCallback(async () => {
+    await api.logout().catch(() => {}); await anahtarSil(); clearChat(); setUser(null); setData(null);
+    // sonraki giriş (belki başka hesap) öncekinin ekranında açılmasın — Özet'ten başlasın
+    setTab("ozet", true);
+  }, [setTab]);
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try { await api.refreshPrices(); await reload(); } catch { /* best-effort */ } finally { setRefreshing(false); }
@@ -192,6 +201,25 @@ export default function App() {
 
   const rates = useMemo(() => ({ usdTry: Number(data?.settings.fx_usd_try || 0) }), [data]);
   const days = useMemo(() => (data ? project(data, Number(data.settings.horizon || 6), rates) : []), [data, rates]);
+  /* Kurulum sihirbazı: hiçbir şey girilmemiş hesapta Özet yerine kendiliğinden açılır — bir kez
+     (oturum başına), yalnız Özet'e gelindiyse (paylaşılan SMS asistana, e-postadaki bağlantı
+     kendi ekranına gidiyor; onları kesmez) ve kullanıcı "Sonra" demediyse. "Sonra" cihaza
+     yazılır: kurulum yine Özet'teki karttan açılabilir, yalnız her açılışta üstüne atlamaz.
+     "Bir kez" KULLANICI başınadır, düz bayrak değil: çıkış App'i sökmez, yani aynı sekmede
+     çıkıp yeni hesapla girince bayrak önceki hesaptan dolu kalıyor ve sihirbaz hiç
+     denenmiyordu (yeni kayıtta yaşandı — doğrulama e-postasından dönüp aynı sekmede giriş). */
+  const kurulumAcildi = useRef<number | null>(null);
+  useEffect(() => {
+    if (!data || !user || kurulumAcildi.current === user.id) return;
+    kurulumAcildi.current = user.id;
+    let sonra = false;
+    try { sonra = localStorage.getItem(kurulumSonraKey(user.id)) === "1"; } catch { /* depolama yoksa sor */ }
+    if (tab === "ozet" && !sonra && kurulumGerekli(data)) setTab("kurulum", true);
+  }, [data, user, tab, setTab]);
+  const kurulumBitir = useCallback(() => {
+    if (user) try { localStorage.setItem(kurulumSonraKey(user.id), "1"); } catch { /* yalnız bu oturum */ }
+    setTab("ozet");
+  }, [user, setTab]);
   const pos = useMemo(() => (data ? positions(data.trades, data.prices) : []), [data]);
   // bakiye kolonu yok; nakit defterden türetilir (E2EE aşama 1a)
   const cash = useMemo(() => (data ? totalCash(data.account_entries) : 0), [data]);
@@ -255,7 +283,7 @@ export default function App() {
 
   const openAdd = (kind: AddState["kind"], prefill?: KalemPrefill) => setAdd({ kind, prefill });
   // profil/tanimlar bilerek NAV dizisinde yok (bkz. nav.tsx) — başlıkları kendi META'larından gelir
-  const meta = NAV.find((n) => n.key === tab) ?? (tab === "tanimlar" ? TANIMLAR_META : PROFIL_META);
+  const meta = NAV.find((n) => n.key === tab) ?? (tab === "tanimlar" ? TANIMLAR_META : tab === "kurulum" ? KURULUM_META : PROFIL_META);
   const summary = { netWorthTry, cash, portValueTry, depositsValueTry, cardDebt, loanDebt,
     accountCount: data.accounts.length, portTypes, cardsWaiting, loansActive };
   const initials = (user?.email ?? "?").slice(0, 2).toUpperCase();
@@ -593,7 +621,9 @@ export default function App() {
             {tab === "ozet" && <Ozet data={data} days={days} pos={pos} cash={cash} rates={rates} reload={reload} summary={summary} m={m} onGoAccounts={() => setTab("hesaplar")}
               onGoPortfolio={() => setTab("portfoy")}
               onSellFund={(p: TradePrefill) => setAdd({ kind: "trade", tradePrefill: p })}
-              onKurumsalOlay={(p: TradePrefill) => setAdd({ kind: "trade", tradePrefill: p })} />}
+              onKurumsalOlay={(p: TradePrefill) => setAdd({ kind: "trade", tradePrefill: p })}
+              onKurulum={() => setTab("kurulum")} />}
+            {tab === "kurulum" && <Kurulum data={data} days={days} reload={reload} onBitir={kurulumBitir} />}
             {tab === "hesaplar" && <Hesaplar data={data} reload={reload} />}
             {tab === "profil" && <Profil user={user} data={data} reload={reload} onDeleted={() => { anahtarSil(); setUser(null); setData(null); }} />}
             {tab === "tanimlar" && <Tanimlar data={data} reload={reload} />}
@@ -607,12 +637,13 @@ export default function App() {
         </div>
       </main>
 
-      <button className="add-fab" aria-label="Ekle" onClick={() => openAdd("pick")} style={{
+      {/* Kurulumda gizli: sihirbaz kendi giriş akışıdır ve mobilde düğme "İleri"nin üstüne biniyordu */}
+      {tab !== "kurulum" && <button className="add-fab" aria-label="Ekle" onClick={() => openAdd("pick")} style={{
         position: "fixed", right: 18, bottom: "calc(70px + env(safe-area-inset-bottom))", zIndex: 30,
         width: 54, height: 54, borderRadius: 999, border: "none", cursor: "pointer",
         background: T.acc, color: T.accInk, fontSize: 26, fontWeight: 700, alignItems: "center", justifyContent: "center",
         boxShadow: `0 8px 22px -6px ${T.acc}`,
-      }}>＋</button>
+      }}>＋</button>}
 
       {add !== null && <AddSheet data={data} state={add} setState={setAdd} onClose={() => setAdd(null)} reload={reload} />}
 

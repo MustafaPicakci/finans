@@ -2,6 +2,7 @@ import type { AllData } from "./types.js";
 import { positions } from "./portfolio.js";
 import { accountKindOf, reconStatus } from "./accounts.js";
 import { cashFundSymbols } from "./funds.js";
+import type { Day } from "./projection.js";
 
 /* ————— Kurulum eksikleri —————
    Faz 16/17'de eklenen yetenekler (hesap türleri, mutabakat, "nakit sayılan fon") opt-in'dir:
@@ -61,4 +62,45 @@ export function setupGaps(data: AllData, today: string): SetupGap[] {
     });
   }
   return gaps;
+}
+
+/* ————— Kurulum sihirbazı —————
+   setupGaps "kurduğun şeyin eksiğini" söyler; hiç hesabı olmayana susar, çünkü o kullanıcının
+   eksiği bir özellik değil HER ŞEYDİR. O boşluğu sihirbaz doldurur: hesaplar → gelir → kartlar
+   → düzenli giderler → krediler, sonunda ilk projeksiyon. Değeri (ay sonunda ne kalacak) ancak
+   bu tanımlar girilince görünür; tek tek sekmelerde aramak yeni kullanıcıyı ilk gün kaybettirir. */
+
+/** Sihirbaz KENDİLİĞİNDEN yalnız hiçbir şey girilmemiş hesaba açılır. Tek bir kayıt bile
+    varsa kullanıcı uygulamayı zaten kullanıyordur — onu kendi ekranından koparmak yanlış olur
+    (elle yine açılabilir). */
+export function kurulumGerekli(data: AllData): boolean {
+  return !data.accounts.length && !data.cards.length && !data.recurring.length && !data.loans.length
+    && !data.oneoffs.length && !data.trades.length && !data.transactions.length && !data.card_txs.length
+    && !(data.deposits ?? []).length;
+}
+
+export type IlkProjeksiyon = {
+  /** bugünkü nakit (projeksiyonun ilk günü) */
+  bugun: number;
+  /** içinde bulunulan ayın son günü */
+  aySonu: { k: string; bal: number };
+  /** pencere içindeki en düşük nakit günü; eşitlikte İLKİ (en erken uyarı) */
+  enDusuk: { k: string; bal: number };
+};
+
+/** Sihirbazın son adımı: "girdiklerinle ay sonunda ne kalıyor, en dar gün hangisi".
+    SAF nakit (`bal`) okunur, etkin nakit değil — Özet'teki "en düşük gün" ile aynı soru ve aynı
+    cevap olmalı (fon henüz tanımlanmamış bir kullanıcıda ikisi zaten aynıdır). */
+export function ilkProjeksiyon(days: Day[], pencereGun = 60): IlkProjeksiyon | null {
+  if (!days.length) return null;
+  const ay = days[0].k.slice(0, 7);
+  let aySonu = days[0];
+  for (const d of days) { if (d.k.slice(0, 7) !== ay) break; aySonu = d; }
+  let enDusuk = days[0];
+  for (const d of days.slice(0, pencereGun)) if (d.bal < enDusuk.bal) enDusuk = d;
+  return {
+    bugun: days[0].bal,
+    aySonu: { k: aySonu.k, bal: aySonu.bal },
+    enDusuk: { k: enDusuk.k, bal: enDusuk.bal },
+  };
 }

@@ -4,7 +4,7 @@ import {
   PieChart, Pie, Cell,
 } from "recharts";
 import {
-  fmtD, parseD, keyOf, convert, depositValueOn, fundSellSuggestion, setupGaps, balancesByAccount,
+  fmtD, parseD, keyOf, convert, depositValueOn, fundSellSuggestion, setupGaps, kurulumGerekli, balancesByAccount,
   kurumsalOneriler, dripSet, type KurumsalOneri,
   type AllData, type Day, type Position, type Rates,
 } from "@finans/engine";
@@ -44,12 +44,14 @@ function sparkPath(vals: number[], W: number, H: number, pad = 6): { line: strin
 /* Özet grafikleri TRY canonical'dır (nakit projeksiyonu + portföy değeri geçmişi hep TRY).
    Hero net varlık + KPI kartları buradadır (değerler App.tsx'te TRY hesaplanıp görüntü birimine çevrilerek gelir).
    Hesap/mevduat yönetimi Hesaplar sekmesindedir; burada yalnız özet + "Yönet" kısayolu. */
-export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAccounts, onGoPortfolio, onSellFund, onKurumsalOlay }: {
+export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAccounts, onGoPortfolio, onSellFund, onKurumsalOlay, onKurulum }: {
   data: AllData; days: Day[]; pos: Position[]; cash: number; rates: Rates; reload: () => void;
   summary: OzetSummary; m: (v: number, dec?: boolean) => string; onGoAccounts: () => void;
   onSellFund: (p: TradePrefill) => void; onGoPortfolio: () => void;
   /** Faz 36 — kaçırılan kurumsal olayı önden dolu işlem formuyla açar */
   onKurumsalOlay: (p: TradePrefill) => void;
+  /** Kurulum sihirbazını açar (hiçbir şey girilmemiş hesapta Özet'in tek anlamlı eylemi) */
+  onKurulum: () => void;
 }) {
   // bakiye kolonu yok, defterden türetilir (E2EE aşama 1a)
   const hesapBakiyeleri = balancesByAccount(data.account_entries);
@@ -285,6 +287,18 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAcc
           {gorunenOlaylar.some((o) => o.kind === "temettu") &&
             " Temettü tutarı brüttür (stopaj düşülmemiş) — hesabına giren net tutarı formda düzeltebilirsin."}
         </div>
+      </div>
+    )}
+
+    {/* Boş hesap: sihirbaz "Sonra" ile kapatılmış olabilir. Bu durumda Özet'teki her kart boştur
+        ve tek anlamlı eylem kurulumdur — setupGaps de hiç hesap yokken bilerek susar. */}
+    {kurulumGerekli(data) && (
+      <div style={{ ...css.card, padding: 16, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <div style={{ fontWeight: 650, fontSize: 15 }}>Birkaç soruda kuralım</div>
+          <div style={{ fontSize: 12.5, color: T.mut, marginTop: 3 }}>Hesaplar, gelir, kartlar, düzenli giderler ve krediler — sonunda ay sonunda ne kalacağını görürsün.</div>
+        </div>
+        <button style={css.btn} onClick={onKurulum}>Kurulumu başlat</button>
       </div>
     )}
 
