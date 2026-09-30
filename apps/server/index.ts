@@ -8,7 +8,7 @@ import cron from "node-cron";
 import { REC_AMOUNT_BEGIN } from "@finans/engine";
 import { db, initDb, nowLocal, todayLocal, zarfGecerli, TENANT_TABLES, GLOBAL_SETTING_KEYS, type TxClient } from "./db.js";
 import { loadAllData } from "./data.js";
-import { topluIslemYaz, topluKartYaz, topluVirmanYaz, acilisGuncelle, type TopluVirman } from "./toplu.js";
+import { topluIslemYaz, topluKartYaz, topluVirmanYaz, topluTradeYaz, acilisGuncelle, type TopluVirman, type TopluTrade } from "./toplu.js";
 import { refreshAll, backfillPriceHistory, refreshCorporateActions, refreshCompanyEvents } from "./prices.js";
 import { refreshBenchmarks, autoBackfill } from "./benchmarks.js";
 import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, peekEmailToken, purgeStaleEmailTokens, SESSION_COOKIE, type SessionUser , sahteSalt, e2eeMalzemeDogrula, PAKET } from "./auth.js";
@@ -1291,6 +1291,38 @@ api.post("/cardtxs/bulk", async (c) => {
   }
   await db.tx((t) => topluKartYaz(t, uid, rows.map((r: any) => ({ card_id: r.card_id, date: r.date, enc: r.enc, category_id: r.category_id ?? null }))));
   console.log(`[audit] Toplu kart harcaması: ${rows.length} kayıt (id:${uid})`);
+  return c.json({ inserted: rows.length });
+});
+/* Faz 45.9 — aracı kurum ekstresinden portföy işlemleri: toplu, atomik, sahiplik doğrulamalı, asistana
+   kapalı (önizleme + düzeltme akışı gerekir). Kurallar tekli `POST /trades` ile aynı: yalnız ALIŞ/SATIŞ
+   (temettü/bedelsiz kurumsal olay akışından girilir), hesaba bağlı TRY işlemde hareket zarfı zorunlu. */
+const VARLIK_TURLERI = ["BIST", "FON", "ALTIN", "DOVIZ", "KRIPTO", "ETF"];
+api.post("/trades/bulk", async (c) => {
+  const b = await c.req.json().catch(() => null);
+  const ham = b && Array.isArray(b.rows) ? b.rows : null;
+  if (!ham) return c.json({ error: "geçersiz gövde" }, 400);
+  if (ham.length === 0) return c.json({ error: "kayıt yok" }, 400);
+  if (ham.length > IMPORT_MAX) return c.json({ error: `Tek seferde en fazla ${IMPORT_MAX} kayıt` }, 400);
+  const uid = c.get("user").id;
+  const rows: TopluTrade[] = [];
+  for (const r of ham) {
+    const account_id = r?.account_id != null ? Number(r.account_id) : null, portfolio_id = r?.portfolio_id != null ? Number(r.portfolio_id) : null;
+    const currency = r?.currency ?? "TRY", entry = zarfAl(r?.entry_enc);
+    if (!r || !/^\d{4}-\d{2}-\d{2}$/.test(String(r.date)) || !VARLIK_TURLERI.includes(r.asset_type) || typeof r.symbol !== "string" || !/^[A-Z0-9.]{1,20}$/.test(r.symbol)
+      || !["ALIŞ", "SATIŞ"].includes(r.side) || !["TRY", "USD"].includes(currency) || !zarfGecerli(r.enc) || entry === false
+      || (account_id != null && !Number.isInteger(account_id)) || (portfolio_id != null && !Number.isInteger(portfolio_id))
+      || (currency === "TRY" && account_id != null && !entry)) {
+      return c.json({ error: "geçersiz işlem satırı" }, 400);
+    }
+    rows.push({ date: r.date, asset_type: r.asset_type, symbol: r.symbol, side: r.side, currency, account_id, portfolio_id, enc: r.enc, entry_enc: entry || null });
+  }
+  const portfoyler = [...new Set(rows.map((r) => r.portfolio_id).filter((x): x is number => x != null))];
+  const portfoyOk = portfoyler.length === 0 || (await db.all<{ id: number }>(`SELECT id FROM portfolios WHERE user_id=? AND id = ANY(?::int[])`, uid, portfoyler)).length === portfoyler.length;
+  if (!(await hepsiSahibin(uid, "accounts", farkliIdler(rows, "account_id"))) || !portfoyOk) {
+    return c.json({ error: "geçersiz hesap veya portföy" }, 400);
+  }
+  await db.tx((t) => topluTradeYaz(t, uid, rows));
+  console.log(`[audit] Toplu portföy işlemi: ${rows.length} kayıt (id:${uid})`);
   return c.json({ inserted: rows.length });
 });
 /* Düzenleme (Faz 14): sil+ekle yerine tek atomik güncelleme. Bakiye etkisi "eskisini geri al,

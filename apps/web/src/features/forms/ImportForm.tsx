@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import {
-  parseStatement, dokumKarsilastir, hesapDefteri, kartDefteri,
+  parseStatement, parseIslemler, dokumKarsilastir, hesapDefteri, kartDefteri, type IslemSonucu,
   type AllData, type Dogrulama, type ParsedRow, type DefterKaydi, type DokumDurum, type DokumKarsilastirma, type KonumluSatir,
 } from "@finans/engine";
 import { api } from "../../api";
@@ -8,6 +8,7 @@ import { T, css, fmtMoney } from "../../theme";
 import { DahaFazla, Field, FiltreSeridi, Hint, useSayfalama } from "../../ui";
 import { kalemSuggestions, normName } from "./recall";
 import { belgeOku, PdfParolaGerekli } from "./pdfOku";
+import { IslemOnizleme } from "./IslemOnizleme";
 
 /* ————— TOPLU İÇE AKTARMA (EKSTRE YAPIŞTIRMA / PDF) —————
    Banka/aracı kurum ekstresini ya da Excel tablosunu olduğu gibi yapıştır — ya da e-ekstre
@@ -40,6 +41,10 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
   const accountId = hedef.startsWith("a:") ? hedef.slice(2) : "";
   const cardId = hedef.startsWith("c:") ? +hedef.slice(2) : null;
   const kart = cardId != null ? data.cards.find((c) => c.id === cardId) : undefined;
+  /* Faz 45.9 — "t:<hesap>" / "t:": aracı kurum ekstresi → portföy işlemleri (ayrı önizleme, IslemOnizleme) */
+  const islemModu = hedef.startsWith("t:");
+  const islemHesap = islemModu && hedef.length > 2 ? +hedef.slice(2) : null;
+  const [islemSonuc, setIslemSonuc] = useState<IslemSonucu | null>(null);
   /** Kart hedefinde karta para GİREN satır (ekstre ödemesi, iade) aktarılmaz: ödeme Kart sekmesinde
       "Ödedim" ile kaydedilir (burada da yazılsa iki kez sayılırdı) ve kart harcaması modelinde iade yok. */
   const kartaGiren = (r: ParsedRow) => cardId != null && r.amount > 0;
@@ -99,6 +104,7 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
 
   const analyze = (metin = text, satirlar = konumlu?.metin === metin ? konumlu.satirlar : null) => {
     if (!satirlar) setOcrSayfa(0);
+    if (islemModu) { setIslemSonuc(parseIslemler(satirlar ?? metin)); setErr(null); return; }
     /* Kart ekstresinin işaret dili farklıdır (harcama işaretsiz, ödeme "+" ya da "−" ile
        işaretli); ayrıştırıcı `kart` kipinde bunu çözer ve önizlemenin diliyle (− = harcama)
        döndürür. Yine de ters okunursa "işaretleri çevir" tek dokunuş. */
@@ -248,6 +254,10 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
     }
   };
 
+  if (islemSonuc) {
+    return <IslemOnizleme data={data} sonuc={islemSonuc} accountId={islemHesap} reload={reload} onClose={onClose} onGeri={() => setIslemSonuc(null)} />;
+  }
+
   /* ——— 1. adım: metni yapıştır ——— */
   if (drafts === null) {
     return (
@@ -277,7 +287,7 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
           style={{ ...css.input, resize: "vertical", lineHeight: 1.5, fontSize: 12.5 }}
         />
         <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-          {cardId == null && <Field label="İşaretsiz tutarlar">
+          {cardId == null && !islemModu && <Field label="İşaretsiz tutarlar">
             <select style={css.input} value={defaultSign} onChange={(e) => setDefaultSign(e.target.value as "gider" | "gelir")}>
               <option value="gider">Gider (−) sayılsın</option>
               <option value="gelir">Gelir (+) sayılsın</option>
@@ -293,6 +303,14 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
               {data.cards.length > 0 && (
                 <optgroup label="Kart ekstresi → kart harcaması">
                   {data.cards.map((c) => <option key={c.id} value={`c:${c.id}`}>{c.name}</option>)}
+                </optgroup>
+              )}
+              {data.accounts.length > 0 && (
+                <optgroup label="Aracı kurum ekstresi → portföy işlemleri">
+                  {[...data.accounts].sort((a, b) => Number(b.kind === "araci") - Number(a.kind === "araci")).map((a) => (
+                    <option key={a.id} value={`t:${a.id}`}>{a.name} hesabına bağla</option>
+                  ))}
+                  <option value="t:">Hesaba bağlamadan</option>
                 </optgroup>
               )}
               <option value="">Yalnız gelir/gider defteri (bakiyeye işleme)</option>

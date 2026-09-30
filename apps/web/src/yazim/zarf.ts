@@ -175,6 +175,26 @@ function virmanZarfi(b: Satir, d: AllData | null): Satir {
   };
 }
 
+/** Portföy işlemi: adet/fiyat/komisyon zarfta; hesap etkisi (tutar.ts'in hesapladığı) hareketin zarfında.
+    Tekli uç ve toplu içe aktarma (Faz 45.9) aynı kuralı kullanır. */
+function tradeZarfi(b: Satir, d: AllData | null, id?: number): Satir {
+  const { entry_amount, ...govde } = b;
+  const { duz, hassas } = ayir("trades", govde, d, id);
+  /* Eskiden sunucunun `validateSide`'ıydı; adet ve fiyat zarfa girince sunucu göremez oldu.
+     Formlar bunu zaten denetliyor ama ASİSTAN denetlemiyordu — sunucunun reddi onu koruyordu.
+     Kural burada, yani her yazma yolu için hâlâ geçerli. */
+  if (hassas) {
+    const qty = sayi(hassas.qty), price = sayi(hassas.price);
+    if (!Number.isFinite(qty) || qty <= 0) throw new ZarfHatasi("adet 0'dan büyük olmalı");
+    if (!Number.isFinite(price) || price < 0) throw new ZarfHatasi("geçersiz fiyat");
+    if (b.side === "BEDELSİZ" && price !== 0) throw new ZarfHatasi("bedelsizde birim fiyat 0 olmalı");
+    if (b.side !== "BEDELSİZ" && !(price > 0)) throw new ZarfHatasi("birim fiyat 0'dan büyük olmalı");
+    hassas.fee = sayi(hassas.fee ?? 0) || 0;
+  }
+  return { ...duz, ...(hassas ? { enc: zarfKur("trades", hassas) } : {}),
+    entry_enc: bos(entry_amount) ? undefined : hareket(sayi(entry_amount), `${b.symbol} ${b.side}`) };
+}
+
 /** Yan etkili uçlar: kaydın zarfı + onun doğurduğu defter hareketlerinin zarfları. */
 const OZEL: Isleyici[] = [
   { method: "POST", yol: /^\/accounts$/, fn: (_, b) => {
@@ -217,23 +237,9 @@ const OZEL: Isleyici[] = [
     };
   } },
   /* Portföy işlemi: adet/fiyat/komisyon zarfta; hesap etkisi (tutar.ts'in hesapladığı) hareketin zarfında. */
-  { method: "*", yol: /^\/trades(?:\/(\d+))?$/, fn: (m, b, d) => {
-    const { entry_amount, ...govde } = b;
-    const { duz, hassas } = ayir("trades", govde, d, m[1] ? Number(m[1]) : undefined);
-    /* Eskiden sunucunun `validateSide`'ıydı; adet ve fiyat zarfa girince sunucu göremez oldu.
-       Formlar bunu zaten denetliyor ama ASİSTAN denetlemiyordu — sunucunun reddi onu koruyordu.
-       Kural burada, yani her yazma yolu için hâlâ geçerli. */
-    if (hassas) {
-      const qty = sayi(hassas.qty), price = sayi(hassas.price);
-      if (!Number.isFinite(qty) || qty <= 0) throw new ZarfHatasi("adet 0'dan büyük olmalı");
-      if (!Number.isFinite(price) || price < 0) throw new ZarfHatasi("geçersiz fiyat");
-      if (b.side === "BEDELSİZ" && price !== 0) throw new ZarfHatasi("bedelsizde birim fiyat 0 olmalı");
-      if (b.side !== "BEDELSİZ" && !(price > 0)) throw new ZarfHatasi("birim fiyat 0'dan büyük olmalı");
-      hassas.fee = sayi(hassas.fee ?? 0) || 0;
-    }
-    return { ...duz, ...(hassas ? { enc: zarfKur("trades", hassas) } : {}),
-      entry_enc: bos(entry_amount) ? undefined : hareket(sayi(entry_amount), `${b.symbol} ${b.side}`) };
-  } },
+  { method: "*", yol: /^\/trades(?:\/(\d+))?$/, fn: (m, b, d) => tradeZarfi(b, d, m[1] ? Number(m[1]) : undefined) },
+  /* Faz 45.9 — aracı kurum ekstresinden toplu portföy işlemi: tekli uçla AYNI kural ve zarf. */
+  { method: "POST", yol: /^\/trades\/bulk$/, fn: (_, b, d) => ({ rows: (b.rows as Satir[]).map((r) => tradeZarfi(r, d)) }) },
   { method: "*", yol: /^\/deposits(?:\/(\d+))?$/, fn: (m, b, d) => {
     const { entry_amount, ...govde } = b;
     const { duz, hassas } = ayir("deposits", govde, d, m[1] ? Number(m[1]) : undefined);

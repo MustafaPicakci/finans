@@ -36,6 +36,12 @@ export function tutarTamamla(method: string, path: string, body: Govde, data: Al
     return b;
   }
 
+  /* Faz 45.9 — toplu portföy işlemi: her satıra tekli uçla aynı kural. */
+  if (method === "POST" && path === "/trades/bulk" && Array.isArray(b.rows)) {
+    b.rows = (b.rows as Govde[]).map((r) => tutarTamamla("POST", "/trades", r, data));
+    return b;
+  }
+
   /* Vadeli mevduat: açılışta anapara hesaptan ÇIKAR. */
   if ((method === "POST" && path === "/deposits") || (method === "PUT" && /^\/deposits\/\d+$/.test(path))) {
     if (bos(b.entry_amount)) b.entry_amount = -sayi(b.principal);

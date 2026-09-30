@@ -619,6 +619,14 @@ havuzunda: 3 virman, 6 bacak, doğru hesap ve kaynakla). Karşı hesapta aynı p
 bankaya özel kural olurdu; karşı hesaptaki ters kayıttan önermek ise o kaydın yanlış türde girildiği
 durumda çift sayımı gizlerdi.
 
+Dilim 9 — aracı kurum ekstresi → portföy işlemleri (Faz 45.9, 2026-09-30). Tek örnek belge vardı;
+o yüzden kural kurumun düzenine değil ekstrelerin ortak diline yazıldı: sütunlar başlık sözcüklerinden
+(sembol/adet/fiyat/ücret/tarih), yön hücre değerinden, "gerçekleşen adet" "emir adedi"ne tercih, maliyet
+fiyat sayılmaz. Belgenin portföy özeti okunup dönem sonu adetleri uygulamayla karşılaştırılıyor. Gerçek
+ekstrede 7 işlem + 12 özet satırı hem metin hem konumlu yoldan aynı; toplu yazım kum havuzunda 3 sorgu,
+hesap hareketi yalnız hesaba bağlı TL işlemde. Kapsam dışı: temettü/bedelsiz (kurumsal olay kartı var),
+ekstrenin hesap hareketleri (para yatırma banka dökümünden virman olarak gelir), döviz alım satırı.
+
 ## Faz 46 — Asistanla kurulum ✅ (yerelde doğrulandı, 2026-09-30)
 
 Pazara çıkış değerlendirmesinin ilk önerisindeki ikinci yol: sihirbaz (Faz 43) formlarla kurar,
