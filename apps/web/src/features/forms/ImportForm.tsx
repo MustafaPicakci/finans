@@ -7,7 +7,7 @@ import { api } from "../../api";
 import { T, css, fmtMoney } from "../../theme";
 import { DahaFazla, Field, FiltreSeridi, Hint, useSayfalama } from "../../ui";
 import { kalemSuggestions, normName } from "./recall";
-import { pdfSatirlari, PdfParolaGerekli } from "./pdfOku";
+import { belgeOku, PdfParolaGerekli } from "./pdfOku";
 
 /* ————— TOPLU İÇE AKTARMA (EKSTRE YAPIŞTIRMA / PDF) —————
    Banka/aracı kurum ekstresini ya da Excel tablosunu olduğu gibi yapıştır — ya da e-ekstre
@@ -56,6 +56,9 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
   /* PDF'ten gelen KONUMLU satırlar (sütunlar konumdan bulunur) ve onlardan üretilen metin. Kullanıcı
      kutudaki metni düzenlerse konum geçersiz olur ve düz metin ayrıştırılır. */
   const [konumlu, setKonumlu] = useState<{ satirlar: KonumluSatir[]; metin: string } | null>(null);
+  /** okuma sürerken okuyucunun söylediği adım ("Sayfa 1/2 … OCR %40"); bittikten sonra kaç sayfanın OCR'la okunduğu */
+  const [ilerleme, setIlerleme] = useState("");
+  const [ocrSayfa, setOcrSayfa] = useState(0);
 
   const sugs = useMemo(() => kalemSuggestions(data), [data]);
   /** geçmişte aynı/benzer adla girilmiş kaydın kategorisi (en sık kullanılan eşleşme) */
@@ -90,6 +93,7 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
   };
 
   const analyze = (metin = text, satirlar = konumlu?.metin === metin ? konumlu.satirlar : null) => {
+    if (!satirlar) setOcrSayfa(0);
     /* Kart ekstresinin işaret dili farklıdır (harcama işaretsiz, ödeme "+" ya da "−" ile
        işaretli); ayrıştırıcı `kart` kipinde bunu çözer ve önizlemenin diliyle (− = harcama)
        döndürür. Yine de ters okunursa "işaretleri çevir" tek dokunuş. */
@@ -102,20 +106,21 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
   };
 
   const pdfOku = async (dosya: File, sifre?: string) => {
-    // yeni PDF kutudakinin yerini alır: önceki metin kalsa parola sorulurken eski belge çözülebilirdi
-    setPdf({ dosya, parolaIste: false, yanlis: false, okunuyor: true }); setErr(null); setText("");
+    // yeni belge kutudakinin yerini alır: önceki metin kalsa parola sorulurken eski belge çözülebilirdi
+    setPdf({ dosya, parolaIste: false, yanlis: false, okunuyor: true }); setErr(null); setText(""); setIlerleme("");
     try {
-      const satirlar = await pdfSatirlari(dosya, sifre);
+      const sonuc = await belgeOku(dosya, sifre, setIlerleme);
+      const { satirlar } = sonuc;
       const metin = satirlar.map((s) => s.map((h) => h.s).join("\t")).join("\n");
-      setPdf(null); setParola("");
-      if (!metin.trim()) { setErr("Bu PDF'te okunabilir metin yok (taranmış bir kâğıt olabilir)."); return; }
+      setPdf(null); setParola(""); setIlerleme(""); setOcrSayfa(sonuc.ocrSayfa);
+      if (!metin.trim()) { setErr("Bu belgede okunabilir metin bulunamadı."); return; }
       setText(metin);
       setKonumlu({ satirlar, metin });
       analyze(metin, satirlar);
     } catch (e) {
       if (e instanceof PdfParolaGerekli) { setPdf({ dosya, parolaIste: true, yanlis: e.yanlis, okunuyor: false }); return; }
-      setPdf(null);
-      setErr(e instanceof Error ? e.message : "PDF okunamadı");
+      setPdf(null); setIlerleme("");
+      setErr(e instanceof Error ? e.message : "Belge okunamadı");
     }
   };
 
@@ -183,11 +188,11 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
       <div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
           <label style={{ ...css.ghost, display: "inline-flex", alignItems: "center", cursor: pdf?.okunuyor ? "wait" : "pointer" }}>
-            {pdf?.okunuyor ? "PDF okunuyor…" : "E-ekstre PDF'i seç"}
-            <input type="file" accept="application/pdf,.pdf" hidden disabled={pdf?.okunuyor}
+            {pdf?.okunuyor ? "Okunuyor…" : "PDF ya da ekran görüntüsü seç"}
+            <input type="file" accept="application/pdf,.pdf,image/png,image/jpeg,image/webp" hidden disabled={pdf?.okunuyor}
               onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) pdfOku(f); }} />
           </label>
-          <span style={{ fontSize: 12, color: T.mut }}>Dosya bu cihazda okunur, hiçbir yere gönderilmez.</span>
+          <span style={{ fontSize: 12, color: T.mut }}>{ilerleme || "Dosya bu cihazda okunur, hiçbir yere gönderilmez."}</span>
         </div>
         {pdf?.parolaIste && (
           <form onSubmit={(e) => { e.preventDefault(); if (parola) pdfOku(pdf.dosya, parola); }}
@@ -262,6 +267,9 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
       </div>
 
       <DogrulamaSatiri d={dogrulama} />
+      {ocrSayfa > 0 && (
+        <Hint>Belgenin {ocrSayfa} sayfasında metin katmanı yoktu, görüntüden okundu (OCR). Rakamlar yukarıdaki doğrulamayla denetlenir; tutmuyorsa satırları gözden geçir.</Hint>
+      )}
       {bozukHarf && (
         <Hint>Bu belgenin yazı tipi Türkçe harfleri bozuk veriyor ("%deme" gibi). Tutarlar etkilenmez, ama adları aktarmadan önce kontrol et.</Hint>
       )}

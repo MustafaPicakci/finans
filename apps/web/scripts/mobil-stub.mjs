@@ -359,7 +359,10 @@ createServer(async (req, res) => {
   try {
     const p = url.pathname === "/" ? "/index.html" : url.pathname;
     const buf = await readFile(join(DIST, p));
-    res.writeHead(200, { "content-type": TYPES[extname(p)] ?? "application/octet-stream" });
+    /* Faz 45.6: kapalı belge okuyucu opak kökenli; modüllerini ve OCR dosyalarını CORS'la yükler
+       (gerçek sunucu da aynı başlığı verir — apps/server/index.ts). */
+    const cors = /^\/(assets|okuyucu-veri)\//.test(url.pathname) ? { "access-control-allow-origin": "*" } : {};
+    res.writeHead(200, { "content-type": TYPES[extname(p)] ?? "application/octet-stream", ...cors });
     res.end(buf);
   } catch {
     const buf = await readFile(join(DIST, "index.html"));

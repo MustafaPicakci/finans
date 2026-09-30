@@ -589,6 +589,17 @@ hariç — aracı kurum emirleri gelir/gider olmasın), OCR'ın bozduğu "(-)" e
 Sonuç: metin katmanı OLMAYAN ekstre (her harf resim) OCR ile okundu — 12 harcama + ödeme, dönem
 borcuyla "belgeyle tutuyor"; metinli dört belgede sonuç değişmedi.
 
+Dilim 6 — OCR ve kapalı okuyucu (Faz 45.6, 2026-09-30). "OCR yok" kararı bir bankanın PDF'inde
+metin katmanı olmadığı görülünce yeniden açıldı; kullanıcı "OCR genel bir ihtiyaç, en verimli şekilde
+çözelim" dedi. Seçilen: Tesseract.js tarayıcıda (veri cihazdan çıkmaz), sürüm tam sabit, dosyalar kendi
+sunucumuzdan. Aynı adımda pdf.js ile birlikte uygulamadan ayrı, sandbox'lı bir sayfaya taşındı — park
+edilmiş "büyük kütüphane anahtarın sayfasında" kaygısı böyle kapandı. Denemede bulunan üç tuzak (opak
+kökende pdf.js modül işçisi, gizli çerçevede requestAnimationFrame, PWA'nın okuyucuya SW kaydı eklemesi)
+kodda gerekçesiyle. Doğrulama, gerçek sunucunun başlıklarıyla gerçek Chrome'da: metinsiz ekstre 2 sayfa
+4,7 sn, 12 harcama + ödeme, "belgeyle tutuyor"; çerçevenin içine erişim SecurityError (yalıtım gerçek);
+metinli üç belge aynı sonuç (17 sayfa 103 ms). Bilinçli sınır: çerçeve kendini yönlendirerek o an
+okuduğu belgeyi taşıyabilir — sonraki dosya gönderilmez.
+
 ## Faz 46 — Asistanla kurulum ✅ (yerelde doğrulandı, 2026-09-30)
 
 Pazara çıkış değerlendirmesinin ilk önerisindeki ikinci yol: sihirbaz (Faz 43) formlarla kurar,

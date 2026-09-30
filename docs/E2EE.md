@@ -174,6 +174,8 @@ Uygulama günde defalarca açılıyor; her açılışta parola sormak kullanıla
 
 Uygulama `crypto.subtle` ile, yani **tarayıcının kendi denetlenmiş kütüphanesiyle** — AES'i, PBKDF2'yi, HKDF'i biz yazmıyoruz.
 
+**Belge okuma kütüphaneleri anahtarın sayfasında DEĞİL (Faz 45.6).** pdf.js ve Tesseract (OCR) büyük dış kütüphaneler; ekstre içe aktarma onları `sandbox="allow-scripts"` ile gömülü ayrı bir sayfada (`/okuyucu.html`) çalıştırır. Opak köken: IndexedDB'deki DEK'e, oturum çerezine, bellekteki çözülmüş veriye erişemez; kendi CSP'si ağı yalnız kendi dosyalarına açar, `/api` `Origin: null` isteğini reddeder. Kalan risk açıkça: ele geçirilmiş bir sürüm, kendisine verilen belgeyi çerçeveyi başka adrese yönlendirerek taşıyabilir (CSP self-navigasyonu engellemez) — kullanıcının verisinin geri kalanı ve anahtar kapsam dışında kalır.
+
 **Bağımlılık politikası: kripto için npm paketi YOK.** Gerekçe bu tehdit modeline özgü — bir kripto kütüphanesinin kötü niyetli sürümü doğrudan **anahtar sızdırma yolu** olur, ve bu tam olarak korunmaya çalıştığımız şey. WebCrypto sıfır bağımlılık, tedarik zinciri yüzeyi yok. Argon2id ileride istenirse denetlenmiş bir WASM ayrı bir kararla değerlendirilir; `kdf_params` json'ı o yolu açık tutuyor.
 
 **Standart olmayan, yani zayıf halkalar** — dördü de yazılmalı, gizlenmemeli:

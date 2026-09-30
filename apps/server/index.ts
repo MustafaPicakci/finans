@@ -34,13 +34,34 @@ const CSP = [
   "img-src 'self' data:", "connect-src 'self'", "manifest-src 'self'", "worker-src 'self'",
   "object-src 'none'", "base-uri 'self'", "frame-ancestors 'none'",
 ].join("; ");
+/* Faz 45.6 — KAPALI BELGE OKUYUCU (`/okuyucu.html`, apps/web/src/okuyucu/): pdf.js ve OCR orada,
+   uygulamadan ayrı çalışır; uygulama onu `sandbox="allow-scripts"` ile (opak köken) gömer. Kendi dar
+   CSP'si: ağ YALNIZ kendi dosyalarına, WebAssembly yalnız burada (OCR motoru), çerçeveleyen yalnız biz.
+   Opak kökende 'self' hiçbir şeyle eşleşmez — kaynaklar sunucunun adıyla (şemasız: sayfanın şemasını
+   alır) yazılır. */
+const cspOkuyucu = (host: string) => [
+  "default-src 'none'",
+  `script-src ${host}/assets/ ${host}/okuyucu-veri/ blob: 'wasm-unsafe-eval'`,
+  "worker-src blob:", `connect-src ${host}/okuyucu-veri/`,
+  "img-src blob: data:", "style-src 'unsafe-inline'",
+  "base-uri 'none'", "form-action 'none'", `frame-ancestors ${host}`,
+].join("; ");
 app.use("*", async (c, next) => {
   await next();
   const h = c.res.headers;
+  const yol = c.req.path;
   h.set("X-Content-Type-Options", "nosniff");
-  h.set("X-Frame-Options", "DENY");
   h.set("Referrer-Policy", "strict-origin-when-cross-origin");
-  h.set("Content-Security-Policy", CSP);
+  if (yol === "/okuyucu.html") {
+    h.set("X-Frame-Options", "SAMEORIGIN");
+    h.set("Content-Security-Policy", cspOkuyucu(c.req.header("host") ?? ""));
+  } else {
+    h.set("X-Frame-Options", "DENY");
+    h.set("Content-Security-Policy", CSP);
+  }
+  /* Opak kökenli okuyucu modüllerini ve OCR dosyalarını CORS'la yükler. Bunlar zaten herkese açık
+     derleme çıktısıdır (kimlik bilgisi taşımaz, `credentials` istenmez). */
+  if (yol.startsWith("/assets/") || yol.startsWith("/okuyucu-veri/")) h.set("Access-Control-Allow-Origin", "*");
   if (isProd) h.set("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
 });
 
@@ -105,6 +126,15 @@ setInterval(() => {
 const clientIp = (c: any) => c.req.header("x-forwarded-for")?.split(",")[0].trim() || "local";
 /* zamanlama saldırısı/e-posta enumerasyonu: kullanıcı yoksa da scrypt maliyeti ödensin */
 const DUMMY_HASH = "0".repeat(32) + ":" + "0".repeat(128);
+
+/* Faz 45.6 — opak kökenden (sandbox'lı çerçeve: belge okuyucu) gelen API isteği reddedilir. Okuyucunun
+   CSP'si zaten ağı kendi dosyalarına kapatıyor; bu ikinci kat: ele geçirilmiş bir kütüphane bir yolunu
+   bulup istek atsa bile, tarayıcı aynı siteye kullanıcının oturum çerezini ekleyebilirdi. Uygulamanın
+   kendi istekleri hiçbir zaman "null" köken taşımaz. */
+api.use("*", async (c, next) => {
+  if (c.req.header("origin") === "null") return c.json({ error: "izin yok" }, 403);
+  await next();
+});
 
 /* genel API rate-limit — tüm /api isteklerine (IP başına) */
 api.use("*", async (c, next) => {
