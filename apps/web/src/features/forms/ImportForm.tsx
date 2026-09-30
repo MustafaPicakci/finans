@@ -21,7 +21,8 @@ import { belgeOku, PdfParolaGerekli } from "./pdfOku";
    eksikleri tamamlamak için de kullanılır; zaten girilmiş kayıt ikinci kez yazılmaz, açılış
    bakiyesinin içinde sayılmış geçmiş bakiyeyi şişirmez. */
 
-type Draft = ParsedRow & { include: boolean; category_id: string; durum: DokumDurum; kayit?: DefterKaydi };
+/** `virman` (Faz 45.8): "" = gelir/gider; bir hesap kimliği = o hesapla virman (kendi hesapların arası) */
+type Draft = ParsedRow & { include: boolean; category_id: string; durum: DokumDurum; kayit?: DefterKaydi; virman: string };
 type Filtre = DokumDurum | "hepsi";
 const FILTRE_ADI: Record<Filtre, string> = {
   eksik: "Eksik", farkli: "Farklı", eslesti: "Defterde", acilis: "Açılıştan önce", odeme: "Ödeme", hepsi: "Hepsi",
@@ -88,7 +89,7 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
     const k = karsilastir(rows);
     setFazla(k.fazla);
     const d = rows.map((r, i) => ({
-      ...r, durum: k.satirlar[i].durum, kayit: k.satirlar[i].kayit, include: k.satirlar[i].durum === "eksik",
+      ...r, durum: k.satirlar[i].durum, kayit: k.satirlar[i].kayit, include: k.satirlar[i].durum === "eksik", virman: "",
       category_id: r.category_id ?? (() => { const c = guessCategory(r.name); return c != null ? String(c) : ""; })(),
     }));
     setFiltre(d.some((x) => x.durum === "eksik") ? "eksik" : "hepsi");
@@ -172,6 +173,18 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
     return { tarih, banka: bakiye, defter: Math.round((defter + eklenecek + acilisFarki) * 100) / 100 };
   }, [accountId, dogrulama, data.account_entries, chosen, yeniAcilis, acilisKaydi]);
 
+  /* Faz 45.8 — virman: dökümde eksik çıkan satır kendi hesapların arası bir para hareketi olabilir
+     ("Para Transferi" aracı kuruma, ATM'den nakde). Gelir/gider yazılsa para sistemden çıkmış gibi
+     olurdu. Karşı hesapta aynı paranın kaydı (ters işaret, aynı tutar, ±3 gün) zaten varsa virman
+     orada ikinci kez sayılır — engellenmez (kayıt yanlış türde girilmiş olabilir), SÖYLENİR. */
+  const digerHesaplar = accountId ? data.accounts.filter((a) => a.id !== +accountId) : [];
+  const karsiKayit = (d: Draft) => {
+    if (!d.virman) return null;
+    const { defter } = hesapDefteri(data, +d.virman);
+    const gun = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) / 864e5;
+    return defter.find((k) => Math.abs(k.amount + d.amount) < 0.005 && gun(k.date, d.date) <= 3) ?? null;
+  };
+
   /** "Farklı" satırın defterdeki karşılığını dökümdeki tutara düzeltir (yalnız gelir/gider ve tek
       çekimlik kart harcaması; virman/portföy/mevduat kendi ekranından). Kayıt YENİ yazılmaz. */
   const duzeltilebilir = (d: Draft) => {
@@ -212,11 +225,19 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
           category_id: d.category_id ? +d.category_id : null,
         })));
       } else {
-        await api.bulkTransactions(chosen.map((d) => ({
+        const virmanlar = chosen.filter((d) => d.virman).map((d) => ({
+          date: d.date, amount: Math.abs(d.amount), note: d.name,
+          // bu hesaptan çıkan para → karşı hesaba; giren para ← karşı hesaptan
+          from_account_id: d.amount < 0 ? +accountId : +d.virman, to_account_id: d.amount < 0 ? +d.virman : +accountId,
+        }));
+        await api.bulkTransactions(chosen.filter((d) => !d.virman).map((d) => ({
           date: d.date, name: d.name, amount: d.amount,
           category_id: d.category_id ? +d.category_id : null,
           account_id: accountId ? +accountId : null,
-        })), yeniAcilis ? { account_id: +accountId, ...yeniAcilis } : undefined);
+        })), {
+          ...(yeniAcilis ? { acilis: { account_id: +accountId, ...yeniAcilis } } : {}),
+          ...(virmanlar.length ? { virmanlar } : {}),
+        });
       }
       reload();
       onClose();
@@ -363,13 +384,29 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
               value={d.name} onChange={(e) => upd(i, { name: e.target.value })} />
             <input style={{ ...css.input, padding: "5px 8px", fontSize: 12.5, width: 92, flexShrink: 0, color: d.amount < 0 ? T.neg : T.pos }}
               value={String(d.amount)} onChange={(e) => upd(i, { amount: Number(e.target.value.replace(",", ".")) || 0 })} />
-            <select style={{ ...css.input, padding: "5px 8px", fontSize: 12, flex: "0 1 130px", minWidth: 0 }}
-              value={d.category_id} onChange={(e) => upd(i, { category_id: e.target.value })}>
+            {/* Kategori ve virman TEK seçicide: ayrı iki seçici mobilde satırı üç sıraya çıkarıyordu.
+                "v:<hesap>" = kendi hesapların arası virman (kategorisi olmaz). */}
+            <select style={{ ...css.input, padding: "5px 8px", fontSize: 12, flex: "0 1 130px", minWidth: 0 }} aria-label="Kategori ya da virman"
+              value={d.virman ? `v:${d.virman}` : d.category_id}
+              onChange={(e) => { const v = e.target.value; upd(i, v.startsWith("v:") ? { virman: v.slice(2), category_id: "" } : { virman: "", category_id: v }); }}>
               <option value="">Kategorisiz</option>
               {data.categories.filter((c) => c.kind === (d.amount < 0 ? "expense" : "income")).map((c) => (
                 <option key={c.id} value={c.id}>{c.name}</option>
               ))}
+              {digerHesaplar.length > 0 && (
+                <optgroup label="Kendi hesabıma virman">
+                  {digerHesaplar.map((a) => <option key={a.id} value={`v:${a.id}`}>Virman {d.amount < 0 ? "→" : "←"} {a.name}</option>)}
+                </optgroup>
+              )}
             </select>
+            {(() => {
+              const k = karsiKayit(d);
+              return k && (
+                <div style={{ flexBasis: "100%", fontSize: 11.5, color: T.neg, paddingLeft: 24 }}>
+                  {data.accounts.find((a) => a.id === +d.virman)?.name} hesabında bu paranın kaydı var gibi: {kisaTarih(k.date)} · {k.name} · <span style={css.mono}>{fmtMoney(k.amount, "TRY", true)}</span> — virman yazarsan orada ikinci kez sayılır.
+                </div>
+              );
+            })()}
             {d.kayit && (
               <div style={{ flexBasis: "100%", fontSize: 11.5, color: d.durum === "farkli" ? T.neg : T.mut3, paddingLeft: 24 }}>
                 defterde: {kisaTarih(d.kayit.date)} · {d.kayit.name} · <span style={css.mono}>{fmtMoney(d.kayit.amount, "TRY", true)}</span>
@@ -426,7 +463,8 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
         {kart
           ? <>Seçili satırlar <b>{kart.name}</b> kartına harcama olarak yazılır ve tarihlerine göre ilgili ekstreye düşer. Taksitli satırlar tek seferlik harcama olarak aktarılır. Defterde karşılığı olan satırlar ("Defterde") seçili gelmez.</>
           : accountId
-          ? <>Seçili satırlar gerçekleşen kayıt olarak yazılır ve <b>{data.accounts.find((a) => a.id === +accountId)?.name}</b> bakiyesine toplam <span style={{ ...css.mono, color: sum < 0 ? T.neg : T.pos }}>{fmtMoney(sum, "TRY", true)}</span> işler.</>
+          ? <>Seçili satırlar gerçekleşen kayıt olarak yazılır ve <b>{data.accounts.find((a) => a.id === +accountId)?.name}</b> bakiyesine toplam <span style={{ ...css.mono, color: sum < 0 ? T.neg : T.pos }}>{fmtMoney(sum, "TRY", true)}</span> işler.
+            {chosen.some((d) => d.virman) && <> Bunlardan {chosen.filter((d) => d.virman).length} tanesi virman: gelir/gider sayılmaz, karşı hesaba da yazılır.</>}</>
           : "Hesap seçilmedi — kayıtlar yalnız gelir/gider defterine girer, bakiyeye dokunmaz."}
       </div>
       {err && <div style={{ color: T.neg, fontSize: 12.5, marginTop: 8 }}>{err}</div>}

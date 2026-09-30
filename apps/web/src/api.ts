@@ -59,9 +59,12 @@ export const api = {
   /* ---- portföy grupları (Faz 11): işlemi gruba taşı (tutar/bakiye etkisi yok) ---- */
   setTradePortfolio: (tradeId: number, portfolio_id: number | null) => yazJ("PUT", `/trades/${tradeId}/portfolio`, { portfolio_id }),
   /* ---- toplu içe aktarma (ekstre yapıştırma) ---- */
-  /** `acilis` (Faz 45.7): açılış hareketinin yeni tarihi ve tutarı — "geçmişi de ekle", satırlarla aynı transaction'da */
-  bulkTransactions: (rows: { date: string; name: string; amount: number; category_id: number | null; account_id: number | null }[], acilis?: { account_id: number; date: string; amount: number }) =>
-    yazJ<{ inserted: number }>("POST", "/transactions/bulk", acilis ? { rows, acilis } : { rows }),
+  /** `acilis` (Faz 45.7): açılış hareketinin yeni tarihi ve tutarı — "geçmişi de ekle"; `virmanlar` (Faz 45.8):
+      dökümde eksik çıkan, kendi hesapların arası para hareketleri. Hepsi satırlarla AYNI transaction'da. */
+  bulkTransactions: (
+    rows: { date: string; name: string; amount: number; category_id: number | null; account_id: number | null }[],
+    ek: { acilis?: { account_id: number; date: string; amount: number }; virmanlar?: { date: string; from_account_id: number; to_account_id: number; amount: number; note: string }[] } = {},
+  ) => yazJ<{ inserted: number }>("POST", "/transactions/bulk", { rows, ...ek }),
   /** Faz 45 — kart ekstresi içe aktarma: `amount` kart harcaması işaretiyle (+ harcama, − iade) */
   bulkCardTxs: (rows: { card_id: number; date: string; name: string; amount: number; installments: number; category_id: number | null }[]) => yazJ<{ inserted: number }>("POST", "/cardtxs/bulk", { rows }),
   /* ---- düzenli kalem tutar zaman çizelgesi (Faz 9) ---- */

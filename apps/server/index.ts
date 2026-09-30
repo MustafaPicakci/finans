@@ -8,7 +8,7 @@ import cron from "node-cron";
 import { REC_AMOUNT_BEGIN } from "@finans/engine";
 import { db, initDb, nowLocal, todayLocal, zarfGecerli, TENANT_TABLES, GLOBAL_SETTING_KEYS, type TxClient } from "./db.js";
 import { loadAllData } from "./data.js";
-import { topluIslemYaz, topluKartYaz, acilisGuncelle } from "./toplu.js";
+import { topluIslemYaz, topluKartYaz, topluVirmanYaz, acilisGuncelle, type TopluVirman } from "./toplu.js";
 import { refreshAll, backfillPriceHistory, refreshCorporateActions, refreshCompanyEvents } from "./prices.js";
 import { refreshBenchmarks, autoBackfill } from "./benchmarks.js";
 import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, peekEmailToken, purgeStaleEmailTokens, SESSION_COOKIE, type SessionUser , sahteSalt, e2eeMalzemeDogrula, PAKET } from "./auth.js";
@@ -1226,9 +1226,12 @@ const farkliIdler = (rows: any[], alan: string) => [...new Set(rows.map((r) => r
 api.post("/transactions/bulk", async (c) => {
   const b = await c.req.json().catch(() => null);
   const rows = b && Array.isArray(b.rows) ? b.rows : null;
+  /* Faz 45.8 — isteğe bağlı virmanlar: dökümdeki eksik satırın kendi hesapların arası para hareketi
+     olduğu durum. Satırlarla ve açılış düzeltmesiyle AYNI transaction'da yazılır. */
+  const virmanHam = b && Array.isArray(b.virmanlar) ? b.virmanlar : [];
   if (!rows) return c.json({ error: "geçersiz gövde" }, 400);
-  if (rows.length === 0) return c.json({ error: "kayıt yok" }, 400);
-  if (rows.length > IMPORT_MAX) return c.json({ error: `Tek seferde en fazla ${IMPORT_MAX} kayıt` }, 400);
+  if (rows.length + virmanHam.length === 0) return c.json({ error: "kayıt yok" }, 400);
+  if (rows.length + virmanHam.length > IMPORT_MAX) return c.json({ error: `Tek seferde en fazla ${IMPORT_MAX} kayıt` }, 400);
   const uid = c.get("user").id;
   for (const r of rows) {
     if (!r || typeof r !== "object") return c.json({ error: "geçersiz satır" }, 400);
@@ -1236,12 +1239,22 @@ api.post("/transactions/bulk", async (c) => {
       return c.json({ error: "her satırda tarih ve işlem zarfı zorunlu" }, 400);
     }
   }
+  const virmanlar: TopluVirman[] = [];
+  for (const v of virmanHam) {
+    const from = Number(v?.from_account_id), to = Number(v?.to_account_id);
+    // POST /transfers ile aynı kurallar: iki bacak da zorunlu (yarım virman bakiyeyi kaydırırdı)
+    if (!v || !v.date || !Number.isInteger(from) || !Number.isInteger(to) || from === to
+      || !zarfGecerli(v.enc) || !zarfGecerli(v.entry_from_enc) || !zarfGecerli(v.entry_to_enc)) {
+      return c.json({ error: "geçersiz virman satırı" }, 400);
+    }
+    virmanlar.push({ date: String(v.date), from, to, enc: v.enc, cikis: v.entry_from_enc, giris: v.entry_to_enc });
+  }
   /* İsteğe bağlı açılış düzeltmesi (Faz 45.7, toplu.ts `acilisGuncelle`): satırlarla AYNI transaction'da. */
   const acilis = b.acilis ?? null;
   if (acilis != null && (!Number.isInteger(acilis.account_id) || !/^\d{4}-\d{2}-\d{2}$/.test(String(acilis.date)) || !zarfGecerli(acilis.entry_enc))) {
     return c.json({ error: "geçersiz açılış düzeltmesi" }, 400);
   }
-  const hesaplar = [...farkliIdler(rows, "account_id"), ...(acilis ? [acilis.account_id] : [])];
+  const hesaplar = [...farkliIdler(rows, "account_id"), ...(acilis ? [acilis.account_id] : []), ...virmanlar.flatMap((v) => [v.from, v.to])];
   if (!(await hepsiSahibin(uid, "accounts", hesaplar)) || !(await hepsiSahibin(uid, "categories", farkliIdler(rows, "category_id")))) {
     return c.json({ error: "geçersiz hesap veya kategori" }, 400);
   }
@@ -1250,12 +1263,13 @@ api.post("/transactions/bulk", async (c) => {
     await topluIslemYaz(t, uid, rows.map((r: any) => ({
       date: r.date, enc: r.enc, entry_enc: zarfAl(r.entry_enc) || null, category_id: r.category_id ?? null, account_id: r.account_id ?? null,
     })));
+    await topluVirmanYaz(t, uid, virmanlar);
     if (acilis && !(await acilisGuncelle(t, uid, acilis.account_id, acilis.date, acilis.entry_enc))) throw new Error("ACILIS_YOK");
     return false;
   }).catch((e) => { if (e?.message === "ACILIS_YOK") return true; throw e; });
   if (acilisYok) return c.json({ error: "hesabın açılış hareketi bulunamadı" }, 400);
-  console.log(`[audit] Toplu içe aktarma: ${rows.length} kayıt (id:${uid})`);
-  return c.json({ inserted: rows.length });
+  console.log(`[audit] Toplu içe aktarma: ${rows.length} kayıt + ${virmanlar.length} virman (id:${uid})`);
+  return c.json({ inserted: rows.length + virmanlar.length });
 });
 /* Faz 45 — kart ekstresini içe aktarma: aynı sözleşme, hedef kart harcamaları. Bakiye yan etkisi
    YOK (kart harcaması hesaba değil ekstreye düşer), yani tek iş atomik ekleme + sahiplik. Tek tek

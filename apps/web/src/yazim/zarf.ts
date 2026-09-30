@@ -161,6 +161,20 @@ const hesapAdi = (data: AllData | null, id: unknown) =>
 
 type Isleyici = { method: string; yol: RegExp; fn: (m: RegExpMatchArray, b: Satir, d: AllData | null) => Satir };
 
+/** Virman gövdesi: kayıt zarfı + iki bacak. Not verilmemişse karşı hesabın adı (sunucudaki "→ X" /
+    "← Y"). Tekli uç ve toplu içe aktarma (Faz 45.8) aynı kuralı kullanır. */
+function virmanZarfi(b: Satir, d: AllData | null): Satir {
+  const { amount, note, ...kalan } = b;
+  const tutar = sayi(amount);
+  if (!(tutar > 0)) throw new ZarfHatasi("tutar 0'dan büyük olmalı");
+  const n = note ? String(note).slice(0, 200) : null;
+  return {
+    ...kalan, enc: zarfKur("transfers", { amount: tutar, note: n }),
+    entry_from_enc: hareket(-tutar, n ?? `→ ${hesapAdi(d, b.to_account_id)}`),
+    entry_to_enc: hareket(tutar, n ?? `← ${hesapAdi(d, b.from_account_id)}`),
+  };
+}
+
 /** Yan etkili uçlar: kaydın zarfı + onun doğurduğu defter hareketlerinin zarfları. */
 const OZEL: Isleyici[] = [
   { method: "POST", yol: /^\/accounts$/, fn: (_, b) => {
@@ -174,18 +188,8 @@ const OZEL: Isleyici[] = [
     const not = note ? `Mutabakat: ${String(note).slice(0, 120)}` : "Mutabakat farkı";
     return { ...kalan, enc: zarfKur("accounts", hassas!), entry_enc: hareket(sayi(diff), not) };
   } },
-  /* Virman: TEK kayıt, İKİ hareket. Not verilmemişse karşı hesabın adı (sunucudaki "→ X" / "← Y"). */
-  { method: "*", yol: /^\/transfers(?:\/(\d+))?$/, fn: (_, b, d) => {
-    const { amount, note, ...kalan } = b;
-    const tutar = sayi(amount);
-    if (!(tutar > 0)) throw new ZarfHatasi("tutar 0'dan büyük olmalı");
-    const n = note ? String(note).slice(0, 200) : null;
-    return {
-      ...kalan, enc: zarfKur("transfers", { amount: tutar, note: n }),
-      entry_from_enc: hareket(-tutar, n ?? `→ ${hesapAdi(d, b.to_account_id)}`),
-      entry_to_enc: hareket(tutar, n ?? `← ${hesapAdi(d, b.from_account_id)}`),
-    };
-  } },
+  /* Virman: TEK kayıt, İKİ hareket. */
+  { method: "*", yol: /^\/transfers(?:\/(\d+))?$/, fn: (_, b, d) => virmanZarfi(b, d) },
   /* Düzenli kalem: ad kalemin zarfında, ilk tutar zaman çizelgesinin zarfında. */
   { method: "POST", yol: /^\/recurring$/, fn: (_, b) => {
     const { name, amount, ...kalan } = b;
@@ -259,13 +263,15 @@ const OZEL: Isleyici[] = [
     if (!hassas) return b;
     return { ...duz, enc: zarfKur("transactions", hassas), entry_enc: hareket(sayi(hassas.amount), String(hassas.name ?? "")) };
   } },
-  { method: "POST", yol: /^\/transactions\/bulk$/, fn: (_, b) => ({
+  { method: "POST", yol: /^\/transactions\/bulk$/, fn: (_, b, d) => ({
     rows: (b.rows as Satir[]).map((r) => {
       const { name, amount, ...kalan } = r;
       return { ...kalan, enc: zarfKur("transactions", { name, amount }), entry_enc: hareket(sayi(amount), String(name ?? "")) };
     }),
     /* Faz 45.7 — açılışı geri çek: açılış hareketinin YENİ tutarı (0 olabilir; `hareket()` sıfırda
        zarf üretmediği için doğrudan kurulur). Not, hesap açılırken yazılanla aynı. */
+    // Faz 45.8 — dökümde eksik çıkan virmanlar (kendi hesapların arası)
+    ...(Array.isArray(b.virmanlar) ? { virmanlar: (b.virmanlar as Satir[]).map((v) => virmanZarfi(v, d)) } : {}),
     ...(b.acilis ? { acilis: {
       account_id: (b.acilis as Satir).account_id, date: (b.acilis as Satir).date,
       entry_enc: zarfKur("account_entries", { amount: sayi((b.acilis as Satir).amount), note: "Açılış bakiyesi" }),

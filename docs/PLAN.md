@@ -610,6 +610,15 @@ transaction içinde (başka kullanıcı reddedildi, açılışsız hesap false).
 ve OCR'lı) kapalı okuyucudan geçti: parola istendi, yanlış parola uyarısı, doğru parolayla "belgeyle
 tutuyor". Hâlâ açık: eksik "Para Transferi"nin virman olabilmesi, aracı kurum ekstresi (trades).
 
+Dilim 8 — eksik satırı virman olarak yazmak (Faz 45.8, 2026-09-30). Dökümde eksik çıkan "Para
+Transferi" çoğu zaman kendi hesaplar arası (aracı kuruma, nakde); gider yazılsa para sistemden çıkmış
+gibi olur. Kategori seçicisine "Kendi hesabıma virman" grubu eklendi; virmanlar yine toplu içe
+aktarma isteğiyle, satırlar ve açılış düzeltmesiyle aynı transaction'da, 3 sorguda yazılır (kum
+havuzunda: 3 virman, 6 bacak, doğru hesap ve kaynakla). Karşı hesapta aynı paranın kaydı varsa uyarı
+çıkar ama engellenmez. Otomatik virman ÖNERİSİ bilinçli yok: addan ("Para Transferi") tür çıkarmak
+bankaya özel kural olurdu; karşı hesaptaki ters kayıttan önermek ise o kaydın yanlış türde girildiği
+durumda çift sayımı gizlerdi.
+
 ## Faz 46 — Asistanla kurulum ✅ (yerelde doğrulandı, 2026-09-30)
 
 Pazara çıkış değerlendirmesinin ilk önerisindeki ikinci yol: sihirbaz (Faz 43) formlarla kurar,
