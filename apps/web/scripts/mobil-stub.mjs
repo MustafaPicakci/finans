@@ -188,7 +188,7 @@ const all = {
   all.accounts = accounts.map(({ balance, ...rest }) => rest);
 }
 
-const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".svg": "image/svg+xml", ".webmanifest": "application/manifest+json", ".ico": "image/x-icon" };
+const TYPES = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css", ".png": "image/png", ".svg": "image/svg+xml", ".webmanifest": "application/manifest+json", ".ico": "image/x-icon" };
 
 /* Asistan sekmesinin stub deposu (bkz. /api/ai/* uçları) — süreç ömrü boyunca bellekte. */
 const aiSimdi = () => new Date().toISOString().slice(0, 19).replace("T", " ");

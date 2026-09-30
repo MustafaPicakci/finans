@@ -550,6 +550,19 @@ Dilim 2b (bekliyor — gerçek banka e-ekstresi örnekleri gerek): taksit satır
 zaman ilk alışın tarihi, tutar bu ayın taksidi — tek seferlik aktarılırsa yanlış ekstreye düşebilir),
 banka başına ayrıştırma ince ayarı.
 
+Dilim 3 — gerçek e-ekstrelerle genel kurallar (Faz 45.3, 2026-09-30). Kullanıcı beş gerçek belge
+verdi (üç banka kart ekstresi, bir hesap dökümü, bir aracı kurum ekstresi) ve ilkeyi koydu: **bankaya
+özel şablon yok**, belgeden öğrenilen şey bir durum türüdür. Bulunanlar: kart ekstresinde ödemeyi bir
+banka "+", diğeri "−" ile yazıyor ve eski kural "+" yazanda harcamaları kilitleyip ödemeyi harcama diye
+aktarıyordu; ay adıyla yazılan tarih hiç tanınmıyordu (bir ekstre 0 satır); iki satıra bölünen hesap
+kaydı kayboluyordu (17 sayfalık dökümde 3 satır, biri +380.415,78); `4,17552660` 417 milyon okunuyordu.
+Hepsi genel kuralla düzeldi ve belgeyle doğrulama eklendi (bakiye zinciri / dönem borcu). Sonuç, aynı
+belgelerle uygulamada: hesap dökümü 735/735 satır ve zincir kırıksız, kart ekstresi 8 harcama + kilitli
+ödeme ve "belgeyle tutuyor ✓". Açık kalanlar: bir bankanın PDF'inde **metin katmanı yok** (her harf
+resim; OCR kararı yeniden açıldı), bir bankanın yazı tipi Türkçe harfleri bozuk veriyor (rakamlar
+sağlam), aracı kurum ekstresi `trades` hedefi ister (ayrı dilim), ve 735 satırlık döküm sunucunun
+500 kayıt / 256 KB sınırına takılıyor.
+
 ## Faz 46 — Asistanla kurulum ✅ (yerelde doğrulandı, 2026-09-30)
 
 Pazara çıkış değerlendirmesinin ilk önerisindeki ikinci yol: sihirbaz (Faz 43) formlarla kurar,

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { parseStatement, type AllData, type ParsedRow } from "@finans/engine";
+import { parseStatement, type AllData, type Dogrulama, type ParsedRow } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, fmtMoney } from "../../theme";
 import { Field, Hint } from "../../ui";
@@ -30,6 +30,7 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
   const kartaGiren = (r: ParsedRow) => cardId != null && r.amount > 0;
   const [drafts, setDrafts] = useState<Draft[] | null>(null);
   const [skipped, setSkipped] = useState<string[]>([]);
+  const [dogrulama, setDogrulama] = useState<Dogrulama>({ tur: "yok" });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   /* PDF: dosya parolalıysa elde tutulur, parola sorulur. Parola yalnız bu cihazda PDF'i açmak için. */
@@ -51,14 +52,12 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
     : data.transactions.some((t) => t.date === r.date && Math.abs(t.amount - r.amount) < 0.005 && normName(t.name) === normName(r.name));
 
   const analyze = (metin = text) => {
-    /* Kart ekstresi TERS işaret dilindedir: harcama işaretsiz/artı (borç artar), ödeme eksi.
-       Ayrıştırıcı belgenin kendi dilinde okur (işaretsiz = artı), sonra önizlemenin diline
-       (− = harcama) çevrilir. Banka bunun tersini yazıyorsa "işaretleri çevir" tek dokunuş. */
-    const kartMi = cardId != null;
-    const cozum = parseStatement(metin, kartMi ? "gelir" : defaultSign);
-    const rows = kartMi ? cozum.rows.map((r) => ({ ...r, amount: -r.amount })) : cozum.rows;
-    const { skipped } = cozum;
+    /* Kart ekstresinin işaret dili farklıdır (harcama işaretsiz, ödeme "+" ya da "−" ile
+       işaretli); ayrıştırıcı `kart` kipinde bunu çözer ve önizlemenin diliyle (− = harcama)
+       döndürür. Yine de ters okunursa "işaretleri çevir" tek dokunuş. */
+    const { rows, skipped, dogrulama } = parseStatement(metin, cardId != null ? "kart" : defaultSign);
     setSkipped(skipped);
+    setDogrulama(dogrulama);
     setDrafts(rows.map((r) => {
       const dup = isDup(r);
       const cat = guessCategory(r.name);
@@ -182,7 +181,7 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
           Tarih <b>gg.aa.yyyy</b> veya <b>yyyy-aa-gg</b>, tutar <b>1.234,56</b> biçiminde olabilir.
           Eksi işareti olan satırlar gider, bakiye sütunu varsa yön bakiyeden çıkarılır. Belgede
           yalnız bazı satırlar eksi işaretliyse işaretsiz olanlar gelir sayılır. Kart ekstresinde işaretsiz
-          tutar harcamadır.
+          tutar harcamadır, işaretli olan ödeme.
         </div>
         {err && <div style={{ color: T.neg, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
         <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
@@ -210,6 +209,7 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
         </div>
       </div>
 
+      <DogrulamaSatiri d={dogrulama} />
       <div style={{ maxHeight: "42vh", overflowY: "auto", border: `1px solid ${T.line}`, borderRadius: 10 }}>
         {drafts.map((d, i) => (
           <div key={i} style={{
@@ -258,4 +258,24 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
       </div>
     </div>
   );
+}
+
+/** Okunan satırlar belgenin kendi rakamlarını açıklıyor mu (engine `Dogrulama`). Sessiz kayıp
+    olmasın diye önizlemenin en üstünde durur; katlanmaz (rakamın güvenilirliğini söyler). */
+function DogrulamaSatiri({ d }: { d: Dogrulama }) {
+  const kutu = (renk: string, metin: React.ReactNode) => (
+    <div style={{ fontSize: 12.5, color: renk, background: T.panel2, borderRadius: 8, padding: "7px 12px", marginBottom: 8 }}>{metin}</div>
+  );
+  if (d.tur === "yok") return kutu(T.mut, "Bu belgede kendi toplamıyla karşılaştırılacak bir dayanak bulunamadı — satırları gözden geçir.");
+  if (d.tamam) return kutu(T.pos, d.tur === "bakiye"
+    ? "✓ Belgeyle tutuyor: okunan satırlar bakiye sütununu baştan sona açıklıyor."
+    : <>✓ Belgeyle tutuyor: önceki dönem + okunan harcamalar − ödemeler = dönem borcu (<span style={css.mono}>{fmtMoney(d.belge, "TRY", true)}</span>).</>);
+  if (d.tur === "donem") return kutu(T.neg, <>⚠ Belgeyle tutmuyor: okunan satırlara göre dönem borcu <span style={css.mono}>{fmtMoney(d.okunan, "TRY", true)}</span>, belgede <span style={css.mono}>{fmtMoney(d.belge, "TRY", true)}</span>. Eksik ya da fazla satır olabilir.</>);
+  return kutu(T.neg, <>
+    ⚠ Bakiye sütunu {d.kopukluklar.length} yerde tutmuyor — o aralıkta okunamamış satır var:
+    {d.kopukluklar.slice(0, 3).map((k, i) => (
+      <div key={i} style={css.mono}>{k.sonra.slice(5)} – {k.once.slice(5)} arası: {fmtMoney(k.eksik, "TRY", true)}</div>
+    ))}
+    {d.kopukluklar.length > 3 && <div>… ve {d.kopukluklar.length - 3} yer daha</div>}
+  </>);
 }
