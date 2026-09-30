@@ -173,10 +173,17 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
   const mutabakat = useMemo(() => {
     if (!accountId || dogrulama.tur !== "bakiye") return null;
     const { tarih, bakiye } = dogrulama.son;
-    const defter = data.account_entries.filter((e) => e.account_id === +accountId && e.date <= tarih).reduce((s, e) => s + e.amount, 0);
+    /* Açılış geri çekilecekse eski açılış hareketi YERİNE yenisi sayılır, ikisi de kendi TARİHİNE göre:
+       hesap bugün açıldıysa eski açılış mutabakat gününden sonradır (sayılmaz) ama yenisi öncesindedir.
+       Farkı eklemek bu durumda yanlıştı — uçtan uca testte önizleme "defter 0,00" diyordu, kaydedilen
+       veri doğruyken. */
+    const degisen = yeniAcilis && acilisKaydi ? acilisKaydi.id : null;
+    const defter = data.account_entries
+      .filter((e) => e.account_id === +accountId && e.date <= tarih && e.id !== degisen)
+      .reduce((s, e) => s + e.amount, 0);
     const eklenecek = chosen.filter((d) => d.date <= tarih).reduce((s, d) => s + d.amount, 0);
-    const acilisFarki = yeniAcilis && acilisKaydi ? yeniAcilis.amount - acilisKaydi.amount : 0;
-    return { tarih, banka: bakiye, defter: Math.round((defter + eklenecek + acilisFarki) * 100) / 100 };
+    const yeniKatki = yeniAcilis && yeniAcilis.date <= tarih ? yeniAcilis.amount : 0;
+    return { tarih, banka: bakiye, defter: Math.round((defter + eklenecek + yeniKatki) * 100) / 100 };
   }, [accountId, dogrulama, data.account_entries, chosen, yeniAcilis, acilisKaydi]);
 
   /* Faz 45.8 — virman: dökümde eksik çıkan satır kendi hesapların arası bir para hareketi olabilir

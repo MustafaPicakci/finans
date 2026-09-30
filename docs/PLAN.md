@@ -627,6 +627,17 @@ ekstrede 7 işlem + 12 özet satırı hem metin hem konumlu yoldan aynı; toplu 
 hesap hareketi yalnız hesaba bağlı TL işlemde. Kapsam dışı: temettü/bedelsiz (kurumsal olay kartı var),
 ekstrenin hesap hareketleri (para yatırma banka dökümünden virman olarak gelir), döviz alım satırı.
 
+Uçtan uca doğrulama (2026-09-30). Kum havuzu sunucusunda (e-posta ve fiyat anahtarları kapalı)
+uygulamanın kendi ekranlarıyla yeni kullanıcı: kayıt → doğrulama → giriş → kurtarma kodu → sihirbazla
+2 hesap + 2 kart. Dört akış, her biri kaydet → sayfayı yeniden yükle → AYNI belgeyi tekrar içe aktar
+(şifreleme → yazma → okuma → çözme zincirinin tamamı): hesap dökümü 735 satır (geçmişi ekle + açılışı
+geri çek + bir satır virman) → yeniden 735/735 "zaten defterde", mutabakat bankayla aynı (24.221,94);
+kart ekstresi elle girilmiş yanlış tutarlı harcama "farklı" → düzelt → yeniden 8/8; OCR'lı ekstre
+12/12; aracı kurum 7/7. Bakiyeler: Garanti 24.221,94, Midas −17.463,56 (virman − alımlar). Veritabanında
+test kullanıcısının 1.506 satırının hepsi `v1:` zarflı. Test bir hata buldu ve düzeltildi: açılış geri
+çekilirken önizlemenin mutabakat satırı eski açılışın farkını düşüyordu, hesap bugün açıldıysa eski
+açılış mutabakat gününden sonra olduğu için "defter 0,00" diyordu (kaydedilen veri doğruydu).
+
 ## Faz 46 — Asistanla kurulum ✅ (yerelde doğrulandı, 2026-09-30)
 
 Pazara çıkış değerlendirmesinin ilk önerisindeki ikinci yol: sihirbaz (Faz 43) formlarla kurar,
