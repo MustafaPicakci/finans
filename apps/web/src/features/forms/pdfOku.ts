@@ -1,4 +1,4 @@
-import { pdfSatirlariKur, type PdfParca } from "@finans/engine";
+import { pdfSatirlariKurKonumlu, type KonumluSatir, type PdfParca } from "@finans/engine";
 
 /* ————— PDF EKSTRE OKUMA (Faz 45) —————
    Dosya tarayıcıdan ÇIKMAZ: pdf.js onu burada açar, metnini okur, satırlar yapıştırılmış metin
@@ -18,8 +18,9 @@ export class PdfParolaGerekli extends Error {
   constructor(public yanlis: boolean) { super(yanlis ? "Parola yanlış" : "Bu PDF parolalı"); }
 }
 
-/** PDF dosyasının tüm sayfalarını metin satırlarına çevirir (sayfa sırasıyla, yukarıdan aşağıya). */
-export async function pdfSatirlari(dosya: File, parola?: string): Promise<string[]> {
+/** PDF dosyasının tüm sayfalarını KONUMLU satırlara çevirir (sayfa sırasıyla, yukarıdan aşağıya).
+    Konum sütun modelinin girdisidir (Faz 45.5); düz metin `satir.map(h => h.s).join("\t")`. */
+export async function pdfSatirlari(dosya: File, parola?: string): Promise<KonumluSatir[]> {
   const [pdfjs, isci] = await Promise.all([
     import("pdfjs-dist"),
     import("pdfjs-dist/build/pdf.worker.min.mjs?url"),
@@ -40,7 +41,7 @@ export async function pdfSatirlari(dosya: File, parola?: string): Promise<string
     throw e;
   }
   try {
-    const satirlar: string[] = [];
+    const satirlar: KonumluSatir[] = [];
     for (let i = 1; i <= belge.numPages; i++) {
       const sayfa = await belge.getPage(i);
       const icerik = await sayfa.getTextContent();
@@ -49,7 +50,7 @@ export async function pdfSatirlari(dosya: File, parola?: string): Promise<string
         if (!("str" in o)) continue; // işaretli içerik başlıkları, metin değil
         parcalar.push({ s: o.str, x: o.transform[4], y: o.transform[5], w: o.width, h: o.height || Math.abs(o.transform[3]) });
       }
-      satirlar.push(...pdfSatirlariKur(parcalar));
+      satirlar.push(...pdfSatirlariKurKonumlu(parcalar));
       sayfa.cleanup();
     }
     return satirlar;

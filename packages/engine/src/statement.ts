@@ -9,6 +9,7 @@
    Saf fonksiyon — ağ/DOM yok, testlerle korunur. */
 
 import { metinSadelestir } from "./kayitlar.js";
+import type { KonumluSatir } from "./pdfSatir.js";
 
 /** Ayrıştırılmış tek satır. `amount` işaretlidir: gider −, gelir +. */
 export type ParsedRow = { date: string; name: string; amount: number };
@@ -89,6 +90,11 @@ function tutarOku(s: string): { v: number; isaret: "+" | "-" | null } | null {
   let isaret: "+" | "-" | null = null;
   const son = /\(([-−+])\)$/.exec(t);                                  // "19.394,54(-)" (bazı bankalar)
   if (son) { isaret = son[1] === "+" ? "+" : "-"; t = t.slice(0, -3); }
+  /* OCR toleransı: "(-)" ekinin açılış parantezi bir rakam gibi okunabiliyor ("19,394.544-)"). Açılışı
+     olmayan ")" gerçek bir tutarda bulunmaz; iki tür ayırıcı varsa (sondaki kuruştur) kuruştan sonraki
+     fazla tek hane o parantezdir. Kalan tutar yine belgeyle doğrulanır. */
+  const yarim = !son && !t.includes("(") ? /^(.*[.,]\d{2})\d?([-−+])\)$/.exec(t) : null;
+  if (yarim && /[.,]/.test(yarim[1].slice(0, -3))) { isaret = yarim[2] === "+" ? "+" : "-"; t = yarim[1]; }
   if (/^\(.*\)$/.test(t)) { isaret = "-"; t = t.slice(1, -1); }       // (1.234,56) = negatif
   if (/^[-−]/.test(t)) { isaret = "-"; t = t.slice(1); }
   if (/^\+/.test(t)) { isaret = "+"; t = t.slice(1); }
@@ -159,9 +165,10 @@ const tarihMi = (c: string) => parseDate(c) !== null;
 const tutarMi = (c: string) => !tarihMi(c) && parseAmount(c) !== null;
 
 /** Metnin tamamına bakıp en çok *kullanılabilir* satır (tarih + tutar hücresi olan) üreten ayırıcıyı seçer.
-    Hücre sayısına bakmak yetmez: "-450,25" içindeki virgül CSV ayırıcısı sanılabilir. */
+    Hücre sayısına bakmak yetmez: "-450,25" içindeki virgül CSV ayırıcısı sanılabilir. Hiçbir ayırıcı
+    kullanılabilir satır üretmiyorsa boşluk seçilir (virgül değil: TR tutarındaki virgül metni bölerdi). */
 function pickSeparator(lines: string[]): string {
-  let best = "space", bestScore = -1;
+  let best = "space", bestScore = 0;
   for (const s of SEPARATORS) {
     if (!lines.some((l) => s.re.test(l))) continue;
     const score = lines.reduce((n, l) => {
@@ -171,6 +178,72 @@ function pickSeparator(lines: string[]): string {
     if (score > bestScore) { bestScore = score; best = s.name; }
   }
   return best;
+}
+
+/** Çalışma hücresi: metin + (PDF/OCR'dan geldiyse) yatay aralık. Yapıştırılan metinde konum yok. */
+type C = { s: string; x: [number, number] | null };
+const ortusur = (a: [number, number], b: [number, number]) => a[0] <= b[1] && b[0] <= a[1];
+
+/** Açıklamaya yapışmış tarih/tutar: "06/09/2025 — MONSTER A.Ş." (OCR tarih ile metin arasındaki
+    boşluğu sütun sanmaz) ya da tek boşlukla yapıştırılmış "12.03.2026 MIGROS -450,25". Satırda ayrı
+    bir tarih/tutar hücresi YOKSA hücrenin başındaki tarih ve sonundaki tutar ayrılır. */
+/* Tarihin ardından SAAT geliyorsa ayrılmaz: saatli tarih ("31/07/26 10:25:24") şimdilik tanınmaz —
+   onu kullanan tek görülen belge bir aracı kurum ekstresi, ve oradaki alım satırları gelir/gider
+   olarak okunup yanlış kayıt üretirdi (o belge `trades` hedefini ister, ayrı dilim). */
+const TARIH_ONEK = /^(\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{1,2}\s+[^\d\s]+\s+\d{4})\s+(?:[-–—]+\s+)?(?!\d{1,2}:\d{2})(\S.*)$/;
+const TUTAR_SONEK = /^(.*\S)\s+(\S+)$/;
+function ayir(c: C, sol: string, sag: string): [C, C] {
+  if (!c.x) return [{ s: sol, x: null }, { s: sag, x: null }];
+  const orta = c.x[0] + (c.x[1] - c.x[0]) * (sol.length / c.s.length); // konum harf oranıyla kestirilir
+  return [{ s: sol, x: [c.x[0], orta] }, { s: sag, x: [orta, c.x[1]] }];
+}
+function yapisikAyir(cells: C[]): C[] {
+  let out = cells;
+  if (!out.some((c) => tarihMi(c.s))) {
+    const i = out.findIndex((c) => { const m = TARIH_ONEK.exec(c.s); return !!m && tarihMi(m[1]); });
+    if (i >= 0) { const m = TARIH_ONEK.exec(out[i].s)!; out = [...out.slice(0, i), ...ayir(out[i], m[1], m[2]), ...out.slice(i + 1)]; }
+  }
+  if (out.some((c) => tarihMi(c.s)) && !out.some((c) => tutarMi(c.s))) {
+    for (let i = out.length - 1; i >= 0; i--) {
+      const m = TUTAR_SONEK.exec(out[i].s);
+      if (m && !tarihMi(out[i].s) && tutarMi(m[2])) { out = [...out.slice(0, i), ...ayir(out[i], m[1], m[2]), ...out.slice(i + 1)]; break; }
+    }
+  }
+  return out;
+}
+
+/** Konumlu belgede SAYI SÜTUNLARI (Faz 45.5): kayıt satırlarındaki (tarih + sayı) sayı hücrelerinin
+    yatay aralıkları üst üste binenler birleştirilerek sütunlara kümelenir. Tutar sütunu, kayıt
+    satırlarının EN ÇOĞUNDA dolu olan sütundur; hesap dökümünde ikinci bir sütun da neredeyse her
+    satırda doluysa (≥%60) sağdaki bakiyedir. Diğer sayı sütunları — taksit/kalan borç, puan, chip,
+    döviz tutarı — yok sayılır. "Tutar satırdaki son sayıdır" varsayımı tutarın sağında böyle bir
+    sütun olan belgede yanlış rakamı okuyordu (gerçek ekstrede görüldü) ve tutar sütununda sayısı
+    olmayan satırlar (iki sütunlu üstbilgi, chip-para satırı) kayıt sayılıyordu. */
+function sutunlar(satirlar: C[][], kart: boolean): { tutar: [number, number]; bakiye: [number, number] | null } | null {
+  const araliklar: { x: [number, number]; satir: number }[] = [];
+  let kayitSay = 0;
+  satirlar.forEach((cells, i) => {
+    if (!cells.some((c) => tarihMi(c.s))) return;
+    const sayilar = cells.filter((c) => c.x && tutarMi(c.s));
+    if (!sayilar.length) return;
+    kayitSay++;
+    for (const c of sayilar) araliklar.push({ x: c.x!, satir: i });
+  });
+  if (!kayitSay) return null;
+  araliklar.sort((a, b) => a.x[0] - b.x[0]);
+  const kumeler: { x: [number, number]; satirlar: Set<number> }[] = [];
+  for (const a of araliklar) {
+    const k = kumeler[kumeler.length - 1];
+    if (k && ortusur(k.x, a.x)) { k.x = [Math.min(k.x[0], a.x[0]), Math.max(k.x[1], a.x[1])]; k.satirlar.add(a.satir); }
+    else kumeler.push({ x: [...a.x], satirlar: new Set([a.satir]) });
+  }
+  const sirali = [...kumeler].sort((a, b) => b.satirlar.size - a.satirlar.size || b.x[0] - a.x[0]);
+  const [bir, iki] = sirali;
+  if (!kart && iki && iki.satirlar.size >= kayitSay * 0.6) {
+    const [sol, sag] = bir.x[0] < iki.x[0] ? [bir, iki] : [iki, bir];
+    return { tutar: sol.x, bakiye: sag.x };
+  }
+  return { tutar: bir.x, bakiye: null };
 }
 
 /** Bakiye zinciri: satırlar belgedeki sırayla (yeniden eskiye ya da eskiden yeniye). Sıra,
@@ -197,43 +270,59 @@ function bakiyeZinciri(satirlar: { date: string; amount: number; bakiye: number 
 }
 
 /** Tarihsiz bir satırda anahtar sözcük + sayı: kart ekstresinin üstbilgisindeki "Dönem Borcu" gibi. */
-function etiketliTutar(satirlar: string[][], re: RegExp, haric?: RegExp): number | null {
+function etiketliTutar(satirlar: C[][], re: RegExp, haric?: RegExp): number | null {
   for (const cells of satirlar) {
-    if (cells.some(tarihMi)) continue;
-    const metin = metinSadelestir(cells.join(" "));
+    if (cells.some((c) => tarihMi(c.s))) continue;
+    const metin = metinSadelestir(cells.map((c) => c.s).join(" "));
     if (!re.test(metin) || (haric && haric.test(metin))) continue;
-    const sayilar = cells.filter(tutarMi);
-    if (sayilar.length) return Math.abs(parseAmount(sayilar[sayilar.length - 1])!);
+    const sayilar = cells.filter((c) => tutarMi(c.s));
+    if (sayilar.length) return Math.abs(parseAmount(sayilar[sayilar.length - 1].s)!);
   }
   return null;
 }
 
 /**
- * Yapıştırılan metni satırlara çevirir. Sütun sırası sabit değildir:
- * her satırda ilk tarihe benzeyen hücre tarih, **son** sayıya benzeyen hücre tutar
- * (bakiye sütunu genelde en sağda olduğundan, iki sayı varsa soldaki tutar sayılır),
- * kalan en uzun metin hücresi açıklamadır.
+ * Ekstre/döküm satırlarını kayda çevirir. Sütun sırası sabit değildir: her satırda ilk tarihe
+ * benzeyen hücre tarihtir. Tutar: konumlu girdide (PDF/OCR) SAYI SÜTUNLARINDAN seçilen tutar
+ * sütunundaki hücre (`sutunlar`); yapıştırılan metinde **son** sayı (bakiye sütunu varsa sondan
+ * bir önceki). Ad, tarih ile tutar arasındaki metin hücreleridir.
  *
- * @param text     yapıştırılan ham metin
+ * @param girdi    yapıştırılan ham metin ya da `pdfSatirlariKurKonumlu` çıktısı
  * @param tur      işaretsiz tutar gider mi gelir mi sayılsın — ya da `kart`: belge bir kredi
  *                 kartı ekstresidir. Kartta işaretsiz satır HARCAMADIR ve işaretli satır ("+" ya
  *                 da "−", hangisi olursa) ödeme/iadedir; bankalar ödemeyi iki işaretle de yazıyor
  *                 (gerçek belgelerde ikisi de görüldü). Her satır işaretliyse çoğunluk harcamadır.
  *                 Çıktı her durumda hesap dilindedir: harcama −, ödeme +.
  */
-export function parseStatement(text: string, tur: "gider" | "gelir" | "kart" = "gider"): ParseResult {
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "");
+export function parseStatement(girdi: string | KonumluSatir[], tur: "gider" | "gelir" | "kart" = "gider"): ParseResult {
   const rows: ParsedRow[] = [];
   const skipped: string[] = [];
-  if (lines.length === 0) return { rows, skipped, dogrulama: { tur: "yok" }, bozukHarf: false };
   const kart = tur === "kart";
-  const sep = pickSeparator(lines);
-  const hucreler = lines.map((l) => split(l, sep).filter((c) => c !== ""));
-  /* Bakiye sütunu: kayıt satırlarının (tarih + tutar) çoğunda iki ya da daha çok sayı varsa en
-     sağdaki bakiyedir. Kart ekstresinde bakiye sütunu yoktur; oradaki ikinci sayı puan ya da
-     döviz tutarıdır ve tutar her zaman en sağdakidir. */
-  const kayitlar = hucreler.filter((c) => c.some(tarihMi) && c.some(tutarMi));
-  const hasBalanceCol = !kart && kayitlar.filter((c) => c.filter(tutarMi).length >= 2).length > kayitlar.length / 2;
+  /* Girdi: yapıştırılan metin ya da (PDF/OCR'dan) konumlu satırlar. Konumlu satırda hücreler
+     zaten ayrıktır ve sütunlar konumdan bulunur; metinde ayırıcı sezilir. */
+  let lines: string[], hucreler: C[][];
+  if (typeof girdi === "string") {
+    lines = girdi.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "");
+    const sep = pickSeparator(lines);
+    hucreler = lines.map((l) => split(l, sep).filter((c) => c !== "").map((c) => ({ s: c, x: null })));
+  } else {
+    const dolu = girdi.filter((satir) => satir.length > 0);
+    lines = dolu.map((satir) => satir.map((h) => h.s).join("\t"));
+    hucreler = dolu.map((satir) => satir.map((h) => ({ s: h.s, x: [h.x0, h.x1] as [number, number] })));
+  }
+  const text = lines.join("\n");
+  if (lines.length === 0) return { rows, skipped, dogrulama: { tur: "yok" }, bozukHarf: false };
+  hucreler = hucreler.map(yapisikAyir);
+  const tarihli = (cells: C[]) => cells.some((c) => tarihMi(c.s));
+  const sayilar = (cells: C[]) => cells.filter((c) => tutarMi(c.s));
+
+  const kol = hucreler.some((cells) => cells.some((c) => c.x)) ? sutunlar(hucreler, kart) : null;
+  /* Bakiye sütunu: konumlu belgede sütun modelinden; metinde kayıt satırlarının (tarih + tutar)
+     çoğunda iki ya da daha çok sayı varsa en sağdaki bakiyedir. Kart ekstresinde bakiye sütunu
+     yoktur; oradaki ikinci sayı puan ya da döviz tutarıdır ve tutar her zaman en sağdakidir. */
+  const kayitlar = hucreler.filter((c) => tarihli(c) && sayilar(c).length);
+  const hasBalanceCol = kol ? kol.bakiye != null
+    : !kart && kayitlar.filter((c) => sayilar(c).length >= 2).length > kayitlar.length / 2;
 
   /* İki satıra bölünen kayıt (Faz 45.3): açıklama iki satıra taşınca PDF tarihi ve tutarı ayrı
      satırlara çizer. Tarihli ama tutarsız satır, KOMŞUSUNDAKİ tarihsiz "tutar + bakiye" parçasıyla
@@ -243,16 +332,16 @@ export function parseStatement(text: string, tur: "gider" | "gelir" | "kart" = "
   const tuketildi = new Set<number>();
   if (hasBalanceCol) {
     const parca = (i: number) => i >= 0 && i < hucreler.length && !tuketildi.has(i)
-      && !hucreler[i].some(tarihMi) && hucreler[i].filter(tutarMi).length >= 2;
+      && !tarihli(hucreler[i]) && sayilar(hucreler[i]).length >= 2;
     for (let i = 0; i < hucreler.length; i++) {
       const c = hucreler[i];
-      if (!c.some(tarihMi) || c.some(tutarMi)) continue;
+      if (!tarihli(c) || sayilar(c).length) continue;
       const j = parca(i - 1) ? i - 1 : parca(i + 1) ? i + 1 : -1;
       if (j < 0) continue;
       /* Okuma sırası: tarih, parçanın metni (açıklamanın üst satırıdır), tarih satırının kalan
          metni, en sonda sayılar — ad, bölünmemiş satırlardakiyle aynı sırada kurulsun. */
       const f = hucreler[j];
-      hucreler[i] = [...c.filter(tarihMi), ...f.filter((x) => !tutarMi(x)), ...c.filter((x) => !tarihMi(x)), ...f.filter(tutarMi)];
+      hucreler[i] = [...c.filter((x) => tarihMi(x.s)), ...f.filter((x) => !tutarMi(x.s)), ...c.filter((x) => !tarihMi(x.s)), ...f.filter((x) => tutarMi(x.s))];
       tuketildi.add(j);
     }
   }
@@ -267,19 +356,33 @@ export function parseStatement(text: string, tur: "gider" | "gelir" | "kart" = "
   for (let li = 0; li < lines.length; li++) {
     if (tuketildi.has(li)) continue;
     const line = lines[li];
-    const cells = hucreler[li];
+    const hc = hucreler[li];
+    const cells = hc.map((c) => c.s);
     if (cells.length === 0) continue;
     const dateIdx = cells.findIndex(tarihMi);
     if (dateIdx < 0) { if (!isHeader(cells)) skipped.push(line); continue; }
     const date = parseDate(cells[dateIdx])!;
     const numIdx = cells.map((c, i) => (i !== dateIdx && tutarMi(c) ? i : -1)).filter((i) => i >= 0);
     if (numIdx.length === 0) { skipped.push(line); continue; }
-    // bakiye sütunu varsa sondan bir önceki sayı tutardır, yoksa sonuncusu
-    const amtIdx = hasBalanceCol && numIdx.length >= 2 ? numIdx[numIdx.length - 2] : numIdx[numIdx.length - 1];
+    /* Tutar ve bakiye hücresi: konumlu belgede SÜTUNDAN (tutar sütununda sayısı olmayan satır kayıt
+       değildir — üstbilgi, chip-para satırı); metinde bakiye sütunu varsa sondan bir önceki sayı,
+       yoksa sonuncusu. */
+    let amtIdx: number, balIdx: number | null;
+    if (kol) {
+      const sutunda = (x: [number, number]) => numIdx.filter((i) => hc[i].x && ortusur(hc[i].x!, x));
+      const t = sutunda(kol.tutar);
+      if (!t.length) { skipped.push(line); continue; }
+      amtIdx = t[t.length - 1];
+      const b = kol.bakiye ? sutunda(kol.bakiye) : [];
+      balIdx = b.length ? b[b.length - 1] : null;
+    } else {
+      amtIdx = hasBalanceCol && numIdx.length >= 2 ? numIdx[numIdx.length - 2] : numIdx[numIdx.length - 1];
+      balIdx = hasBalanceCol && numIdx.length >= 2 ? numIdx[numIdx.length - 1] : null;
+    }
     const okunan = tutarOku(cells[amtIdx])!;
     const parsed = okunan.v;
     /* İşaret önceliği: (1) tutarda açık +/−, (2) bakiye sütununun yönü, (3) belgenin işaret dili, (4) varsayılan */
-    const balance = hasBalanceCol && numIdx.length >= 2 ? parseAmount(cells[numIdx[numIdx.length - 1]]) : null;
+    const balance = balIdx != null ? parseAmount(cells[balIdx]) : null;
     const byBalance = balance != null && prevBalance != null && Math.abs(balance - prevBalance) > 1e-9
       ? balance > prevBalance : null;
     if (balance != null) prevBalance = balance;
@@ -289,8 +392,8 @@ export function parseStatement(text: string, tur: "gider" | "gelir" | "kart" = "
     const metinMi = (c: string, i: number) => i !== dateIdx && i !== amtIdx && parseAmount(c) === null && !tarihMi(c);
     const [bas, son] = dateIdx < amtIdx ? [dateIdx, amtIdx] : [amtIdx, dateIdx];
     const arada = cells.filter((c, i) => i > bas && i < son && metinMi(c, i));
-    const name = (arada.length ? arada.join(" ")
-      : cells.filter(metinMi).sort((a, b) => b.length - a.length)[0]) ?? "İşlem";
+    const name = ((arada.length ? arada.join(" ")
+      : cells.filter(metinMi).sort((a, b) => b.length - a.length)[0]) ?? "İşlem").replace(/^[-–—\s]+/, "") || "İşlem";
     if (parsed === 0) { skipped.push(line); continue; }
     const row = { date, name: name.slice(0, 120), amount: Math.abs(parsed) };
     rows.push(row);

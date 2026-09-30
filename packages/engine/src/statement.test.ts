@@ -128,6 +128,11 @@ describe("parseAmount — binlik gruplar 3 hanedir", () => {
     expect(parseAmount("1.234.567")).toBe(1234567);
     expect(parseAmount("1.234.567,5")).toBeCloseTo(1234567.5);
   });
+  it("OCR'ın rakam okuduğu '(' ile yarım kalan (-) eki: kuruştan sonraki fazla hane atılır", () => {
+    expect(parseAmount("19,394.544-)")).toBeCloseTo(-19394.54);
+    expect(parseAmount("1.234,56-)")).toBeCloseTo(-1234.56);
+    expect(parseAmount("450-)")).toBeNull(); // kuruşsuz, belirsiz: tutar sayılmaz
+  });
   it("sondaki (-) / (+) işaretini tanır", () => {
     expect(parseAmount("19.394,54(-)")).toBeCloseTo(-19394.54);
     expect(parseAmount("2,38(+)")).toBeCloseTo(2.38);

@@ -13,8 +13,15 @@ export type PdfParca = { s: string; x: number; y: number; w: number; h: number }
 /** Parçalar arası boşluk, harf genişliğinin bu katından büyükse sütun ayrımı sayılır (sekme) */
 const SUTUN_KAT = 2;
 
-/** Bir sayfanın parçalarını yukarıdan aşağıya satırlara dizer. Boş satırlar atılır. */
-export function pdfSatirlariKur(parcalar: PdfParca[]): string[] {
+/** Konumlu hücre: metin + yatay aralığı (sayfa koordinatında). Faz 45.5: sütunlar metinden değil
+    KONUMDAN bulunur — "tutar satırdaki son sayıdır" varsayımı, tutarın sağında taksit/puan/chip
+    sütunu olan belgelerde yanlış sütunu okuyordu (bkz. statement.ts `sutunlar`). */
+export type Hucre = { s: string; x0: number; x1: number };
+export type KonumluSatir = Hucre[];
+
+/** Bir sayfanın parçalarını yukarıdan aşağıya satırlara, satırları hücrelere dizer; hücre, aralarında
+    geniş boşluk olmayan parçaların birleşimidir. Boş satırlar atılır. */
+export function pdfSatirlariKurKonumlu(parcalar: PdfParca[]): KonumluSatir[] {
   const dolu = parcalar.filter((p) => p.s.trim() !== "");
   if (!dolu.length) return [];
   // yukarıdan aşağıya (y büyükten küçüğe), aynı yükseklikte soldan sağa
@@ -30,15 +37,24 @@ export function pdfSatirlariKur(parcalar: PdfParca[]): string[] {
   return satirlar
     .map((satir) => {
       satir.sort((a, b) => a.x - b.x);
-      let metin = satir[0].s;
+      const hucreler: Hucre[] = [{ s: satir[0].s, x0: satir[0].x, x1: satir[0].x + satir[0].w }];
       for (let i = 1; i < satir.length; i++) {
-        const onceki = satir[i - 1], p = satir[i];
+        const onceki = satir[i - 1], p = satir[i], h = hucreler[hucreler.length - 1];
         const bosluk = p.x - (onceki.x + onceki.w);
         const harf = onceki.w / Math.max(onceki.s.length, 1) || p.h * 0.5;
-        const ayrac = bosluk > harf * SUTUN_KAT ? "\t" : bosluk > harf * 0.2 && !/\s$/.test(metin) && !/^\s/.test(p.s) ? " " : "";
-        metin += ayrac + p.s;
+        if (bosluk > harf * SUTUN_KAT) { hucreler.push({ s: p.s, x0: p.x, x1: p.x + p.w }); continue; }
+        const ayrac = bosluk > harf * 0.2 && !/\s$/.test(h.s) && !/^\s/.test(p.s) ? " " : "";
+        h.s += ayrac + p.s;
+        h.x1 = Math.max(h.x1, p.x + p.w);
       }
-      return metin.replace(/[  ]+/g, " ").replace(/ ?\t ?/g, "\t").trim();
+      return hucreler
+        .map((h) => ({ ...h, s: h.s.replace(/[\s\u00a0]+/g, " ").trim() }))
+        .filter((h) => h.s !== "");
     })
-    .filter((m) => m !== "");
+    .filter((h) => h.length > 0);
+}
+
+/** Aynısının düz metni: hücreler sekmeyle ayrılır — yapıştırılmış bir tablo gibi. */
+export function pdfSatirlariKur(parcalar: PdfParca[]): string[] {
+  return pdfSatirlariKurKonumlu(parcalar).map((satir) => satir.map((h) => h.s).join("\t"));
 }

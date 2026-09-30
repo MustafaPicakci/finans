@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import {
   parseStatement, dokumKarsilastir, hesapDefteri, kartDefteri,
-  type AllData, type Dogrulama, type ParsedRow, type DefterKaydi, type DokumDurum, type DokumKarsilastirma,
+  type AllData, type Dogrulama, type ParsedRow, type DefterKaydi, type DokumDurum, type DokumKarsilastirma, type KonumluSatir,
 } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, fmtMoney } from "../../theme";
@@ -53,6 +53,9 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
   /* PDF: dosya parolalıysa elde tutulur, parola sorulur. Parola yalnız bu cihazda PDF'i açmak için. */
   const [pdf, setPdf] = useState<{ dosya: File; parolaIste: boolean; yanlis: boolean; okunuyor: boolean } | null>(null);
   const [parola, setParola] = useState("");
+  /* PDF'ten gelen KONUMLU satırlar (sütunlar konumdan bulunur) ve onlardan üretilen metin. Kullanıcı
+     kutudaki metni düzenlerse konum geçersiz olur ve düz metin ayrıştırılır. */
+  const [konumlu, setKonumlu] = useState<{ satirlar: KonumluSatir[]; metin: string } | null>(null);
 
   const sugs = useMemo(() => kalemSuggestions(data), [data]);
   /** geçmişte aynı/benzer adla girilmiş kaydın kategorisi (en sık kullanılan eşleşme) */
@@ -86,11 +89,11 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
     return d;
   };
 
-  const analyze = (metin = text) => {
+  const analyze = (metin = text, satirlar = konumlu?.metin === metin ? konumlu.satirlar : null) => {
     /* Kart ekstresinin işaret dili farklıdır (harcama işaretsiz, ödeme "+" ya da "−" ile
        işaretli); ayrıştırıcı `kart` kipinde bunu çözer ve önizlemenin diliyle (− = harcama)
        döndürür. Yine de ters okunursa "işaretleri çevir" tek dokunuş. */
-    const { rows, skipped, dogrulama, bozukHarf } = parseStatement(metin, cardId != null ? "kart" : defaultSign);
+    const { rows, skipped, dogrulama, bozukHarf } = parseStatement(satirlar ?? metin, cardId != null ? "kart" : defaultSign);
     setSkipped(skipped);
     setDogrulama(dogrulama);
     setBozukHarf(bozukHarf);
@@ -102,11 +105,13 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
     // yeni PDF kutudakinin yerini alır: önceki metin kalsa parola sorulurken eski belge çözülebilirdi
     setPdf({ dosya, parolaIste: false, yanlis: false, okunuyor: true }); setErr(null); setText("");
     try {
-      const metin = (await pdfSatirlari(dosya, sifre)).join("\n");
+      const satirlar = await pdfSatirlari(dosya, sifre);
+      const metin = satirlar.map((s) => s.map((h) => h.s).join("\t")).join("\n");
       setPdf(null); setParola("");
       if (!metin.trim()) { setErr("Bu PDF'te okunabilir metin yok (taranmış bir kâğıt olabilir)."); return; }
       setText(metin);
-      analyze(metin);
+      setKonumlu({ satirlar, metin });
+      analyze(metin, satirlar);
     } catch (e) {
       if (e instanceof PdfParolaGerekli) { setPdf({ dosya, parolaIste: true, yanlis: e.yanlis, okunuyor: false }); return; }
       setPdf(null);

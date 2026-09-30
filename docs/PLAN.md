@@ -580,6 +580,15 @@ bozulmuş yapay defter (silinen, 2 gün kayan, tutarı değişen, fazla kayıtla
 bozulmalar doğru gruba düştü, tutarı tutmayan eşleşme sıfır, 66 ms. İkinci sürüme: açılışı geri
 çekerek geçmişi ekleme (yeni uç), "farklı"yı tek dokunuşla düzeltme.
 
+Dilim 5 — konumlu sütun modeli (Faz 45.5, 2026-09-30). OCR denemesi asıl sorunun OCR değil
+ayrıştırıcının "tutar satırdaki son sayıdır" varsayımı olduğunu gösterdi: bir ekstrede tutarın
+sağında taksit/kalan borç ve chip-para sütunları var. PDF ve OCR girdisi artık hücre konumlarını
+taşır; sayı sütunları konumdan kümelenir, tutar sütunu kayıtların çoğunda dolu olandır, tutar
+sütununda sayısı olmayan satır kayıt sayılmaz. Yanında: yapışık tarih/tutar ayrımı (saatli tarih
+hariç — aracı kurum emirleri gelir/gider olmasın), OCR'ın bozduğu "(-)" eki için tolerans.
+Sonuç: metin katmanı OLMAYAN ekstre (her harf resim) OCR ile okundu — 12 harcama + ödeme, dönem
+borcuyla "belgeyle tutuyor"; metinli dört belgede sonuç değişmedi.
+
 ## Faz 46 — Asistanla kurulum ✅ (yerelde doğrulandı, 2026-09-30)
 
 Pazara çıkış değerlendirmesinin ilk önerisindeki ikinci yol: sihirbaz (Faz 43) formlarla kurar,
