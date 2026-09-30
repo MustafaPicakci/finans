@@ -563,6 +563,12 @@ resim; OCR kararı yeniden açıldı), bir bankanın yazı tipi Türkçe harfler
 sağlam), aracı kurum ekstresi `trades` hedefi ister (ayrı dilim), ve 735 satırlık döküm sunucunun
 500 kayıt / 256 KB sınırına takılıyor.
 
+Aynı gün düzeltildi: toplu uçların gövde sınırı 2 MB (genel sınır 256 KB kaldı; E2EE'de satır başına
+iki zarf, ölçüldü ~330 bayt, uzun açıklamada ~560), `IMPORT_MAX` 2000. Yazım satır başına iki sorgudan
+**sabit 3 sorguya** indi (kimlik önden `nextval`, `unnest`'li toplu INSERT; [toplu.ts](../apps/server/toplu.ts)) —
+kum havuzu veritabanında geri alınan bir transaction içinde 2000 işlem + hareketleri 58 ms'de, alan alan
+doğru ve hareketler doğru işleme bağlı.
+
 ## Faz 46 — Asistanla kurulum ✅ (yerelde doğrulandı, 2026-09-30)
 
 Pazara çıkış değerlendirmesinin ilk önerisindeki ikinci yol: sihirbaz (Faz 43) formlarla kurar,

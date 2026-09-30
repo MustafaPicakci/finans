@@ -8,6 +8,7 @@ import cron from "node-cron";
 import { REC_AMOUNT_BEGIN } from "@finans/engine";
 import { db, initDb, nowLocal, todayLocal, zarfGecerli, TENANT_TABLES, GLOBAL_SETTING_KEYS, type TxClient } from "./db.js";
 import { loadAllData } from "./data.js";
+import { topluIslemYaz, topluKartYaz } from "./toplu.js";
 import { refreshAll, backfillPriceHistory, refreshCorporateActions, refreshCompanyEvents } from "./prices.js";
 import { refreshBenchmarks, autoBackfill } from "./benchmarks.js";
 import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, peekEmailToken, purgeStaleEmailTokens, SESSION_COOKIE, type SessionUser , sahteSalt, e2eeMalzemeDogrula, PAKET } from "./auth.js";
@@ -43,9 +44,18 @@ app.use("*", async (c, next) => {
   if (isProd) h.set("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
 });
 
-/* ---- istek gövdesi boyutu sınırı (basit DoS koruması; JSON API için 256KB fazlasıyla yeter) ---- */
+/* ---- istek gövdesi boyutu sınırı (basit DoS koruması: gövde belleğe okunur, kayıt herkese açık) ----
+   Genel sınır 256KB — tek kayıtlık JSON için fazlasıyla yeter. İSTİSNA toplu içe aktarma (Faz 45.3):
+   E2EE'den beri her satır iki zarf taşır (kayıt + hesap hareketi), ölçüldü: gerçek bir dökümde
+   satır başına ~330 bayt, uzun açıklamada ~560'a kadar. 256KB ile 17 sayfalık iki yıllık bir döküm
+   tek seferde aktarılamıyordu. Bu iki uç oturum ister ve atomiktir; sınırları IMPORT_MAX'ın en
+   kötü durumuna (2000 × ~600 bayt) pay bırakır. */
+const GOVDE_SINIR = 256 * 1024;
+const TOPLU_GOVDE_SINIR = 2 * 1024 * 1024;
+const TOPLU_UCLAR = new Set(["/api/transactions/bulk", "/api/cardtxs/bulk"]);
 app.use("/api/*", async (c, next) => {
-  if (Number(c.req.header("content-length") || 0) > 256 * 1024) return c.json({ error: "İstek çok büyük" }, 413);
+  const sinir = TOPLU_UCLAR.has(c.req.path) ? TOPLU_GOVDE_SINIR : GOVDE_SINIR;
+  if (Number(c.req.header("content-length") || 0) > sinir) return c.json({ error: "İstek çok büyük" }, 413);
   await next();
 });
 
@@ -1175,7 +1185,7 @@ api.post("/transactions", async (c) => {
 /* Toplu içe aktarma (ekstre yapıştırma): tek istekte N gerçekleşen kayıt, tek transaction içinde.
    Ya hepsi yazılır ya hiçbiri — yarım kalmış import bakiyeyi tutarsız bırakmasın. Hesap/kategori
    id'leri kullanıcıya ait mi diye önden doğrulanır (crud'un tenant-scope garantisinin eşdeğeri). */
-const IMPORT_MAX = 500;
+const IMPORT_MAX = 2000; // iki yıllık gerçek bir hesap dökümü 735 satırdı; gövde sınırı yukarıda (TOPLU_GOVDE_SINIR)
 /** Toplu uçlarda gövdedeki FK'lerin hepsi bu kullanıcının mı (tablo adı sabit, kullanıcıdan gelmez) */
 const hepsiSahibin = async (uid: number, table: "accounts" | "categories" | "cards", ids: number[]) => {
   if (ids.length === 0) return true;
@@ -1199,15 +1209,10 @@ api.post("/transactions/bulk", async (c) => {
   if (!(await hepsiSahibin(uid, "accounts", farkliIdler(rows, "account_id"))) || !(await hepsiSahibin(uid, "categories", farkliIdler(rows, "category_id")))) {
     return c.json({ error: "geçersiz hesap veya kategori" }, 400);
   }
-  await db.tx(async (t) => {
-    for (const r of rows) {
-      const info = await t.run(
-        "INSERT INTO transactions (date,enc,category_id,account_id,user_id) VALUES (?,?,?,?,?) RETURNING id",
-        r.date, r.enc, r.category_id ?? null, r.account_id ?? null, uid,
-      );
-      await applyEntry(t, uid, r.account_id ?? null, zarfAl(r.entry_enc) || null, { date: r.date, kind: "islem", source_table: "transactions", source_id: info.id });
-    }
-  });
+  // sabit 3 sorgu, satır sayısından bağımsız (toplu.ts)
+  await db.tx((t) => topluIslemYaz(t, uid, rows.map((r: any) => ({
+    date: r.date, enc: r.enc, entry_enc: zarfAl(r.entry_enc) || null, category_id: r.category_id ?? null, account_id: r.account_id ?? null,
+  }))));
   console.log(`[audit] Toplu içe aktarma: ${rows.length} kayıt (id:${uid})`);
   return c.json({ inserted: rows.length });
 });
@@ -1229,11 +1234,7 @@ api.post("/cardtxs/bulk", async (c) => {
   if (!(await hepsiSahibin(uid, "cards", farkliIdler(rows, "card_id"))) || !(await hepsiSahibin(uid, "categories", farkliIdler(rows, "category_id")))) {
     return c.json({ error: "geçersiz kart veya kategori" }, 400);
   }
-  await db.tx(async (t) => {
-    for (const r of rows) {
-      await t.run("INSERT INTO card_txs (card_id,date,enc,category_id,user_id) VALUES (?,?,?,?,?)", r.card_id, r.date, r.enc, r.category_id ?? null, uid);
-    }
-  });
+  await db.tx((t) => topluKartYaz(t, uid, rows.map((r: any) => ({ card_id: r.card_id, date: r.date, enc: r.enc, category_id: r.category_id ?? null }))));
   console.log(`[audit] Toplu kart harcaması: ${rows.length} kayıt (id:${uid})`);
   return c.json({ inserted: rows.length });
 });
