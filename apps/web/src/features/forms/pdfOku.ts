@@ -45,7 +45,7 @@ function okuyucu(): Promise<HTMLIFrameElement> {
 
 let sayac = 0;
 /** Dosyayı (PDF ya da resim) okuyucuya gönderir, konumlu satırları döndürür. */
-export async function belgeOku(dosya: File, parola?: string, ilerleme?: (m: string) => void): Promise<OkumaSonucu> {
+export async function belgeOku(dosya: File, parola?: string, ilerleme?: (m: string) => void, ocrZorla = false): Promise<OkumaSonucu> {
   const f = await okuyucu();
   const id = ++sayac;
   const mime = dosya.type || (dosya.name.toLowerCase().endsWith(".pdf") ? "application/pdf" : "image/png");
@@ -61,7 +61,7 @@ export async function belgeOku(dosya: File, parola?: string, ilerleme?: (m: stri
       else reddet(new Error(m.mesaj || "Belge okunamadı"));
     };
     window.addEventListener("message", dinle);
-    const istek: OkuIstegi = { id, tur: "oku", mime, veri, parola };
+    const istek: OkuIstegi = { id, tur: "oku", mime, veri, parola, ocrZorla };
     f.contentWindow!.postMessage(istek, "*", [veri]); // opak kökene hedef köken verilemez; bayt aktarılır, kopyalanmaz
   });
 }

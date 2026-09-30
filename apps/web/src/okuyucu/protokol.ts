@@ -6,7 +6,9 @@
 import type { KonumluSatir } from "@finans/engine";
 
 /** Ebeveyn → okuyucu */
-export type OkuIstegi = { id: number; tur: "oku"; mime: string; veri: ArrayBuffer; parola?: string };
+/** `ocrZorla`: metin katmanına bakmadan HER sayfayı OCR'la — katman var ama bozuk/eksikse (ör. yazı tipi
+    Türkçe harfleri bozuk veriyor, ya da tutarlar resim) kullanıcı önizlemeden ister. */
+export type OkuIstegi = { id: number; tur: "oku"; mime: string; veri: ArrayBuffer; parola?: string; ocrZorla?: boolean };
 
 /** Okuyucu → ebeveyn */
 export type OkuyucuMesaji =

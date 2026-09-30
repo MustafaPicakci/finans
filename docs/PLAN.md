@@ -638,6 +638,13 @@ test kullanıcısının 1.506 satırının hepsi `v1:` zarflı. Test bir hata bu
 çekilirken önizlemenin mutabakat satırı eski açılışın farkını düşüyordu, hesap bugün açıldıysa eski
 açılış mutabakat gününden sonra olduğu için "defter 0,00" diyordu (kaydedilen veri doğruydu).
 
+"OCR ile yeniden oku" (2026-09-30). PDF'te OCR kararı sayfa başına: en az 3 metin parçası → metin
+katmanı. Bu eşik katman VAR ama güvenilmezse yanılır (bozuk yazı tipi eşlemesi, resim olarak basılmış
+tutarlar). Eşiği karmaşıklaştırmak yerine karar belgenin kendi doğrulamasına bağlandı: doğrulama
+tutmuyorsa ya da harfler bozuksa önizleme tüm sayfaları OCR'la yeniden okumayı sunar. Bozuk yazı tipli
+gerçek ekstrede OCR adları düzeltti ve metin katmanında okunamayan "önceki dönem / dönem borcu"
+satırlarını okuyup doğrulamayı mümkün kıldı ("dayanak yok" → "belgeyle tutuyor").
+
 ## Faz 46 — Asistanla kurulum ✅ (yerelde doğrulandı, 2026-09-30)
 
 Pazara çıkış değerlendirmesinin ilk önerisindeki ikinci yol: sihirbaz (Faz 43) formlarla kurar,

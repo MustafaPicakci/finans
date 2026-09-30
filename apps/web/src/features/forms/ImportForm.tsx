@@ -68,6 +68,9 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
   /** okuma sürerken okuyucunun söylediği adım ("Sayfa 1/2 … OCR %40"); bittikten sonra kaç sayfanın OCR'la okunduğu */
   const [ilerleme, setIlerleme] = useState("");
   const [ocrSayfa, setOcrSayfa] = useState(0);
+  /** Son okunan PDF (ve parolası): önizlemeden "OCR ile yeniden oku" için elde tutulur. */
+  const [sonBelge, setSonBelge] = useState<{ dosya: File; parola?: string; sayfa: number } | null>(null);
+  const [yenidenOkunuyor, setYenidenOkunuyor] = useState(false);
 
   const sugs = useMemo(() => kalemSuggestions(data), [data]);
   /** geçmişte aynı/benzer adla girilmiş kaydın kategorisi (en sık kullanılan eşleşme) */
@@ -103,7 +106,7 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
   };
 
   const analyze = (metin = text, satirlar = konumlu?.metin === metin ? konumlu.satirlar : null) => {
-    if (!satirlar) setOcrSayfa(0);
+    if (!satirlar) { setOcrSayfa(0); setSonBelge(null); }
     if (islemModu) { setIslemSonuc(parseIslemler(satirlar ?? metin)); setErr(null); return; }
     /* Kart ekstresinin işaret dili farklıdır (harcama işaretsiz, ödeme "+" ya da "−" ile
        işaretli); ayrıştırıcı `kart` kipinde bunu çözer ve önizlemenin diliyle (− = harcama)
@@ -116,14 +119,15 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
     setErr(null);
   };
 
-  const pdfOku = async (dosya: File, sifre?: string) => {
+  const pdfOku = async (dosya: File, sifre?: string, ocrZorla = false) => {
     // yeni belge kutudakinin yerini alır: önceki metin kalsa parola sorulurken eski belge çözülebilirdi
     setPdf({ dosya, parolaIste: false, yanlis: false, okunuyor: true }); setErr(null); setText(""); setIlerleme("");
     try {
-      const sonuc = await belgeOku(dosya, sifre, setIlerleme);
+      const sonuc = await belgeOku(dosya, sifre, setIlerleme, ocrZorla);
       const { satirlar } = sonuc;
       const metin = satirlar.map((s) => s.map((h) => h.s).join("\t")).join("\n");
       setPdf(null); setParola(""); setIlerleme(""); setOcrSayfa(sonuc.ocrSayfa);
+      setSonBelge(dosya.type === "application/pdf" || dosya.name.toLowerCase().endsWith(".pdf") ? { dosya, parola: sifre, sayfa: sonuc.sayfa } : null);
       if (!metin.trim()) { setErr("Bu belgede okunabilir metin bulunamadı."); return; }
       setText(metin);
       setKonumlu({ satirlar, metin });
@@ -358,8 +362,23 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
       </div>
 
       <DogrulamaSatiri d={dogrulama} />
+      {/* Metin katmanı okundu ama belgeyle tutmuyor ya da harfler bozuk: katman güvenilmez olabilir
+          (bozuk yazı tipi eşlemesi, resim olarak basılmış tutarlar). Karar belgenin kendi doğrulamasına
+          bağlı — sabit bir eşiği değiştirmek yerine. Sonuç yine aynı doğrulamadan geçer. */}
+      {sonBelge && ocrSayfa < sonBelge.sayfa && (bozukHarf || (dogrulama.tur !== "yok" && !dogrulama.tamam)) && (
+        <div style={{ fontSize: 12.5, color: T.mut, background: T.panel2, borderRadius: 8, padding: "8px 12px", marginBottom: 8, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ flex: "1 1 220px" }}>
+            {yenidenOkunuyor ? (ilerleme || "OCR hazırlanıyor…")
+              : <>Belge metin katmanından okundu ama {bozukHarf ? "harfler bozuk görünüyor" : "belgeyle tutmuyor"}. Sayfaları görüntüden okumayı dene — sayfa başına birkaç saniye sürer.</>}
+          </span>
+          <button type="button" style={{ ...css.ghost, fontSize: 12.5 }} disabled={yenidenOkunuyor}
+            onClick={async () => { setYenidenOkunuyor(true); await pdfOku(sonBelge.dosya, sonBelge.parola, true); setYenidenOkunuyor(false); }}>
+            {yenidenOkunuyor ? "Okunuyor…" : "OCR ile yeniden oku"}
+          </button>
+        </div>
+      )}
       {ocrSayfa > 0 && (
-        <Hint>Belgenin {ocrSayfa} sayfasında metin katmanı yoktu, görüntüden okundu (OCR). Rakamlar yukarıdaki doğrulamayla denetlenir; tutmuyorsa satırları gözden geçir.</Hint>
+        <Hint>Belgenin {ocrSayfa} sayfası görüntüden okundu (OCR). Rakamlar yukarıdaki doğrulamayla denetlenir; adlarda harf hatası olabilir — tutmuyorsa satırları gözden geçir.</Hint>
       )}
       {bozukHarf && (
         <Hint>Bu belgenin yazı tipi Türkçe harfleri bozuk veriyor ("%deme" gibi). Tutarlar etkilenmez, ama adları aktarmadan önce kontrol et.</Hint>

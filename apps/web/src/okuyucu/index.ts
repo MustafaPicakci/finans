@@ -59,7 +59,7 @@ async function ocrParcalari(goruntu: HTMLCanvasElement | Blob): Promise<PdfParca
 /** OCR için hedef genişlik (px): küçük punto rakamların doğru okunması için sayfa büyütülerek çizilir. */
 const OCR_GENISLIK = 2400;
 
-async function pdfOku(veri: ArrayBuffer, parola: string | undefined, ilerle: (m: string) => void) {
+async function pdfOku(veri: ArrayBuffer, parola: string | undefined, ilerle: (m: string) => void, ocrZorla = false) {
   await pdfHazir;
   const gorev = pdfjs.getDocument({ data: new Uint8Array(veri), password: parola, useWasm: false, disableFontFace: true });
   const belge = await gorev.promise;
@@ -74,7 +74,9 @@ async function pdfOku(veri: ArrayBuffer, parola: string | undefined, ilerle: (m:
         if (!("str" in o) || !o.str.trim()) continue;
         parcalar.push({ s: o.str, x: o.transform[4], y: o.transform[5], w: o.width, h: o.height || Math.abs(o.transform[3]) });
       }
-      if (parcalar.length >= 3) {
+      /* Karar SAYFA BAŞINA: en az 3 metin parçası varsa metin katmanı (birebir, hızlı, rakam hatası
+         olmaz); yoksa sayfa resim olarak çizilip OCR'lanır. `ocrZorla`: katman var ama güvenilmez. */
+      if (parcalar.length >= 3 && !ocrZorla) {
         satirlar.push(...pdfSatirlariKurKonumlu(parcalar));
       } else {
         // metin katmanı yok: sayfayı çiz, OCR'la
@@ -103,11 +105,11 @@ async function pdfOku(veri: ArrayBuffer, parola: string | undefined, ilerle: (m:
 
 window.addEventListener("message", async (e: MessageEvent<OkuIstegi>) => {
   if (e.source !== window.parent || e.data?.tur !== "oku") return;
-  const { id, mime, veri, parola } = e.data;
+  const { id, mime, veri, parola, ocrZorla } = e.data;
   const ilerle = (metin: string) => gonder({ id, tip: "ilerleme", metin });
   try {
     if (mime === "application/pdf") {
-      gonder({ id, tip: "sonuc", ...(await pdfOku(veri, parola, ilerle)) });
+      gonder({ id, tip: "sonuc", ...(await pdfOku(veri, parola, ilerle, ocrZorla)) });
     } else {
       ocrIlerleme = (m) => ilerle(`Görüntü metin olarak okunuyor (OCR) ${m}`);
       ilerle("OCR hazırlanıyor…");
