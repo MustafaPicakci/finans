@@ -24,7 +24,7 @@ export type Kopukluk = { once: string; sonra: string; eksik: number };
     - `donem`: kart ekstresinde önceki dönem + harcamalar − ödemeler = dönem borcu
       (BDDK'nın zorunlu kıldığı ekstre dili; bankadan bağımsız). */
 export type Dogrulama =
-  | { tur: "bakiye"; tamam: boolean; kopukluklar: Kopukluk[] }
+  | { tur: "bakiye"; tamam: boolean; kopukluklar: Kopukluk[]; son: { tarih: string; bakiye: number } }
   | { tur: "donem"; tamam: boolean; belge: number; okunan: number }
   | { tur: "yok" };
 
@@ -191,7 +191,9 @@ function bakiyeZinciri(satirlar: { date: string; amount: number; bakiye: number 
     const eksik = yeniden >= eskiden ? r.bakiye - r.amount - s.bakiye : s.bakiye - s.amount - r.bakiye;
     if (!esit(eksik, 0)) kopukluklar.push({ once: r.date, sonra: s.date, eksik: Math.round(eksik * 100) / 100 });
   }
-  return { tur: "bakiye", tamam: kopukluklar.length === 0, kopukluklar };
+  // dökümün en yeni satırındaki bakiye: bankanın o günkü rakamı (mutabakat buna karşı yapılır)
+  const enYeni = yeniden >= eskiden ? satirlar[0] : satirlar[satirlar.length - 1];
+  return { tur: "bakiye", tamam: kopukluklar.length === 0, kopukluklar, son: { tarih: enYeni.date, bakiye: enYeni.bakiye } };
 }
 
 /** Tarihsiz bir satırda anahtar sözcük + sayı: kart ekstresinin üstbilgisindeki "Dönem Borcu" gibi. */

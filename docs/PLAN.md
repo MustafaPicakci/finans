@@ -569,6 +569,17 @@ iki zarf, ölçüldü ~330 bayt, uzun açıklamada ~560), `IMPORT_MAX` 2000. Yaz
 kum havuzu veritabanında geri alınan bir transaction içinde 2000 işlem + hareketleri 58 ms'de, alan alan
 doğru ve hareketler doğru işleme bağlı.
 
+Dilim 4 — dökümü defterle karşılaştırma (Faz 45.4, 2026-09-30). Kullanıcı: "import edilen döküm,
+uygulamadaki eksik kayıtları düzeltmek/tamamlamak için de kullanılabilmeli." İçe aktarma "hepsini
+yaz"dan "farkı göster"e döndü; bu aynı zamanda açılış bakiyesiyle çift sayım sorununu çözdü (iki
+yıllık dökümü geçmişi olan hesaba aktarmak bakiyeyi şişiriyordu). Kararlar: hesap dökümü hesabın
+DEFTERİYLE karşılaştırılır (bankada virman/ekstre ödemesi/portföy de var), ada bakılmaz, eşleşme
+birebir; "Para Transferi" gibi eksik bir satırın aslında virman olması ilk sürümde çözülmüyor
+(kullanıcı kabul etti — seçimi kaldırabilir). Doğrulama: gerçek 735 satırlık döküm + bilinçli
+bozulmuş yapay defter (silinen, 2 gün kayan, tutarı değişen, fazla kayıtlar, açılış ortada): bütün
+bozulmalar doğru gruba düştü, tutarı tutmayan eşleşme sıfır, 66 ms. İkinci sürüme: açılışı geri
+çekerek geçmişi ekleme (yeni uç), "farklı"yı tek dokunuşla düzeltme.
+
 ## Faz 46 — Asistanla kurulum ✅ (yerelde doğrulandı, 2026-09-30)
 
 Pazara çıkış değerlendirmesinin ilk önerisindeki ikinci yol: sihirbaz (Faz 43) formlarla kurar,

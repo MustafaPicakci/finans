@@ -1,8 +1,11 @@
 import React, { useMemo, useState } from "react";
-import { parseStatement, type AllData, type Dogrulama, type ParsedRow } from "@finans/engine";
+import {
+  parseStatement, dokumKarsilastir, hesapDefteri, kartDefteri,
+  type AllData, type Dogrulama, type ParsedRow, type DefterKaydi, type DokumDurum, type DokumKarsilastirma,
+} from "@finans/engine";
 import { api } from "../../api";
 import { T, css, fmtMoney } from "../../theme";
-import { Field, Hint } from "../../ui";
+import { DahaFazla, Field, FiltreSeridi, Hint, useSayfalama } from "../../ui";
 import { kalemSuggestions, normName } from "./recall";
 import { pdfSatirlari, PdfParolaGerekli } from "./pdfOku";
 
@@ -11,9 +14,20 @@ import { pdfSatirlari, PdfParolaGerekli } from "./pdfOku";
    PDF'ini seç (Faz 45: tarayıcıda okunur, metni bu kutuya yazılır; bkz. pdfOku.ts) → satırlar
    `parseStatement` (engine, testli) ile ayrıştırılır → önizleme tablosunda düzeltilir →
    tek istekte (`POST /api/transactions/bulk`, atomik) deftere yazılır.
-   Kategori tahmini geçmiş kayıtlardan yapılır; olası kopyalar önden işaretsiz gelir. */
+   Kategori tahmini geçmiş kayıtlardan yapılır.
 
-type Draft = ParsedRow & { include: boolean; category_id: string; dup: boolean };
+   Faz 45.4 — "hepsini yaz" DEĞİL "farkı göster": döküm hedefin defteriyle karşılaştırılır
+   (`dokumKarsilastir`, engine) ve yalnız EKSİK satırlar önden seçili gelir. Böylece aynı döküm
+   eksikleri tamamlamak için de kullanılır; zaten girilmiş kayıt ikinci kez yazılmaz, açılış
+   bakiyesinin içinde sayılmış geçmiş bakiyeyi şişirmez. */
+
+type Draft = ParsedRow & { include: boolean; category_id: string; durum: DokumDurum; kayit?: DefterKaydi };
+type Filtre = DokumDurum | "hepsi";
+const FILTRE_ADI: Record<Filtre, string> = {
+  eksik: "Eksik", farkli: "Farklı", eslesti: "Defterde", acilis: "Açılıştan önce", odeme: "Ödeme", hepsi: "Hepsi",
+};
+/** Çok yıllık dökümde "09-03" belirsiz kalırdı */
+const kisaTarih = (d: string) => `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(2, 4)}`;
 
 export function ImportForm({ data, reload, onClose }: { data: AllData; reload: () => void; onClose: () => void }) {
   const [text, setText] = useState("");
@@ -29,6 +43,8 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
       "Ödedim" ile kaydedilir (burada da yazılsa iki kez sayılırdı) ve kart harcaması modelinde iade yok. */
   const kartaGiren = (r: ParsedRow) => cardId != null && r.amount > 0;
   const [drafts, setDrafts] = useState<Draft[] | null>(null);
+  const [fazla, setFazla] = useState<DefterKaydi[]>([]);
+  const [filtre, setFiltre] = useState<Filtre>("eksik");
   const [skipped, setSkipped] = useState<string[]>([]);
   const [dogrulama, setDogrulama] = useState<Dogrulama>({ tur: "yok" });
   const [bozukHarf, setBozukHarf] = useState(false);
@@ -47,10 +63,28 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
       ?? sugs.find((s) => s.category_id != null && (n.includes(normName(s.name)) || normName(s.name).includes(n)));
     return hit?.category_id ?? null;
   };
-  /** aynı gün + aynı tutar + aynı ad zaten defterde varsa büyük olasılıkla ikinci kez aktarılıyor */
-  const isDup = (r: ParsedRow) => cardId != null
-    ? data.card_txs.some((t) => t.card_id === cardId && t.date === r.date && Math.abs(t.amount + r.amount) < 0.005 && normName(t.name) === normName(r.name))
-    : data.transactions.some((t) => t.date === r.date && Math.abs(t.amount - r.amount) < 0.005 && normName(t.name) === normName(r.name));
+  /** Hedefin defteri: hesap → o hesabın bütün hareketleri; kart → o kartın harcamaları;
+      "yalnız defter" → hesapsız gelir/gider kayıtları. */
+  const karsilastir = (rows: ParsedRow[]): DokumKarsilastirma => {
+    if (cardId != null) return dokumKarsilastir(rows, kartDefteri(data, cardId), { kart: true });
+    if (accountId) {
+      const { defter, acilis } = hesapDefteri(data, +accountId);
+      return dokumKarsilastir(rows, defter, { acilis });
+    }
+    return dokumKarsilastir(rows, data.transactions.filter((t) => t.account_id == null)
+      .map((t) => ({ kimlik: `t${t.id}`, date: t.date, amount: t.amount, name: t.name })));
+  };
+  /** Satırları defterle karşılaştırıp durumlarını yazar; yalnız EKSİK olan önden seçilir. */
+  const durumla = (rows: (ParsedRow & { category_id?: string })[]): Draft[] => {
+    const k = karsilastir(rows);
+    setFazla(k.fazla);
+    const d = rows.map((r, i) => ({
+      ...r, durum: k.satirlar[i].durum, kayit: k.satirlar[i].kayit, include: k.satirlar[i].durum === "eksik",
+      category_id: r.category_id ?? (() => { const c = guessCategory(r.name); return c != null ? String(c) : ""; })(),
+    }));
+    setFiltre(d.some((x) => x.durum === "eksik") ? "eksik" : "hepsi");
+    return d;
+  };
 
   const analyze = (metin = text) => {
     /* Kart ekstresinin işaret dili farklıdır (harcama işaretsiz, ödeme "+" ya da "−" ile
@@ -60,11 +94,7 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
     setSkipped(skipped);
     setDogrulama(dogrulama);
     setBozukHarf(bozukHarf);
-    setDrafts(rows.map((r) => {
-      const dup = isDup(r);
-      const cat = guessCategory(r.name);
-      return { ...r, include: !dup && !kartaGiren(r), dup, category_id: cat != null ? String(cat) : "" };
-    }));
+    setDrafts(durumla(rows));
     setErr(null);
   };
 
@@ -89,17 +119,32 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
   /* Belgenin işaret dili bizimkinin tersi olabilir: kart ekstresinde harcama ARTI, ödeme eksi
      yazılır. Tek dokunuşla hepsi çevrilir; türü artık tutmayan kategori boşaltılır (gelir
      kategorisi gidere yazılmasın). */
-  const isaretCevir = () => setDrafts((d) => d!.map((r) => {
+  /* İşaret değişince eşleşme de değişir (gelir ≠ gider): karşılaştırma yeniden yapılır. */
+  const isaretCevir = () => drafts && setDrafts(durumla(drafts.map((r) => {
     const amount = -r.amount;
     const kat = data.categories.find((c) => String(c.id) === r.category_id);
     const tutar = !kat || kat.kind === (amount < 0 ? "expense" : "income");
-    const yeni = { ...r, amount, category_id: tutar ? r.category_id : "" };
-    // kart hedefinde aktarılamaz hâle gelen satır seçimden düşer, aktarılabilir olan (kopya değilse) seçilir
-    return { ...yeni, include: kartaGiren(yeni) ? false : kartaGiren(r) ? !r.dup : r.include };
-  }));
+    return { date: r.date, name: r.name, amount, category_id: tutar ? r.category_id : "" };
+  })));
 
   const chosen = drafts?.filter((d) => d.include) ?? [];
   const sum = chosen.reduce((s, d) => s + d.amount, 0);
+  const sayac = useMemo(() => {
+    const m = new Map<Filtre, number>([["hepsi", drafts?.length ?? 0]]);
+    for (const d of drafts ?? []) m.set(d.durum, (m.get(d.durum) ?? 0) + 1);
+    return m;
+  }, [drafts]);
+  const gorunen = useMemo(() => (drafts ?? []).map((d, i) => ({ d, i })).filter(({ d }) => filtre === "hepsi" || d.durum === filtre), [drafts, filtre]);
+  const sayfa = useSayfalama(gorunen, 60, filtre);
+  /* Mutabakat: dökümün en yeni bakiyesi (bankanın o günkü rakamı) ile aktarımdan SONRA defterin
+     aynı günkü bakiyesi. Fark kalırsa var olan mutabakat akışı (Hesaplar) onu düzeltme olarak yazar. */
+  const mutabakat = useMemo(() => {
+    if (!accountId || dogrulama.tur !== "bakiye") return null;
+    const { tarih, bakiye } = dogrulama.son;
+    const defter = data.account_entries.filter((e) => e.account_id === +accountId && e.date <= tarih).reduce((s, e) => s + e.amount, 0);
+    const eklenecek = chosen.filter((d) => d.date <= tarih).reduce((s, d) => s + d.amount, 0);
+    return { tarih, banka: bakiye, defter: Math.round((defter + eklenecek) * 100) / 100 };
+  }, [accountId, dogrulama, data.account_entries, chosen]);
 
   const save = async () => {
     if (chosen.length === 0) return;
@@ -199,8 +244,8 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
         <div style={{ fontSize: 13, color: T.mut }}>
-          <b style={{ color: T.text }}>{drafts.length}</b> satır çözüldü · <b style={{ color: T.text }}>{chosen.length}</b> seçili
-          {drafts.some((d) => d.dup) && <> · <span style={{ color: T.neg }}>{drafts.filter((d) => d.dup).length} olası kopya</span></>}
+          <b style={{ color: T.text }}>{drafts.length}</b> satır · <b style={{ color: T.text }}>{sayac.get("eslesti") ?? 0}</b> zaten defterde
+          · <b style={{ color: T.text }}>{sayac.get("eksik") ?? 0}</b> eksik · <b style={{ color: T.text }}>{chosen.length}</b> seçili
         </div>
         <div style={{ fontSize: 13, color: T.mut, display: "flex", alignItems: "center", gap: 10 }}>
           <button type="button" onClick={isaretCevir} title="Gider ↔ gelir: belgede harcama artı yazılıyorsa"
@@ -215,16 +260,30 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
       {bozukHarf && (
         <Hint>Bu belgenin yazı tipi Türkçe harfleri bozuk veriyor ("%deme" gibi). Tutarlar etkilenmez, ama adları aktarmadan önce kontrol et.</Hint>
       )}
+      <FiltreSeridi>
+        {(["eksik", "farkli", "eslesti", "acilis", "odeme", "hepsi"] as const).filter((f) => f === "hepsi" || sayac.get(f)).map((f) => (
+          <button key={f} type="button" onClick={() => setFiltre(f)} style={{
+            padding: "5px 10px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 12, fontFamily: T.disp,
+            fontWeight: filtre === f ? 700 : 500, background: filtre === f ? T.panel : "transparent", color: filtre === f ? T.acc : T.mut,
+          }}>{FILTRE_ADI[f]} <span style={css.mono}>{sayac.get(f) ?? 0}</span></button>
+        ))}
+      </FiltreSeridi>
+      {filtre === "acilis" && (
+        <Hint>Bu satırlar hesabın açılış gününde ya da öncesinde: açılış bakiyesinin içinde zaten sayıldılar. Seçersen bakiye o kadar şişer.</Hint>
+      )}
+      {filtre === "farkli" && (
+        <Hint>Defterde adı ve günü tutan bir kayıt var ama tutarı farklı. Hangisinin doğru olduğuna bakıp gerekirse defterdekini düzelt; bunu seçmek ikinci bir kayıt ekler.</Hint>
+      )}
       <div style={{ maxHeight: "42vh", overflowY: "auto", border: `1px solid ${T.line}`, borderRadius: 10 }}>
-        {drafts.map((d, i) => (
+        {sayfa.gorunen.map(({ d, i }, sira) => (
           <div key={i} style={{
             /* sarılır: 390px'te beş kontrol tek satıra sığmıyor, kategori seçici ekrandan taşıyordu */
             display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", flexWrap: "wrap",
-            borderTop: i === 0 ? "none" : `1px solid ${T.line}`, opacity: d.include ? 1 : 0.45,
-            background: d.dup ? "color-mix(in srgb, var(--neg) 7%, transparent)" : "transparent",
+            borderTop: sira === 0 ? "none" : `1px solid ${T.line}`, opacity: d.include ? 1 : 0.55,
+            background: d.durum === "farkli" ? "color-mix(in srgb, var(--neg) 7%, transparent)" : "transparent",
           }}>
             <input type="checkbox" checked={d.include} disabled={kartaGiren(d)} onChange={(e) => upd(i, { include: e.target.checked })} />
-            <span style={{ ...css.mono, fontSize: 11.5, color: T.mut3, flexShrink: 0 }}>{d.date.slice(5)}</span>
+            <span style={{ ...css.mono, fontSize: 11.5, color: T.mut3, flexShrink: 0 }}>{kisaTarih(d.date)}</span>
             <input style={{ ...css.input, padding: "5px 8px", fontSize: 12.5, flex: "1 1 120px", minWidth: 0 }}
               value={d.name} onChange={(e) => upd(i, { name: e.target.value })} />
             <input style={{ ...css.input, padding: "5px 8px", fontSize: 12.5, width: 92, flexShrink: 0, color: d.amount < 0 ? T.neg : T.pos }}
@@ -236,20 +295,56 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
                 <option key={c.id} value={c.id}>{c.name}</option>
               ))}
             </select>
+            {d.kayit && (
+              <div style={{ flexBasis: "100%", fontSize: 11.5, color: d.durum === "farkli" ? T.neg : T.mut3, paddingLeft: 24 }}>
+                defterde: {kisaTarih(d.kayit.date)} · {d.kayit.name} · <span style={css.mono}>{fmtMoney(d.kayit.amount, "TRY", true)}</span>
+                {d.kayit.taksit && d.kayit.taksit > 1 ? ` (${d.kayit.taksit} taksit)` : ""}
+              </div>
+            )}
           </div>
         ))}
         {drafts.length === 0 && <div style={{ padding: 16, textAlign: "center", color: T.mut, fontSize: 13 }}>Hiçbir satır çözülemedi</div>}
+        {drafts.length > 0 && gorunen.length === 0 && <div style={{ padding: 16, textAlign: "center", color: T.mut, fontSize: 13 }}>Bu grupta satır yok</div>}
       </div>
+      <DahaFazla s={sayfa} ad="satır" yon="fazla" />
+
+      {mutabakat && (
+        <div style={{ fontSize: 12.5, marginTop: 10, background: T.panel2, borderRadius: 8, padding: "8px 12px",
+          color: Math.abs(mutabakat.banka - mutabakat.defter) < 0.005 ? T.pos : T.text }}>
+          {Math.abs(mutabakat.banka - mutabakat.defter) < 0.005
+            ? <>✓ Aktarımdan sonra {kisaTarih(mutabakat.tarih)} itibarıyla defter bankayla aynı: <span style={css.mono}>{fmtMoney(mutabakat.banka, "TRY", true)}</span>.</>
+            : <>Aktarımdan sonra {kisaTarih(mutabakat.tarih)} itibarıyla defter <span style={css.mono}>{fmtMoney(mutabakat.defter, "TRY", true)}</span>,
+              banka <span style={css.mono}>{fmtMoney(mutabakat.banka, "TRY", true)}</span> diyor — fark <span style={css.mono}>{fmtMoney(mutabakat.banka - mutabakat.defter, "TRY", true)}</span>.
+              Seçimi gözden geçir; kalan farkı Hesaplar'dan mutabakatla sabitleyebilirsin.</>}
+        </div>
+      )}
+      {fazla.length > 0 && (
+        <details style={{ marginTop: 10, fontSize: 12.5 }}>
+          <summary style={{ cursor: "pointer", color: T.mut }}>
+            Defterde olup dökümde olmayan {fazla.length} kayıt — yanlış ya da çift giriş olabilir (silinmez)
+          </summary>
+          <div style={{ marginTop: 6, border: `1px solid ${T.line}`, borderRadius: 10, maxHeight: "30vh", overflowY: "auto" }}>
+            {fazla.slice(0, 100).map((k, i) => (
+              <div key={k.kimlik} style={{ display: "flex", gap: 8, padding: "6px 10px", borderTop: i === 0 ? "none" : `1px solid ${T.line}` }}>
+                <span style={{ ...css.mono, fontSize: 11.5, color: T.mut3, flexShrink: 0 }}>{kisaTarih(k.date)}</span>
+                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{k.name}</span>
+                <span style={{ ...css.mono, color: k.amount < 0 ? T.neg : T.pos }}>{fmtMoney(k.amount, "TRY", true)}</span>
+              </div>
+            ))}
+            {fazla.length > 100 && <div style={{ padding: "6px 10px", color: T.mut3 }}>… ve {fazla.length - 100} kayıt daha</div>}
+          </div>
+        </details>
+      )}
 
       {skipped.length > 0 && (
         <Hint>{skipped.length} satır atlandı (tarih veya tutar bulunamadı): <span style={css.mono}>{skipped.slice(0, 2).join(" / ").slice(0, 90)}…</span></Hint>
       )}
-      {drafts.some(kartaGiren) && (
-        <Hint>Karta para giren {drafts.filter(kartaGiren).length} satır (ekstre ödemesi ya da iade) aktarılmaz: ekstre ödemesi Kart sekmesinde "Ödedim" ile kaydedilir.</Hint>
+      {drafts.some(kartaGiren) && filtre === "odeme" && (
+        <Hint>Karta para giren satırlar (ekstre ödemesi ya da iade) aktarılmaz: ekstre ödemesi Kart sekmesinde "Ödedim" ile kaydedilir.</Hint>
       )}
       <div style={{ fontSize: 12, color: T.mut, marginTop: 10, background: T.panel2, borderRadius: 8, padding: "8px 12px" }}>
         {kart
-          ? <>Seçili satırlar <b>{kart.name}</b> kartına harcama olarak yazılır ve tarihlerine göre ilgili ekstreye düşer. Taksitli satırlar tek seferlik harcama olarak aktarılır.</>
+          ? <>Seçili satırlar <b>{kart.name}</b> kartına harcama olarak yazılır ve tarihlerine göre ilgili ekstreye düşer. Taksitli satırlar tek seferlik harcama olarak aktarılır. Defterde karşılığı olan satırlar ("Defterde") seçili gelmez.</>
           : accountId
           ? <>Seçili satırlar gerçekleşen kayıt olarak yazılır ve <b>{data.accounts.find((a) => a.id === +accountId)?.name}</b> bakiyesine toplam <span style={{ ...css.mono, color: sum < 0 ? T.neg : T.pos }}>{fmtMoney(sum, "TRY", true)}</span> işler.</>
           : "Hesap seçilmedi — kayıtlar yalnız gelir/gider defterine girer, bakiyeye dokunmaz."}

@@ -12,6 +12,7 @@ export * from "./funds.js";
 export * from "./accounts.js";
 export * from "./otomatik.js";
 export * from "./statement.js";
+export * from "./dokum.js";
 export * from "./setup.js";
 export * from "./kayitlar.js";
 export * from "./harcama.js";

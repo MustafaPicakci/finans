@@ -200,11 +200,11 @@ describe("parseStatement — belgeyle doğrulama", () => {
       "02.03.2026\tB\t+500,00\t1.000,00",
       "01.03.2026\tC\t-50,00\t500,00",
     ].join("\n");
-    expect(parseStatement(txt).dogrulama).toEqual({ tur: "bakiye", tamam: true, kopukluklar: [] });
+    expect(parseStatement(txt).dogrulama).toEqual({ tur: "bakiye", tamam: true, kopukluklar: [], son: { tarih: "2026-03-03", bakiye: 900 } });
   });
   it("bakiye zinciri: eskiden yeniye sıralı döküm de tanınır", () => {
     const txt = "01.03.2026\tC\t-50,00\t500,00\n02.03.2026\tB\t+500,00\t1.000,00\n03.03.2026\tA\t-100,00\t900,00";
-    expect(parseStatement(txt).dogrulama).toMatchObject({ tur: "bakiye", tamam: true });
+    expect(parseStatement(txt).dogrulama).toMatchObject({ tur: "bakiye", tamam: true, son: { tarih: "2026-03-03", bakiye: 900 } });
   });
   it("bakiye zinciri: kayıp satırın yerini ve tutarını söyler", () => {
     const txt = [
@@ -213,7 +213,7 @@ describe("parseStatement — belgeyle doğrulama", () => {
       "01.03.2026\tC\t-50,00\t500,00",
     ].join("\n");
     expect(parseStatement(txt).dogrulama).toEqual({
-      tur: "bakiye", tamam: false, kopukluklar: [{ once: "2026-03-03", sonra: "2026-03-01", eksik: 500 }],
+      tur: "bakiye", tamam: false, kopukluklar: [{ once: "2026-03-03", sonra: "2026-03-01", eksik: 500 }], son: { tarih: "2026-03-03", bakiye: 900 },
     });
   });
   it("kart: önceki dönem + harcamalar − ödemeler = dönem borcu", () => {
