@@ -264,6 +264,12 @@ const OZEL: Isleyici[] = [
       const { name, amount, ...kalan } = r;
       return { ...kalan, enc: zarfKur("transactions", { name, amount }), entry_enc: hareket(sayi(amount), String(name ?? "")) };
     }),
+    /* Faz 45.7 — açılışı geri çek: açılış hareketinin YENİ tutarı (0 olabilir; `hareket()` sıfırda
+       zarf üretmediği için doğrudan kurulur). Not, hesap açılırken yazılanla aynı. */
+    ...(b.acilis ? { acilis: {
+      account_id: (b.acilis as Satir).account_id, date: (b.acilis as Satir).date,
+      entry_enc: zarfKur("account_entries", { amount: sayi((b.acilis as Satir).amount), note: "Açılış bakiyesi" }),
+    } } : {}),
   }) },
   /* Faz 45 — kart ekstresi: bakiye yan etkisi yok, yalnız satır zarfı */
   { method: "POST", yol: /^\/cardtxs\/bulk$/, fn: (_, b) => ({

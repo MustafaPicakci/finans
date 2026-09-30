@@ -23,8 +23,10 @@ import type { ParsedRow } from "./statement.js";
 import type { AllData } from "./types.js";
 
 /** Karşılaştırılacak defter kaydı; `amount` hesap dilinde (gider −). `taksit` > 1 ise `amount`
-    TOPLAM tutardır ve ekstrede aylık taksit olarak görünür. */
-export type DefterKaydi = { kimlik: string; date: string; amount: number; name: string; taksit?: number };
+    TOPLAM tutardır ve ekstrede aylık taksit olarak görünür. `kaynak`: kaydı yazan tablo ve satır —
+    "farklı" bir kaydı düzeltmek için gerekir (yalnız gelir/gider ve kart harcaması doğrudan düzeltilir;
+    virman, portföy, mevduat kendi ekranından). */
+export type DefterKaydi = { kimlik: string; date: string; amount: number; name: string; taksit?: number; kaynak?: { tablo: string; id: number } };
 
 /** eksik: dökümde var, defterde yok · eslesti: zaten defterde · farkli: adı ve günü tutan bir
     kayıt var ama tutarı farklı · acilis: açılış gününde/öncesinde, açılış bakiyesinin içinde
@@ -114,7 +116,10 @@ export function hesapDefteri(data: AllData, accountId: number): { defter: Defter
   return {
     defter: mine
       .filter((e) => e.kind !== "acilis" && e.kind !== "duzeltme")
-      .map((e) => ({ kimlik: `e${e.id}`, date: e.date, amount: e.amount, name: e.note })),
+      .map((e) => ({
+        kimlik: `e${e.id}`, date: e.date, amount: e.amount, name: e.note,
+        ...(e.source_table && e.source_id != null ? { kaynak: { tablo: e.source_table, id: e.source_id } } : {}),
+      })),
     acilis: acilislar[0] ?? null,
   };
 }
@@ -123,5 +128,5 @@ export function hesapDefteri(data: AllData, accountId: number): { defter: Defter
 export function kartDefteri(data: AllData, cardId: number): DefterKaydi[] {
   return data.card_txs
     .filter((t) => t.card_id === cardId)
-    .map((t) => ({ kimlik: `c${t.id}`, date: t.date, amount: -t.amount, name: t.name, taksit: t.installments }));
+    .map((t) => ({ kimlik: `c${t.id}`, date: t.date, amount: -t.amount, name: t.name, taksit: t.installments, kaynak: { tablo: "card_txs", id: t.id } }));
 }

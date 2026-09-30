@@ -59,7 +59,9 @@ export const api = {
   /* ---- portföy grupları (Faz 11): işlemi gruba taşı (tutar/bakiye etkisi yok) ---- */
   setTradePortfolio: (tradeId: number, portfolio_id: number | null) => yazJ("PUT", `/trades/${tradeId}/portfolio`, { portfolio_id }),
   /* ---- toplu içe aktarma (ekstre yapıştırma) ---- */
-  bulkTransactions: (rows: { date: string; name: string; amount: number; category_id: number | null; account_id: number | null }[]) => yazJ<{ inserted: number }>("POST", "/transactions/bulk", { rows }),
+  /** `acilis` (Faz 45.7): açılış hareketinin yeni tarihi ve tutarı — "geçmişi de ekle", satırlarla aynı transaction'da */
+  bulkTransactions: (rows: { date: string; name: string; amount: number; category_id: number | null; account_id: number | null }[], acilis?: { account_id: number; date: string; amount: number }) =>
+    yazJ<{ inserted: number }>("POST", "/transactions/bulk", acilis ? { rows, acilis } : { rows }),
   /** Faz 45 — kart ekstresi içe aktarma: `amount` kart harcaması işaretiyle (+ harcama, − iade) */
   bulkCardTxs: (rows: { card_id: number; date: string; name: string; amount: number; installments: number; category_id: number | null }[]) => yazJ<{ inserted: number }>("POST", "/cardtxs/bulk", { rows }),
   /* ---- düzenli kalem tutar zaman çizelgesi (Faz 9) ---- */

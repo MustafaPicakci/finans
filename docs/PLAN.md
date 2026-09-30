@@ -600,6 +600,16 @@ kodda gerekçesiyle. Doğrulama, gerçek sunucunun başlıklarıyla gerçek Chro
 metinli üç belge aynı sonuç (17 sayfa 103 ms). Bilinçli sınır: çerçeve kendini yönlendirerek o an
 okuduğu belgeyi taşıyabilir — sonraki dosya gönderilmez.
 
+Dilim 7 — karşılaştırmanın ikinci sürümü (Faz 45.7, 2026-09-30). "Farklı" satır tek dokunuşla
+defterdekine yazılır (var olan düzenleme uçları; yeni kayıt yok). "Geçmişi de ekle": açılıştan önceki
+satırlar eklenirken açılış hareketi en eski satırın gününe alınıp o toplam kadar azaltılır; yeni uç
+açmak yerine toplu içe aktarma isteğine isteğe bağlı alan eklendi ki ikisi aynı transaction'da yazılsın.
+Doğrulama: gerçek dökümde açılış ortada varsayıldı → yeni açılış bankanın başlangıç bakiyesine
+(1.638,85) eşit, bugünkü bakiye önce/sonra 24.221,94 (bankayla aynı); SQL kum havuzunda geri alınan
+transaction içinde (başka kullanıcı reddedildi, açılışsız hesap false). Parolalı PDF (AES-256, metinli
+ve OCR'lı) kapalı okuyucudan geçti: parola istendi, yanlış parola uyarısı, doğru parolayla "belgeyle
+tutuyor". Hâlâ açık: eksik "Para Transferi"nin virman olabilmesi, aracı kurum ekstresi (trades).
+
 ## Faz 46 — Asistanla kurulum ✅ (yerelde doğrulandı, 2026-09-30)
 
 Pazara çıkış değerlendirmesinin ilk önerisindeki ikinci yol: sihirbaz (Faz 43) formlarla kurar,

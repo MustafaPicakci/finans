@@ -8,7 +8,7 @@ import cron from "node-cron";
 import { REC_AMOUNT_BEGIN } from "@finans/engine";
 import { db, initDb, nowLocal, todayLocal, zarfGecerli, TENANT_TABLES, GLOBAL_SETTING_KEYS, type TxClient } from "./db.js";
 import { loadAllData } from "./data.js";
-import { topluIslemYaz, topluKartYaz } from "./toplu.js";
+import { topluIslemYaz, topluKartYaz, acilisGuncelle } from "./toplu.js";
 import { refreshAll, backfillPriceHistory, refreshCorporateActions, refreshCompanyEvents } from "./prices.js";
 import { refreshBenchmarks, autoBackfill } from "./benchmarks.js";
 import { hashPassword, verifyPassword, createSession, getSessionUser, deleteSession, revokeUserSessions, createEmailToken, consumeEmailToken, peekEmailToken, purgeStaleEmailTokens, SESSION_COOKIE, type SessionUser , sahteSalt, e2eeMalzemeDogrula, PAKET } from "./auth.js";
@@ -1236,13 +1236,24 @@ api.post("/transactions/bulk", async (c) => {
       return c.json({ error: "her satırda tarih ve işlem zarfı zorunlu" }, 400);
     }
   }
-  if (!(await hepsiSahibin(uid, "accounts", farkliIdler(rows, "account_id"))) || !(await hepsiSahibin(uid, "categories", farkliIdler(rows, "category_id")))) {
+  /* İsteğe bağlı açılış düzeltmesi (Faz 45.7, toplu.ts `acilisGuncelle`): satırlarla AYNI transaction'da. */
+  const acilis = b.acilis ?? null;
+  if (acilis != null && (!Number.isInteger(acilis.account_id) || !/^\d{4}-\d{2}-\d{2}$/.test(String(acilis.date)) || !zarfGecerli(acilis.entry_enc))) {
+    return c.json({ error: "geçersiz açılış düzeltmesi" }, 400);
+  }
+  const hesaplar = [...farkliIdler(rows, "account_id"), ...(acilis ? [acilis.account_id] : [])];
+  if (!(await hepsiSahibin(uid, "accounts", hesaplar)) || !(await hepsiSahibin(uid, "categories", farkliIdler(rows, "category_id")))) {
     return c.json({ error: "geçersiz hesap veya kategori" }, 400);
   }
   // sabit 3 sorgu, satır sayısından bağımsız (toplu.ts)
-  await db.tx((t) => topluIslemYaz(t, uid, rows.map((r: any) => ({
-    date: r.date, enc: r.enc, entry_enc: zarfAl(r.entry_enc) || null, category_id: r.category_id ?? null, account_id: r.account_id ?? null,
-  }))));
+  const acilisYok = await db.tx(async (t) => {
+    await topluIslemYaz(t, uid, rows.map((r: any) => ({
+      date: r.date, enc: r.enc, entry_enc: zarfAl(r.entry_enc) || null, category_id: r.category_id ?? null, account_id: r.account_id ?? null,
+    })));
+    if (acilis && !(await acilisGuncelle(t, uid, acilis.account_id, acilis.date, acilis.entry_enc))) throw new Error("ACILIS_YOK");
+    return false;
+  }).catch((e) => { if (e?.message === "ACILIS_YOK") return true; throw e; });
+  if (acilisYok) return c.json({ error: "hesabın açılış hareketi bulunamadı" }, 400);
   console.log(`[audit] Toplu içe aktarma: ${rows.length} kayıt (id:${uid})`);
   return c.json({ inserted: rows.length });
 });

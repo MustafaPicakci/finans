@@ -51,6 +51,7 @@ const ROTALAR: { ad: string; tablolar: string[]; method: string; path: string; b
   { ad: "işlem", tablolar: ["transactions", "account_entries"], method: "POST", path: "/transactions", body: { date: "2026-01-01", name: G("market"), amount: -987654.37, account_id: 1 } },
   { ad: "işlem, kısmi", tablolar: ["transactions", "account_entries"], method: "PUT", path: "/transactions/8", body: { amount: -987654.38 } },
   { ad: "toplu içe aktarma", tablolar: ["transactions", "account_entries"], method: "POST", path: "/transactions/bulk", body: { rows: [{ date: "2026-01-01", name: G("b1"), amount: -987654.39, account_id: 1 }] } },
+  { ad: "toplu içe aktarma + açılışı geri çek", tablolar: ["transactions", "account_entries"], method: "POST", path: "/transactions/bulk", body: { rows: [{ date: "2025-01-01", name: G("b2"), amount: -987654.45, account_id: 1 }], acilis: { account_id: 1, date: "2025-01-01", amount: 987654.46 } } },
   { ad: "kart", tablolar: ["cards"], method: "POST", path: "/cards", body: { name: G("kart"), limit_amount: 987654.4, statement_day: 25, due_day: 10 } },
   { ad: "kart ekstresi içe aktarma", tablolar: ["card_txs"], method: "POST", path: "/cardtxs/bulk", body: { rows: [{ card_id: 3, date: "2026-01-01", name: G("kb1"), amount: 987654.44, installments: 1 }] } },
   { ad: "kart harcaması", tablolar: ["card_txs"], method: "POST", path: "/cardtxs", body: { card_id: 3, date: "2026-01-01", name: G("harcama"), amount: 987654.41, installments: 987654 } },

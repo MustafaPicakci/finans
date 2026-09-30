@@ -102,8 +102,10 @@ describe("defter kaynakları", () => {
     const { defter, acilis } = hesapDefteri(data, 1);
     expect(defter.map((d) => [d.kimlik, d.amount, d.name])).toEqual([["e2", -427, "Turkcell"], ["e4", -5000, "Midas"]]);
     expect(acilis).toBe("2026-09-01");
+    // düzeltme için kaydın kaynağı taşınır; kaynaksız (açılış/düzeltme) hareket zaten defterde yok
+    expect(defter.map((d) => d.kaynak)).toEqual([{ tablo: "transactions", id: 9 }, { tablo: "transfers", id: 2 }]);
   });
   it("kart defteri: harcama hesap dilinde eksidir, taksit sayısı taşınır", () => {
-    expect(kartDefteri(data, 3)).toEqual([{ kimlik: "c7", date: "2026-09-02", amount: -229.99, name: "Netflix", taksit: 1 }]);
+    expect(kartDefteri(data, 3)).toEqual([{ kimlik: "c7", date: "2026-09-02", amount: -229.99, name: "Netflix", taksit: 1, kaynak: { tablo: "card_txs", id: 7 } }]);
   });
 });

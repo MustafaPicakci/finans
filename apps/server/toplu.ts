@@ -59,3 +59,18 @@ export async function topluKartYaz(t: TxClient, uid: number, rows: TopluKart[]):
     uid, rows.map((r) => r.card_id), rows.map((r) => r.date), rows.map((r) => r.enc), rows.map((r) => r.category_id),
   );
 }
+
+/** Faz 45.7 — "geçmişi de ekle, açılışı geri çek": dökümün açılıştan ÖNCEKİ satırları eklenirken
+    hesabın açılış hareketi aynı transaction'da eskiye alınır ve tutarı eklenen satırların toplamı
+    kadar azaltılır (tutarı istemci hesaplar — zarflı). Bugünkü bakiye DEĞİŞMEZ, açılış gününden
+    sonraki her günün bakiyesi değişmez; geçmiş deftere girer. Ayrı bir istek olsaydı biri yazılıp
+    diğeri kalınca bakiye şişik kalırdı. En eski açılış hareketi güncellenir; yoksa false. */
+export async function acilisGuncelle(t: TxClient, uid: number, accountId: number, date: string, enc: string): Promise<boolean> {
+  const r = await t.run(
+    `UPDATE account_entries SET date=?, enc=? WHERE id = (
+       SELECT id FROM account_entries WHERE account_id=? AND user_id=? AND kind='acilis' ORDER BY date, id LIMIT 1
+     ) AND user_id=?`,
+    date, enc, accountId, uid, uid,
+  );
+  return r.changes > 0;
+}
