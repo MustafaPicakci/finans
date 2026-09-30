@@ -28,7 +28,16 @@ export type Dogrulama =
   | { tur: "donem"; tamam: boolean; belge: number; okunan: number }
   | { tur: "yok" };
 
-export type ParseResult = { rows: ParsedRow[]; skipped: string[]; dogrulama: Dogrulama };
+/** `bozukHarf`: belgenin yazı tipi harf eşlemesi taşımıyor ve Türkçe harfler başka işaretlere
+    dönüşmüş ("%deme - Tesekk!r", "D#nem"). Rakamlar etkilenmez (ASCII), adlar etkilenir. Geri
+    çevrilmez — eşleme yazı tipine özeldir, yani bankaya bağımlılığın ta kendisi olurdu; arayüz
+    "adları kontrol et" der. */
+export type ParseResult = { rows: ParsedRow[]; skipped: string[]; dogrulama: Dogrulama; bozukHarf: boolean };
+
+/** Harf arasına sıkışmış işaret, kelime başında yüzde/diyez ya da denetim karakteri: çözülememiş
+    yazı tipi izi. Tek bir "AT&T" yanlış alarm vermesin diye belgede en az 3 iz aranır. */
+const BOZUK_IZ = /[\u0000-\u0008\u000B-\u001F]|[A-Za-zÇĞİÖŞÜçğıöşü][#!$%&][A-Za-zÇĞİÖŞÜçğıöşü]|(?:^|\s)[#$%][A-Za-zçğıöşü]/g;
+const bozukHarfMi = (metin: string) => (metin.match(BOZUK_IZ)?.length ?? 0) >= 3;
 
 /** Sütun ayırıcı adayları — sekme (Excel/tablo kopyası), noktalı virgül (TR CSV), virgül (CSV), 2+ boşluk */
 const SEPARATORS: { re: RegExp; name: string }[] = [
@@ -214,7 +223,7 @@ export function parseStatement(text: string, tur: "gider" | "gelir" | "kart" = "
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "");
   const rows: ParsedRow[] = [];
   const skipped: string[] = [];
-  if (lines.length === 0) return { rows, skipped, dogrulama: { tur: "yok" } };
+  if (lines.length === 0) return { rows, skipped, dogrulama: { tur: "yok" }, bozukHarf: false };
   const kart = tur === "kart";
   const sep = pickSeparator(lines);
   const hucreler = lines.map((l) => split(l, sep).filter((c) => c !== ""));
@@ -238,7 +247,10 @@ export function parseStatement(text: string, tur: "gider" | "gelir" | "kart" = "
       if (!c.some(tarihMi) || c.some(tutarMi)) continue;
       const j = parca(i - 1) ? i - 1 : parca(i + 1) ? i + 1 : -1;
       if (j < 0) continue;
-      hucreler[i] = [...c, ...hucreler[j]];
+      /* Okuma sırası: tarih, parçanın metni (açıklamanın üst satırıdır), tarih satırının kalan
+         metni, en sonda sayılar — ad, bölünmemiş satırlardakiyle aynı sırada kurulsun. */
+      const f = hucreler[j];
+      hucreler[i] = [...c.filter(tarihMi), ...f.filter((x) => !tutarMi(x)), ...c.filter((x) => !tarihMi(x)), ...f.filter(tutarMi)];
       tuketildi.add(j);
     }
   }
@@ -269,10 +281,14 @@ export function parseStatement(text: string, tur: "gider" | "gelir" | "kart" = "
     const byBalance = balance != null && prevBalance != null && Math.abs(balance - prevBalance) > 1e-9
       ? balance > prevBalance : null;
     if (balance != null) prevBalance = balance;
-    const name = cells
-      .filter((_, i) => i !== dateIdx && i !== amtIdx)
-      .filter((c) => parseAmount(c) === null && !tarihMi(c))
-      .sort((a, b) => b.length - a.length)[0] ?? "İşlem";
+    /* Ad: tarih ile tutar ARASINDAKİ metin hücreleri sırasıyla birleşir — PDF aynı açıklamayı geniş
+       bir boşlukla iki hücreye bölebiliyor ("IYZICO" + "*AMAZON.COM.T"; yalnız en uzununu almak
+       adın yarısını düşürüyordu). Arada metin yoksa (sütun sırası farklı) en uzun metin hücresi. */
+    const metinMi = (c: string, i: number) => i !== dateIdx && i !== amtIdx && parseAmount(c) === null && !tarihMi(c);
+    const [bas, son] = dateIdx < amtIdx ? [dateIdx, amtIdx] : [amtIdx, dateIdx];
+    const arada = cells.filter((c, i) => i > bas && i < son && metinMi(c, i));
+    const name = (arada.length ? arada.join(" ")
+      : cells.filter(metinMi).sort((a, b) => b.length - a.length)[0]) ?? "İşlem";
     if (parsed === 0) { skipped.push(line); continue; }
     const row = { date, name: name.slice(0, 120), amount: Math.abs(parsed) };
     rows.push(row);
@@ -321,5 +337,5 @@ export function parseStatement(text: string, tur: "gider" | "gelir" | "kart" = "
       dogrulama = { tur: "donem", tamam: Math.abs(okunan - belge) < 0.005, belge, okunan };
     }
   }
-  return { rows, skipped, dogrulama };
+  return { rows, skipped, dogrulama, bozukHarf: bozukHarfMi(text) };
 }

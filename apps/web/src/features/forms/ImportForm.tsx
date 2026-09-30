@@ -31,6 +31,7 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
   const [drafts, setDrafts] = useState<Draft[] | null>(null);
   const [skipped, setSkipped] = useState<string[]>([]);
   const [dogrulama, setDogrulama] = useState<Dogrulama>({ tur: "yok" });
+  const [bozukHarf, setBozukHarf] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   /* PDF: dosya parolalıysa elde tutulur, parola sorulur. Parola yalnız bu cihazda PDF'i açmak için. */
@@ -55,9 +56,10 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
     /* Kart ekstresinin işaret dili farklıdır (harcama işaretsiz, ödeme "+" ya da "−" ile
        işaretli); ayrıştırıcı `kart` kipinde bunu çözer ve önizlemenin diliyle (− = harcama)
        döndürür. Yine de ters okunursa "işaretleri çevir" tek dokunuş. */
-    const { rows, skipped, dogrulama } = parseStatement(metin, cardId != null ? "kart" : defaultSign);
+    const { rows, skipped, dogrulama, bozukHarf } = parseStatement(metin, cardId != null ? "kart" : defaultSign);
     setSkipped(skipped);
     setDogrulama(dogrulama);
+    setBozukHarf(bozukHarf);
     setDrafts(rows.map((r) => {
       const dup = isDup(r);
       const cat = guessCategory(r.name);
@@ -210,6 +212,9 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
       </div>
 
       <DogrulamaSatiri d={dogrulama} />
+      {bozukHarf && (
+        <Hint>Bu belgenin yazı tipi Türkçe harfleri bozuk veriyor ("%deme" gibi). Tutarlar etkilenmez, ama adları aktarmadan önce kontrol et.</Hint>
+      )}
       <div style={{ maxHeight: "42vh", overflowY: "auto", border: `1px solid ${T.line}`, borderRadius: 10 }}>
         {drafts.map((d, i) => (
           <div key={i} style={{

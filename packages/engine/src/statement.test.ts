@@ -185,7 +185,7 @@ describe("parseStatement — hesap dökümünde iki satıra bölünen kayıt", (
       ["2026-02-10", -381000], ["2026-02-10", 380415.78], ["2026-02-05", -200],
       ["2026-02-04", 220], ["2026-02-03", 1000],
     ]);
-    expect(rows[3].name).toBe("FAST123-UZUN BIR ACIKLAMA");
+    expect(rows[3].name).toBe("FAST123-UZUN BIR ACIKLAMA Para Transferi"); // bölünmemiş satırla aynı sıra: açıklama, etiket
   });
   it("bakiye sütunu yoksa birleştirme yapılmaz (üstbilgi satırı kayda dönüşmesin)", () => {
     const { rows } = parseStatement("Nakit Avans Limiti\t25.000,00 TL\nHesap Kesim Tarihi\t27 Eylül 2026\n28.09.2026\tMARKET\t-50,00", "gider");
@@ -232,5 +232,22 @@ describe("parseStatement — belgeyle doğrulama", () => {
     expect(parseStatement("12.03.2026\tMigros\t-450").dogrulama).toEqual({ tur: "yok" });
     // önceki dönem satırı okunamadıysa (ör. bozuk yazı tipi) sıfır varsayılmaz
     expect(parseStatement("Dönem Borcu\t5,000.00\n21/07/2026\tA\t5,000.00", "kart").dogrulama).toEqual({ tur: "yok" });
+  });
+});
+
+describe("parseStatement — ad ve yazı tipi (Faz 45.3)", () => {
+  it("tarih ile tutar arasındaki metin hücreleri birleşir", () => {
+    expect(parseStatement("23 Eylül 2026\tIYZICO\t*AMAZON.COM.T\t0,18\t359,90", "kart").rows[0].name).toBe("IYZICO *AMAZON.COM.T");
+    // tarihten önceki gizli/boş hücre ada karışmaz
+    expect(parseStatement("bosluk\t03 Eylül 2026\tÖDEME\t7.630,53+", "kart").rows[0].name).toBe("ÖDEME");
+  });
+  it("arada metin yoksa en uzun metin hücresi ad olur", () => {
+    expect(parseStatement("-450,25\tMIGROS ATASEHIR\t12.03.2026\tX").rows[0].name).toBe("MIGROS ATASEHIR");
+  });
+  it("Türkçe harfleri çözülememiş belgeyi işaretler, temiz belgeyi işaretlemez", () => {
+    const bozuk = "D#nem Borcu\t5,000.00\nM!\"teri Numarası\t123\n11/08/2026\t%deme - Tesekk!r Ederiz -\t-5,000.00";
+    expect(parseStatement(bozuk, "kart").bozukHarf).toBe(true);
+    const temiz = "Dönem Borcu\t5.000,00\n11.08.2026\tÖdeme - Teşekkür Ederiz\t-5.000,00\n12.08.2026\tAT&T ROAMING\t10,00\nAylık faiz %3,25";
+    expect(parseStatement(temiz, "kart").bozukHarf).toBe(false);
   });
 });
