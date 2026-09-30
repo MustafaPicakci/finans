@@ -52,14 +52,13 @@ export async function sohbetEt(data: AllData, mesaj: string, convId: number | nu
   });
   const bugun = todayStr();
   const ctx = buildContext(data, bugun);
-  const names = nameLookup(ctx);
   const provider = roleSaglayici(ctx);
   const gecmis: ChatTurn[] = [...onceki.slice(-(MAX_HISTORY - 1)), { role: "user", content: mesaj }];
   const { reply, pending } = await agentLoop({
     provider,
     system: "", // sunucu kurar — istemci sistem promptunu belirleyemez
     runRead: async (ad, args) => READ_TOOLS.find((t) => t.name === ad)!.run(data, args, bugun),
-    summarize: async (tool, args) => enrichSummary(data, tool.name, args, safeSummary(tool, args, names)),
+    summarize: async (tool, args, plan) => enrichSummary(data, tool.name, args, safeSummary(tool, args, nameLookup(ctx, plan))),
   }, gecmis);
   await api.aiMesaj({ conversationId, role: "assistant", content: reply });
   const planId = pending.length ? (await api.aiPlanKaydet(conversationId, pending)).planId : null;
@@ -68,16 +67,16 @@ export async function sohbetEt(data: AllData, mesaj: string, convId: number | nu
 
 /** Onaylanan planı uygular. `skip`: onay kartından ✕ ile çıkarılan satırların sıra numaraları. */
 export async function planUygula(planId: string, skip: number[]) {
-  const { conversationId, actions: tumu } = await api.aiPlanTuket(planId); // 409: zaten uygulandı / süresi doldu
-  const actions = tumu.filter((_, i) => !skip.includes(i));
-  if (!actions.length) throw new ApiError(400, "uygulanacak işlem kalmadı");
-  const results = await executeActions(actions, istek);
+  const { conversationId, actions } = await api.aiPlanTuket(planId); // 409: zaten uygulandı / süresi doldu
+  if (actions.every((_, i) => skip.includes(i))) throw new ApiError(400, "uygulanacak işlem kalmadı");
+  // TAM plan + atlananlar: süzmek kalanları yeniden numaralar ve plan içi başvuruları (-N) kaydırırdı
+  const results = await executeActions(actions, istek, new Set(skip));
   /* Günlük yazımı patlarsa işlemler YİNE uygulanmıştır — kullanıcıya yalan söylememek için
      hata yutulur ve loglanır; o plan yalnız geri alınamaz olur. */
   const geriAlinabilir = results.map((r, i) => ({ r, i })).filter(({ r }) => r.ok && r.undo);
   if (geriAlinabilir.length) {
-    await api.aiGunlukYaz(planId, geriAlinabilir.map(({ r, i }) => ({
-      tool: actions[i].tool, summary: r.summary, undo_method: r.undo!.method, undo_path: r.undo!.path,
+    await api.aiGunlukYaz(planId, geriAlinabilir.map(({ r }) => ({
+      tool: r.tool ?? "", summary: r.summary, undo_method: r.undo!.method, undo_path: r.undo!.path,
     }))).catch((e) => console.error("[asistan] uygulama günlüğü yazılamadı:", e));
   }
   if (conversationId) {

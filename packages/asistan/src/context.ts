@@ -55,10 +55,17 @@ export function buildContext(data: AllData, bugun: string): UserContext {
   };
 }
 
-/** Onay kartlarındaki id→ad çözümü de aynı bağlamdan beslenir. */
-export function nameLookup(ctx: UserContext) {
-  const find = <T extends { id: number; ad: string }>(list: T[], label: string) => (id: unknown) =>
-    list.find((x) => x.id === Number(id))?.ad ?? `${label} #${id}`;
+/** Onay kartlarındaki id→ad çözümü de aynı bağlamdan beslenir. `plan`: o ana kadar planlanan
+    işlemler — eksi kimlik (plan içi başvuru, bkz. tools.ts) henüz açılmamış kaydın adını oradan alır. */
+export function nameLookup(ctx: UserContext, plan: readonly { args: Record<string, unknown> }[] = []) {
+  const find = <T extends { id: number; ad: string }>(list: T[], label: string) => (id: unknown) => {
+    const n = Number(id);
+    if (Number.isInteger(n) && n < 0) {
+      const ad = plan[-n - 1]?.args.name;
+      return ad ? `${String(ad)} (bu planda açılacak)` : `${label} (plandaki ${-n}. işlem)`;
+    }
+    return list.find((x) => x.id === n)?.ad ?? `${label} #${id}`;
+  };
   return {
     account: find(ctx.hesaplar, "hesap"),
     card: find(ctx.kartlar, "kart"),

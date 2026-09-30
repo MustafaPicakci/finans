@@ -143,6 +143,63 @@ describe("agentLoop — yazma araçları yalnız planlanır", () => {
   });
 });
 
+describe("agentLoop — plan içi başvuru (Faz 46)", () => {
+  it("aynı planda açılacak hesaba eksi sıra numarasıyla bağlanır; modele plan sırası söylenir", async () => {
+    const p = fakeProvider([
+      { toolCalls: [call("hesap_ekle", { name: "Garanti", balance: 40000 }, "c1")] },
+      { toolCalls: [call("duzenli_kalem_ekle", { kind: "income", name: "Maaş", day: 15, amount: 85000, account_id: -1 }, "c2")] },
+      { text: "Hazırladım." },
+    ]);
+    const res = await agentLoop(deps(p), [{ role: "user", content: "Garanti'de 40 bin var, maaşım 15'inde oraya yatıyor" }]);
+    expect(res.pending.map((x) => x.tool)).toEqual(["hesap_ekle", "duzenli_kalem_ekle"]);
+    expect((p.seen[1].messages.find((m) => m.role === "tool")!.result as any).plan_sirasi).toBe(1);
+  });
+
+  it("ileriye (henüz planlanmamış işleme) başvuru plana alınmaz", async () => {
+    const p = fakeProvider([
+      { toolCalls: [call("duzenli_kalem_ekle", { kind: "income", name: "Maaş", day: 15, amount: 1, account_id: -1 })] },
+      { text: "?" },
+    ]);
+    const res = await agentLoop(deps(p), [{ role: "user", content: "x" }]);
+    expect(res.pending).toHaveLength(0);
+    expect((p.seen[1].messages.find((m) => m.role === "tool")!.result as any).hata).toContain("plandaki 1. işlem yok");
+  });
+
+  it("yanlış türe başvuru reddedilir (hesap beklenen yerde kategori)", async () => {
+    const p = fakeProvider([
+      { toolCalls: [call("kategori_ekle", { name: "Maaş", kind: "income" }, "c1")] },
+      { toolCalls: [call("islem_ekle", { date: "2026-09-01", name: "Maaş", amount: 1, account_id: -1 }, "c2")] },
+      { text: "?" },
+    ]);
+    const res = await agentLoop(deps(p), [{ role: "user", content: "x" }]);
+    expect(res.pending.map((x) => x.tool)).toEqual(["kategori_ekle"]);
+    expect((p.seen[2].messages.filter((m) => m.role === "tool").pop()!.result as any).hata).toContain("bu alanın istediği türde kayıt açmıyor");
+  });
+
+  it("kimlik alanı dışındaki eksi değer (gider tutarı) başvuru sayılmaz", async () => {
+    const p = fakeProvider([{ toolCalls: [call("islem_ekle", { date: "2026-09-01", name: "İade", amount: -5 })] }, { text: "ok" }]);
+    const res = await agentLoop(deps(p), [{ role: "user", content: "x" }]);
+    expect(res.pending).toHaveLength(1); // amount: -5 bir tutar, başvuru değil
+  });
+
+  it("kart: kesim/son ödeme günü aralık dışıysa plana alınmaz", async () => {
+    const p = fakeProvider([{ toolCalls: [call("kart_ekle", { name: "Bonus", statement_day: 0, due_day: 10 })] }, { text: "?" }]);
+    const res = await agentLoop(deps(p), [{ role: "user", content: "x" }]);
+    expect(res.pending).toHaveLength(0);
+    expect((p.seen[1].messages.find((m) => m.role === "tool")!.result as any).hata).toContain("kesim günü");
+  });
+
+  it("özet üreticisine o ana kadarki plan verilir (başvurulan kaydın adı için)", async () => {
+    const planlar: number[] = [];
+    const p = fakeProvider([
+      { toolCalls: [call("hesap_ekle", { name: "Garanti" }, "c1"), call("islem_ekle", { date: "2026-09-01", name: "X", amount: 1, account_id: -1 }, "c2")] },
+      { text: "ok" },
+    ]);
+    await agentLoop(deps(p, { summarize: async (t, _a, plan) => { planlar.push(plan.length); return t.name; } }), [{ role: "user", content: "x" }]);
+    expect(planlar).toEqual([0, 1]);
+  });
+});
+
 describe("executeActions", () => {
   type Sent = { method: string; path: string; body: unknown };
   const recorder = (responses: { status: number; data: any }[] = []) => {
@@ -204,6 +261,38 @@ describe("executeActions", () => {
       action("islem_sil", { id: 6 }),
     ], r.invoke);
     expect(out.every((o) => o.ok && o.undo === undefined)).toBe(true);
+  });
+
+  it("plan içi başvuruyu uygulama anında gerçek kimlikle değiştirir; geri alma gerçek kimliği kullanır", async () => {
+    const r = recorder([{ status: 200, data: { id: 31 } }, { status: 200, data: { id: 88 } }]);
+    const out = await executeActions([
+      action("hesap_ekle", { name: "Garanti", balance: 40000 }),
+      action("duzenli_kalem_ekle", { kind: "income", name: "Maaş", day: 15, amount: 85000, account_id: -1 }),
+    ], r.invoke);
+    expect(r.sent[1].body).toMatchObject({ account_id: 31 });
+    expect(out.map((o) => o.undo?.path)).toEqual(["/accounts/31", "/recurring/88"]);
+  });
+
+  it("yol parametresine başvuru: aynı planda açılan kartın ekstresi", async () => {
+    const r = recorder([{ status: 200, data: { id: 12 } }, { status: 200, data: { ok: true } }]);
+    const out = await executeActions([
+      action("kart_ekle", { name: "Bonus", statement_day: 15, due_day: 25 }),
+      action("ekstre_ode", { id: -1, due: "2026-10-25" }),
+    ], r.invoke);
+    expect(r.sent[1].path).toBe("/cards/12/pay-statement");
+    expect(out[1].undo).toEqual({ method: "DELETE", path: "/cards/12/pay-statement/2026-10-25" }); // id yol parametresiydi, tarif yine kurulur
+  });
+
+  it("✕ ile çıkarılan satıra bağlı işlem uygulanmaz ama zinciri DURDURMAZ; numaralar kaymaz", async () => {
+    const r = recorder([{ status: 200, data: { id: 5 } }]);
+    const out = await executeActions([
+      action("hesap_ekle", { name: "Garanti" }),                                             // 0: çıkarıldı
+      action("duzenli_kalem_ekle", { kind: "income", name: "Maaş", day: 15, amount: 1, account_id: -1 }), // 1: ona bağlı
+      action("kategori_ekle", { name: "Kira", kind: "expense" }),                          // 2: bağımsız
+    ], r.invoke, new Set([0]));
+    expect(out.map((o) => [o.tool, o.ok])).toEqual([["duzenli_kalem_ekle", false], ["kategori_ekle", true]]);
+    expect(out[0].detail).toContain("1. satır çıkarıldı");
+    expect(r.sent.map((x) => x.path)).toEqual(["/categories"]);
   });
 
   it("istemci uydurma bir araç adı gönderirse çalıştırmaz", async () => {

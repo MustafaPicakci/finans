@@ -44,7 +44,34 @@ export type RouteTool = {
       NOT: bu yollar `SKIPPED` listesindedir — yani MODEL onları çağıramaz. Geri alma
       modelin seçtiği bir eylem değil, sistemin uyguladığı deterministik tersidir. */
   undo?: (a: ArgVals, created: { id?: number }) => { method: "DELETE"; path: string } | null;
+  /** Plan aşamasında argüman denetimi: hata metni modele geri beslenir (plana alınmaz) */
+  dogrula?: (a: ArgVals) => string | null;
 };
+
+/* ————— Plan içi başvuru —————
+   "Garanti'de 40 bin var, maaşım oraya yatıyor" tek planda iki işlemdir ve ikincisi birincinin
+   açacağı hesaba bağlanmalıdır — ama plan onaydan ÖNCE kurulur, hesabın kimliği henüz yoktur.
+   Model bu yüzden kimlik yerine EKSİ sıra numarası verir: `account_id: -1` = "bu plandaki 1.
+   işlemin açtığı kayıt". Tam sayı kaldığı için araç şemaları değişmez (sağlayıcılar tür denetimi
+   yapıyor) ve veritabanında eksi kimlik olmadığından iki anlam karışamaz. Uygulama anında gerçek
+   kimlikle değiştirilir (agent.ts `executeActions`). */
+
+/** Gövde alanı → o alanın gösterdiği kaydı AÇAN ucun yolu */
+const BASVURU_ALANLARI: Record<string, string> = {
+  account_id: "/accounts", from_account_id: "/accounts", to_account_id: "/accounts", pay_account_id: "/accounts",
+  card_id: "/cards", category_id: "/categories", portfolio_id: "/portfolios",
+};
+
+/** Bu aracın bu argümanı plan içi başvuru alabilir mi; alabiliyorsa hedef kaydı açan yol.
+    Yol parametresi `id`'nin hedefi yolun kendisinden türer: `/recurring/:id/amount` → `/recurring`. */
+export function basvuruYolu(tool: RouteTool, alan: string): string | null {
+  if (tool.pathParams?.includes(alan) && alan === "id") return tool.path.slice(0, tool.path.indexOf("/:id"));
+  return BASVURU_ALANLARI[alan] ?? null;
+}
+
+/** Eksi tam sayı = plan içi başvuru; döner: 1'den başlayan sıra numarası */
+export const planSirasi = (v: unknown): number | null =>
+  typeof v === "number" && Number.isInteger(v) && v < 0 ? -v : null;
 
 /** id ile silinen kayıtların ortak geri-alma tarifi */
 const undoById = (route: string) => (_a: ArgVals, created: { id?: number }) =>
@@ -216,7 +243,11 @@ export const ROUTE_TOOLS: RouteTool[] = [
       to_month: S.str("Bitiş ayı 'YYYY-MM' (opsiyonel)"), account_id: S.int("Hesap id (opsiyonel)"),
       card_id: S.int("Kart id (opsiyonel)"), category_id: S.int("Kategori id (opsiyonel)"), auto: S.bool("Otomatik gerçekleşsin mi"),
     }, ["kind", "name", "day", "amount"]),
-    summary: (a) => `Düzenli ${a.kind === "income" ? "gelir" : "gider"}: ${a.name} · ${money(a.amount)} · her ayın ${a.day}. günü`,
+    /* Hedef özette YAZILIR: "maaş hangi hesaba yatıyor" onayın asıl konusu — plan içi başvuruda
+       "Garanti (bu planda açılacak)" görünür, görülmeden verilen bağ olmaz. */
+    summary: (a, n) => `Düzenli ${a.kind === "income" ? "gelir" : "gider"}: ${a.name} · ${money(a.amount)} · her ayın ${a.day}. günü` +
+      (a.account_id != null ? ` · hesap: ${n.account(a.account_id)}` : a.card_id != null ? ` · kart: ${n.card(a.card_id)}` : "") +
+      (a.auto && (a.account_id != null || a.card_id != null) ? " · kendiliğinden işlenir" : ""),
     undo: undoById("recurring"),
   },
   {
@@ -267,6 +298,32 @@ export const ROUTE_TOOLS: RouteTool[] = [
   },
 
   /* ---------------- tanımlar ---------------- */
+  {
+    /* Faz 46: eskiden SKIPPED'teydi ("sohbette yanlış kesim günü tüm ekstre matematiğini bozar").
+       Risk duruyor, kapatmak yerine görünür kılındı: iki gün de zorunlu, model uydurmasın diye
+       açıklama "söylenmediyse SOR" der, ve onay kartı ikisini de açıkça yazar — kullanıcı neyi
+       onayladığını görür. Asistanla kurulumun ("Bonus kartım var, kesimi 15'i") ön koşulu. */
+    name: "kart_ekle", method: "POST", path: "/cards",
+    description:
+      "Kredi kartı tanımlar. statement_day = hesap kesim günü, due_day = son ödeme günü (ayın günü, 1-31). " +
+      "Bu iki gün kartın BÜTÜN ekstre hesabını belirler: kullanıcı söylemediyse UYDURMA, sor. " +
+      "pay_account_id verilirse ekstre son ödeme günü o hesaptan otomatik ödenir (yalnız kullanıcı talimat verdiğini söylerse).",
+    parameters: obj({
+      name: S.str("Kart adı, örn. 'Bonus'"), limit_amount: S.num("Kart limiti (TRY, opsiyonel)"),
+      statement_day: S.int("Hesap kesim günü (1-31)"), due_day: S.int("Son ödeme günü (1-31)"),
+      pay_account_id: S.int("Otomatik ödeme talimatının hesabı (opsiyonel)"),
+    }, ["name", "statement_day", "due_day"]),
+    dogrula: (a) => {
+      for (const [alan, ad] of [["statement_day", "kesim günü"], ["due_day", "son ödeme günü"]] as const) {
+        const g = Number(a[alan]);
+        if (!Number.isInteger(g) || g < 1 || g > 31) return `${ad} 1-31 arası bir gün olmalı`;
+      }
+      return null;
+    },
+    summary: (a, n) => `Yeni kart: ${a.name} · kesim ayın ${a.statement_day}. günü · son ödeme ayın ${a.due_day}. günü` +
+      `${Number(a.limit_amount) ? ` · limit ${money(a.limit_amount)}` : ""}${a.pay_account_id != null ? ` · otomatik ödeme: ${n.account(a.pay_account_id)}` : ""}`,
+    undo: undoById("cards"),
+  },
   {
     name: "hesap_ekle", method: "POST", path: "/accounts",
     description: "Yeni hesap açar (banka, nakit cüzdan, aracı kurum, fon hesabı). balance = açılış bakiyesi.",
@@ -352,7 +409,6 @@ export const SKIPPED: { route: string; reason: string }[] = [
   { route: "PUT /trades/:id/portfolio", reason: "portfoy_islemi_duzenle aynı işi yapıyor (dar uç listede hızlı taşıma için)" },
   { route: "PUT /deposits/:id", reason: "mevduat düzenleme arayüzden" },
   { route: "DELETE /deposits/:id", reason: "silme arayüzden" },
-  { route: "POST /cards", reason: "kart tanımı (kesim/vade günü, limit) arayüzden yapılır — sohbette yanlış kesim günü tüm ekstre matematiğini bozar" },
   { route: "PUT /cards/:id", reason: "kart tanımı (kesim/vade günü) arayüzden düzenlenir" },
   { route: "DELETE /cards/:id", reason: "yıkıcı: kartın harcamaları da gider" },
   { route: "PUT /cardtxs/:id", reason: "kart harcaması düzenleme arayüzden" },

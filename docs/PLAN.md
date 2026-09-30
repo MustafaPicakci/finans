@@ -550,6 +550,32 @@ Dilim 2b (bekliyor — gerçek banka e-ekstresi örnekleri gerek): taksit satır
 zaman ilk alışın tarihi, tutar bu ayın taksidi — tek seferlik aktarılırsa yanlış ekstreye düşebilir),
 banka başına ayrıştırma ince ayarı.
 
+## Faz 46 — Asistanla kurulum ✅ (yerelde doğrulandı, 2026-09-30)
+
+Pazara çıkış değerlendirmesinin ilk önerisindeki ikinci yol: sihirbaz (Faz 43) formlarla kurar,
+ama asistan zaten vardı ve "Garanti'de 40 bin var, maaş ayın 15'i 85 bin" cümlesini kayda
+çevirebiliyordu — iki yapısal engel dışında. Kullanıcı iki kararı da önerildiği gibi verdi:
+
+- **Asistan kart açabilir.** `POST /cards` "yanlış kesim günü tüm ekstre matematiğini bozar"
+  gerekçesiyle kapalıydı. Risk gerçek; kapatmak yerine görünür kılındı: iki gün zorunlu ve 1-31
+  denetimli, açıklama "söylenmediyse sor" der, onay kartı ikisini de yazar.
+- **Plan içi başvuru.** Plan onaydan önce kurulduğu için aynı planda açılacak hesabın kimliği
+  yoktu; maaş yeni hesaba bağlanamıyordu. Eksi sıra numarası (`account_id: -1`) seçildi: yeni bir
+  argüman biçimi (ör. "@1" metni) sağlayıcıların tür denetimine takılırdı, eksi tam sayı şemayı
+  değiştirmez ve gerçek kimlikle karışamaz.
+
+Bulunan ve düzeltilen: onay kartından ✕ ile çıkarılan satırlar uygulamadan önce listeden
+süzülüyordu — kalanlar yeniden numaralanacağı için başvurular yanlış işleme işaret ederdi; artık
+tam plan ve atlananlar birlikte işlenir. Geri alma tarifi yol parametresi silinmiş argümanlarla
+kuruluyordu (ekstre ödemesinin geri alınması `id` ister) — çözülmüş kopyadan kurulur. Düzenli
+kalem özeti hedefini yazmıyordu ("maaş hangi hesaba" onayın asıl konusu).
+
+Doğrulama: gerçek model anahtarı yerine yerelde OpenAI uyumlu **senaryolu bir model** (sunucu
+`AI_BASE_URL` ile ona bağlandı; röle, onay kartı, uygulama ve şifreleme gerçek kod). Tek mesajla
+4 işlem (hesap, ona bağlı maaş, kart, ona bağlı Netflix) → onay kartında bağlar adıyla → uygulandı:
+maaş yeni hesaba, Netflix yeni karta, ikisi de `auto`, hepsi `v1:` → "Geri al" dördünü de sildi.
+Gerçek modelin bu talimata ne kadar uyduğu prod'da (ya da gerçek anahtarla yerelde) görülecek.
+
 ## Doğrulama
 `pnpm build` temiz, 57 engine testi yeşil. Kota sıfırlandıktan sonra `returns-by-date` tasarımı gerçek veride **tam** doğrulandı:
 - **Tek istekte 3489 fon fiyatı** toplandı (`prices` + aynı gün `price_history`'de tam senkron) — tahmin edilenin (~150-160) çok üzerinde, TEFAS'ta pay sınıfı/alt kategori dahil gerçekten binlerce fon var.

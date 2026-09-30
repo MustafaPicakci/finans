@@ -9,7 +9,7 @@
    alan kontrolü, geri alma tarifi — asistanın iki yerde farklı davranmasını imkânsız kılar. */
 
 import { READ_TOOLS } from "./read.js";
-import { ROUTE_TOOLS, type ArgVals, type RouteTool } from "./tools.js";
+import { ROUTE_TOOLS, basvuruYolu, planSirasi, type ArgVals, type RouteTool } from "./tools.js";
 import type { UserContext, nameLookup } from "./context.js";
 import type { AiProvider, ChatMessage, ToolDef } from "./types.js";
 
@@ -63,6 +63,19 @@ export function systemPrompt(ctx: UserContext): string {
     "- Zorunlu bir bilgi eksikse (tutar, tarih, hangi kart) araç çağırmak yerine kısa bir soru sor.",
     "- Aynı olayı iki kez kaydetme. Emin değilsen önce okuma araçlarıyla (kayit_ara, pozisyonlar, kart_ekstreleri) bak.",
     "- Yanıtların kısa ve net olsun: neyi hazırladığını (onay bekleyen) bir iki cümlede özetle.",
+    "",
+    "KURULUM / BİRBİRİNE BAĞLI TANIMLAR (hesaplar, kartlar, maaş, kira, krediler birlikte anlatılırsa)",
+    "- Hepsini TEK planda hazırla, her biri için ayrı araç çağır.",
+    "- Aynı planda henüz açılmamış bir kayda bağlamak için id yerine EKSİ sıra numarası ver:",
+    "  1. planladığın işlemin açtığı hesap → account_id: -1. Her yazma aracının sonucu 'plan_sirasi'",
+    "  döndürür; başvuru o sayının eksisidir. Yalnız DAHA ÖNCE planladığın bir işleme başvurulabilir.",
+    "  Örnek: 'Garanti'de 40 bin var, maaşım 85 bin, ayın 15'inde oraya yatıyor' →",
+    "  hesap_ekle(name:'Garanti', balance:40000) [plan_sirasi 1], sonra",
+    "  duzenli_kalem_ekle(kind:'income', name:'Maaş', day:15, amount:85000, account_id:-1, auto:true).",
+    "- Hesaba ya da karta bağlanan düzenli kalemde, kullanıcı aksini söylemedikçe auto:true ver",
+    "  (günü gelince kendiliğinden işlensin; yoksa bakiye sessizce kayar).",
+    "- Kart için kesim günü ve son ödeme günü söylenmediyse kartı planlama, SOR.",
+    "- Kredi 'kalan N taksit, sıradaki X tarihinde' diye anlatılırsa first_date = X, total = N.",
     "",
     "SORU SORULURSA (rakam isteyen sorular)",
     "- TOPLAMI KENDİN HESAPLAMA. Kayıt listelerini toplayarak rakam üretmek yasak: listeler kesilir",
@@ -118,8 +131,9 @@ export type AgentDeps = {
   system: string;
   /** Okuma aracını çalıştırır (kullanıcıya scope'lu) */
   runRead: (name: string, args: ArgVals) => Promise<unknown>;
-  /** Onay satırını üretir (sunucunun hesapladığı tutarlarla zenginleştirilmiş) */
-  summarize: (tool: RouteTool, args: ArgVals) => Promise<string>;
+  /** Onay satırını üretir (sunucunun hesapladığı tutarlarla zenginleştirilmiş). `plan`: o ana
+      kadar planlananlar — eksi kimlikli başvurunun adı oradan çözülür ("Garanti (bu planda)"). */
+  summarize: (tool: RouteTool, args: ArgVals, plan: readonly PendingAction[]) => Promise<string>;
 };
 
 /** Ajan döngüsü: model konuşur, OKUMA araçları çalışır, YAZMA araçları yalnız PLANLANIR. */
@@ -147,9 +161,13 @@ export async function agentLoop(deps: AgentDeps, history: ChatTurn[]): Promise<{
         if (missing.length) result = { hata: `eksik zorunlu alan: ${missing.join(", ")}` };
         else if (pending.length >= MAX_PENDING) result = { hata: "tek seferde en fazla " + MAX_PENDING + " işlem planlanabilir" };
         else {
-          const summary = await deps.summarize(write, call.args);
-          pending.push({ tool: write.name, args: call.args, summary });
-          result = { durum: "planlandı, kullanıcının onayı bekleniyor — HENÜZ UYGULANMADI", ozet: summary };
+          const hata = write.dogrula?.(call.args) ?? basvuruHatasi(write, call.args, pending);
+          if (hata) result = { hata };
+          else {
+            const summary = await deps.summarize(write, call.args, pending);
+            pending.push({ tool: write.name, args: call.args, summary });
+            result = { durum: "planlandı, kullanıcının onayı bekleniyor — HENÜZ UYGULANMADI", ozet: summary, plan_sirasi: pending.length };
+          }
         }
       } else {
         result = { hata: "böyle bir araç yok" };
@@ -169,6 +187,21 @@ export async function agentLoop(deps: AgentDeps, history: ChatTurn[]): Promise<{
 
 const PLAN_YANITI = "Aşağıdaki işlemleri hazırladım, onaylarsan uygulayayım.";
 
+/** Plan içi başvuruların (eksi kimlik) denetimi. Hata metni modele gider ki düzeltsin:
+    ileriye başvuru (henüz planlanmamış işlem) ve yanlış tür (hesap beklenen yerde kart) reddedilir. */
+export function basvuruHatasi(tool: RouteTool, args: ArgVals, plan: readonly PendingAction[]): string | null {
+  for (const [alan, v] of Object.entries(args)) {
+    const n = planSirasi(v);
+    if (n == null) continue;
+    const yol = basvuruYolu(tool, alan);
+    if (!yol) continue; // kimlik alanı değil: gider tutarı gibi olağan bir eksi değer
+    if (n > plan.length) return `${alan}: ${v} — plandaki ${n}. işlem yok; yalnız daha önce planlanan bir işleme başvurulabilir`;
+    const hedef = ROUTE_TOOLS.find((t) => t.name === plan[n - 1].tool);
+    if (!hedef || hedef.method !== "POST" || hedef.path !== yol) return `${alan}: ${v} — plandaki ${n}. işlem (${plan[n - 1].tool}) bu alanın istediği türde kayıt açmıyor`;
+  }
+  return null;
+}
+
 /** Metin bir işlemi TAMAMLANMIŞ gibi mi anlatıyor? (edilgen ve birinci tekil geçmiş zaman)
     Kök listesi bilinçli dar: yalnız kayıt anlamındaki fiiller — "baktım", "hesapladım" gibi
     okuma fiilleri planla birlikte gelebilir ve doğrudur. */
@@ -184,20 +217,38 @@ export function safeSummary(tool: (typeof ROUTE_TOOLS)[number], args: ArgVals, n
 
 export type ExecutionResult = {
   summary: string; ok: boolean; detail: string;
+  /** aracın adı (uygulama günlüğü için) */
+  tool?: string;
   /** doluysa bu istek işlemi geri alır (uygulama günlüğüne yazılır, "Geri al" onu kullanır) */
   undo?: { method: "DELETE"; path: string };
 };
 
 /** Onaylanan işlemleri sırayla uygular. İlk hatada durur — yarım kalan kısım
-    açıkça "uygulanmadı" olarak döner, sessizce atlanmaz. */
-export async function executeActions(actions: PendingAction[], istek: Istek): Promise<ExecutionResult[]> {
+    açıkça "uygulanmadı" olarak döner, sessizce atlanmaz.
+    `atla`: onay kartından ✕ ile çıkarılan satırların sıra numaraları. Liste burada, TAM plan
+    üzerinde süzülür — önceden süzülmüş liste gelseydi kalanlar yeniden numaralanır ve plan içi
+    başvurular (-N) yanlış işleme işaret ederdi. Çıkarılan satıra bağlı işlem uygulanmaz ama
+    zinciri durdurmaz (kullanıcının bilinçli seçimi, hata değil). */
+export async function executeActions(actions: PendingAction[], istek: Istek, atla: ReadonlySet<number> = new Set()): Promise<ExecutionResult[]> {
   const out: ExecutionResult[] = [];
+  const acilan: (number | undefined)[] = []; // plan sırası → açılan kaydın gerçek kimliği
   let stopped = false;
-  for (const a of actions) {
+  for (const [i, a] of actions.entries()) {
+    if (atla.has(i)) continue;
     const tool = ROUTE_TOOLS.find((t) => t.name === a.tool);
-    if (!tool) { out.push({ summary: a.summary, ok: false, detail: "bilinmeyen araç" }); stopped = true; continue; }
-    if (stopped) { out.push({ summary: a.summary, ok: false, detail: "önceki adım başarısız olduğu için uygulanmadı" }); continue; }
+    if (!tool) { out.push({ summary: a.summary, ok: false, detail: "bilinmeyen araç", tool: a.tool }); stopped = true; continue; }
+    if (stopped) { out.push({ summary: a.summary, ok: false, detail: "önceki adım başarısız olduğu için uygulanmadı", tool: a.tool }); continue; }
     const args = { ...a.args };
+    let bagHatasi: string | null = null;
+    for (const [alan, v] of Object.entries(args)) {
+      const n = planSirasi(v);
+      if (n == null || !basvuruYolu(tool, alan)) continue;
+      if (atla.has(n - 1)) { bagHatasi = `bağlı olduğu ${n}. satır çıkarıldığı için uygulanmadı`; break; }
+      if (acilan[n - 1] == null) { bagHatasi = `bağlı olduğu ${n}. işlem kayıt açmadığı için uygulanmadı`; break; }
+      args[alan] = acilan[n - 1];
+    }
+    if (bagHatasi) { out.push({ summary: a.summary, ok: false, detail: bagHatasi, tool: a.tool }); continue; }
+    const cozulmus = { ...args }; // geri alma tarifi yol parametrelerini (id, due) de ister
     let path = tool.path;
     for (const p of tool.pathParams ?? []) {
       path = path.replace(`:${p}`, encodeURIComponent(String(args[p] ?? "")));
@@ -206,15 +257,16 @@ export async function executeActions(actions: PendingAction[], istek: Istek): Pr
     const res = await istek(tool.method, path, tool.method === "DELETE" ? undefined : args)
       .catch((e) => ({ status: 500, data: { error: String((e as Error).message) } }));
     if (res.status >= 400) {
-      out.push({ summary: a.summary, ok: false, detail: res.data?.error || `sunucu hatası (${res.status})` });
+      out.push({ summary: a.summary, ok: false, detail: res.data?.error || `sunucu hatası (${res.status})`, tool: a.tool });
       stopped = true;
     } else {
+      if (tool.method === "POST" && typeof res.data?.id === "number") acilan[i] = res.data.id;
       /* Geri alma tarifi UYGULAMA ANINDA hesaplanır: yeni kaydın id'si ancak ucun
          yanıtında vardır. Idempotent uçlarda "zaten kayıtlıydı" ise geri alma
          önerilmez — o kaydı asistan yaratmadı, silmek kullanıcının işini bozardı. */
-      const undo = res.data?.already ? null : (tool.undo?.(a.args, res.data ?? {}) ?? null);
+      const undo = res.data?.already ? null : (tool.undo?.(cozulmus, res.data ?? {}) ?? null);
       out.push({
-        summary: a.summary, ok: true,
+        summary: a.summary, ok: true, tool: a.tool,
         detail: res.data?.already ? "zaten kayıtlıydı" : "uygulandı",
         ...(undo ? { undo } : {}),
       });

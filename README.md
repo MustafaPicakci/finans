@@ -136,6 +136,16 @@ Kaynaklardan biri format değiştirirse sadece `apps/server/prices.ts` içindeki
 
 İkinci cümlede olduğu gibi bir mesajda birden fazla olay olabilir; her biri ayrı bir işleme çevrilir.
 
+**Kurulumu da anlatarak yapabilirsin (Faz 46).** Hesaplarını, kartlarını ve düzenli ödemelerini tek
+mesajda anlat; asistan hepsini tek onay kartında hazırlar ve birbirine bağlar:
+
+> "Garanti'de 40 bin var, maaşım 85 bin ve ayın 15'inde oraya yatıyor. Bonus kartım var, kesimi
+> 15'i, son ödemesi 25'i. Netflix 230 lira, ayın 3'ünde Bonus'tan çekiliyor"
+
+Onay kartında maaşın hangi hesaba yatacağı ("hesap: Garanti (bu planda açılacak)") ve kartın kesim
+ile son ödeme günü açıkça yazar. Kesim ya da son ödeme gününü söylemezsen asistan kartı hazırlamaz,
+sorar — bu iki gün kartın bütün ekstre hesabını belirler.
+
 **Sorularını da cevaplar (Faz 35).** Asistanın iki işi var: kayıt oluşturmak ve kendi verine dair
 soruları cevaplamak.
 
