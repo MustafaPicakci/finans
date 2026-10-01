@@ -25,7 +25,9 @@ export type AyrisanIslem = {
   fonIpucu: boolean;
 };
 export type OzetSatiri = { symbol: string; qty: number };
-export type IslemSonucu = { islemler: AyrisanIslem[]; ozet: OzetSatiri[]; skipped: string[] };
+/** `ozetTarih`: portföy özetinin "itibarıyla" tarihi (başlığındaki tarih, "PORTFÖY ÖZETİ (31/08/26)");
+    özet o günün adedidir — sonraki işlemler karşılaştırmaya girmemeli. Bulunamazsa null. */
+export type IslemSonucu = { islemler: AyrisanIslem[]; ozet: OzetSatiri[]; ozetTarih: string | null; skipped: string[] };
 
 type H = { s: string; x: [number, number] | null };
 type Rol = "tarih" | "sembol" | "adet" | "fiyat" | "ucret" | "para";
@@ -103,8 +105,15 @@ export function parseIslemler(girdi: string | KonumluSatir[]): IslemSonucu {
     : girdi.map((satir) => satir.map((h) => ({ s: h.s, x: [h.x0, h.x1] as [number, number] })));
   const islemler: AyrisanIslem[] = [], ozet: OzetSatiri[] = [], skipped: string[] = [];
   let etkin: Baslik | null = null;
+  let ozetTarih: string | null = null;
   for (const h of satirlar) {
     if (!h.length) continue;
+    /* Özetin tarihi kendi başlık satırındadır ("PORTFÖY ÖZETİ (31/08/26)"); tek tarih taşıyan satır
+       aranır — dönem başlığı ("… (01/08/26 - 31/08/26)") iki tarih taşır, onun SON tarihi alınır. */
+    if (/ozet/.test(metinSadelestir(h.map((c) => c.s).join(" ")))) {
+      const t = [...h.map((c) => c.s).join(" ").matchAll(/\d{1,2}[./]\d{1,2}[./]\d{2,4}/g)].map((m) => parseDate(m[0])).filter(Boolean);
+      if (t.length) ozetTarih = t[t.length - 1]!;
+    }
     const b = baslikMi(h);
     if (b) { etkin = b === "baska" ? null : b; continue; }
     if (!etkin) continue;
@@ -126,28 +135,37 @@ export function parseIslemler(girdi: string | KonumluSatir[]): IslemSonucu {
     const para = (hucreBul(etkin, h, "para") ?? metin).toUpperCase();
     islemler.push({ date, symbol, side: yon, qty, price, fee, currency: /\bUSD\b/.test(para) ? "USD" : "TRY", fonIpucu: /\bfon\b/.test(metinSadelestir(metin)) });
   }
-  return { islemler, ozet, skipped };
+  return { islemler, ozet, ozetTarih: ozet.length ? ozetTarih : null, skipped };
 }
 
-/** Uygulamada zaten var mı: aynı sembol, yön ve adet, en fazla ±1 gün (emir gece geçebilir).
-    Eşleşme birebirdir (aynı gün aynı adetle iki alım iki ayrı işlemdir). */
+/** Uygulamada zaten var mı: aynı sembol, yön ve adet, en fazla ±1 gün (emir gece geçebilir) — fiyat da
+    aynıysa (%0,5) ±5 gün: kullanıcı işlemi emir günü yerine takas/valör gününe girmiş olabilir (gerçek
+    ekstrede Cuma 31.07 alışı uygulamada Pazartesi 03.08'deydi; aynı adet, aynı fiyat — ±1 günlük kural
+    onu "eksik" sayıp ikinci kez yazdıracaktı). Eşleşme birebirdir (aynı gün aynı adetle iki alım iki
+    ayrı işlemdir); önce en yakın gün aranır. */
 export function islemKarsilastir(islemler: AyrisanIslem[], trades: Trade[]): ("eksik" | "eslesti")[] {
   const kullanildi = new Set<number>();
   const gun = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) / 864e5;
   return islemler.map((r) => {
-    const j = trades.findIndex((t, k) => !kullanildi.has(k) && t.symbol === r.symbol && t.side === r.side
-      && Math.abs(t.qty - r.qty) < 1e-9 && gun(t.date, r.date) <= 1);
+    const uyar = (t: Trade, k: number) => !kullanildi.has(k) && t.symbol === r.symbol && t.side === r.side && Math.abs(t.qty - r.qty) < 1e-9;
+    const ayniFiyat = (t: Trade) => r.price > 0 && Math.abs(t.price - r.price) / r.price < 0.005;
+    let j = trades.findIndex((t, k) => uyar(t, k) && gun(t.date, r.date) <= 1);
+    if (j < 0) j = trades.findIndex((t, k) => uyar(t, k) && ayniFiyat(t) && gun(t.date, r.date) <= 5);
     if (j < 0) return "eksik";
     kullanildi.add(j);
     return "eslesti";
   });
 }
 
-/** Portföy özeti doğrulaması: belgenin dönem sonu adedi ile uygulamadaki adet (verilen işlemlerden —
-    çağıran, o aracı kurum hesabının işlemlerini + eklenecekleri verir). Yalnız tutmayanlar döner. */
-export function ozetKarsilastir(ozet: OzetSatiri[], trades: Pick<Trade, "symbol" | "side" | "qty">[]): { symbol: string; belge: number; uygulama: number }[] {
+/** Portföy özeti doğrulaması: belgenin dönem sonu adedi ile uygulamadaki adet, özet TARİHİ itibarıyla.
+    Çağıran kullanıcının TÜM işlemlerini + eklenecekleri verir — hesaba göre SÜZÜLMEZ: işlemin hesabı
+    parasının nereden ödendiğidir, varlığın nerede saklandığı değil (gerçek veride Midas'taki 3245 MAC
+    = 464 hesapsız + 2781 Garanti'den ödenmiş; hesapla süzmek "uygulama 0" diye yanlış alarm veriyordu).
+    Yalnız tutmayanlar döner. */
+export function ozetKarsilastir(ozet: OzetSatiri[], trades: Pick<Trade, "symbol" | "side" | "qty" | "date">[], tarih: string | null = null): { symbol: string; belge: number; uygulama: number }[] {
   const adet = new Map<string, number>();
-  for (const t of trades) adet.set(t.symbol, (adet.get(t.symbol) ?? 0) + qtyDelta(t));
+  // özet tarihinden SONRAKİ işlem sayılmaz (gerçek ekstrede: 31.08 özetinde 2072 PHE, satışı 07.09'da)
+  for (const t of trades) if (!tarih || t.date <= tarih) adet.set(t.symbol, (adet.get(t.symbol) ?? 0) + qtyDelta(t));
   return ozet
     .map((o) => ({ symbol: o.symbol, belge: o.qty, uygulama: Math.round((adet.get(o.symbol) ?? 0) * 1e6) / 1e6 }))
     .filter((o) => Math.abs(o.belge - o.uygulama) > 1e-6);

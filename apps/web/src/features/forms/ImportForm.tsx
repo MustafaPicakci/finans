@@ -1,6 +1,6 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  parseStatement, parseIslemler, dokumKarsilastir, hesapDefteri, kartDefteri, type IslemSonucu,
+  parseStatement, parseIslemler, dokumKarsilastir, hesapDefteri, kartDefteri, hedefTahmin, type IslemSonucu, type HedefTahmini,
   type AllData, type Dogrulama, type ParsedRow, type DefterKaydi, type DokumDurum, type DokumKarsilastirma, type KonumluSatir,
 } from "@finans/engine";
 import { api } from "../../api";
@@ -9,6 +9,8 @@ import { DahaFazla, Field, FiltreSeridi, Hint, useSayfalama } from "../../ui";
 import { kalemSuggestions, normName } from "./recall";
 import { belgeOku, PdfParolaGerekli } from "./pdfOku";
 import { IslemOnizleme } from "./IslemOnizleme";
+import { bellek, useKalici, iceAktarTemizle } from "./iceAktarBellek";
+export { iceAktarTemizle };
 
 /* ————— TOPLU İÇE AKTARMA (EKSTRE YAPIŞTIRMA / PDF) —————
    Banka/aracı kurum ekstresini ya da Excel tablosunu olduğu gibi yapıştır — ya da e-ekstre
@@ -31,32 +33,39 @@ const FILTRE_ADI: Record<Filtre, string> = {
 /** Çok yıllık dökümde "09-03" belirsiz kalırdı */
 const kisaTarih = (d: string) => `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(2, 4)}`;
 
-export function ImportForm({ data, reload, onClose }: { data: AllData; reload: () => void; onClose: () => void }) {
-  const [text, setText] = useState("");
-  const [defaultSign, setDefaultSign] = useState<"gider" | "gelir">("gider");
+export function ImportForm({ data, reload, onClose: kapat }: { data: AllData; reload: () => void; onClose: () => void }) {
+  const [text, setText] = useKalici("text", "");
   /* Hedef (Faz 45): "a:<hesap>" gerçekleşen işlem (+bakiye), "c:<kart>" kart harcaması, "" yalnız defter.
      Kart ekstresinin doğru yeri kart harcamalarıdır: hesaba yazılsa harcamalar karttan değil
      hesaptan çıkmış gibi olur ve ekstre ödemesiyle birlikte iki kez sayılırdı. */
-  const [hedef, setHedef] = useState(data.accounts[0] ? `a:${data.accounts[0].id}` : "");
+  /* `secim` kullanıcının seçicideki değeri ("oto" = belgeden bul, varsayılan); `hedef` çözülmüş hâli —
+     aşağıdaki her şey hedefe bakar. "Nereye"yi sormak hataya açıktı: Axess kart ekstresi Akbank
+     hesabına seçildi (bkz. engine hedef.ts `hedefTahmin`). */
+  const [secim, setSecim] = useKalici("secim", "oto");
+  const [hedef, setHedef] = useKalici("hedef", "");
+  const [oto, setOto] = useKalici<HedefTahmini | null>("oto", null);
   const accountId = hedef.startsWith("a:") ? hedef.slice(2) : "";
   const cardId = hedef.startsWith("c:") ? +hedef.slice(2) : null;
   const kart = cardId != null ? data.cards.find((c) => c.id === cardId) : undefined;
   /* Faz 45.9 — "t:<hesap>" / "t:": aracı kurum ekstresi → portföy işlemleri (ayrı önizleme, IslemOnizleme) */
   const islemModu = hedef.startsWith("t:");
   const islemHesap = islemModu && hedef.length > 2 ? +hedef.slice(2) : null;
-  const [islemSonuc, setIslemSonuc] = useState<IslemSonucu | null>(null);
+  const [islemSonuc, setIslemSonuc] = useKalici<IslemSonucu | null>("islemSonuc", null);
   /** Kart hedefinde karta para GİREN satır (ekstre ödemesi, iade) aktarılmaz: ödeme Kart sekmesinde
       "Ödedim" ile kaydedilir (burada da yazılsa iki kez sayılırdı) ve kart harcaması modelinde iade yok. */
   const kartaGiren = (r: ParsedRow) => cardId != null && r.amount > 0;
-  const [drafts, setDrafts] = useState<Draft[] | null>(null);
-  const [fazla, setFazla] = useState<DefterKaydi[]>([]);
-  const [filtre, setFiltre] = useState<Filtre>("eksik");
+  const [drafts, setDrafts] = useKalici<Draft[] | null>("drafts", null);
+  const [fazla, setFazla] = useKalici<DefterKaydi[]>("fazla", []);
+  const [filtre, setFiltre] = useKalici<Filtre>("filtre", "eksik");
   /** Faz 45.7 — açılıştan önceki satırlar eklenirken açılış hareketi aynı toplam kadar geri çekilsin mi */
-  const [acilisGeri, setAcilisGeri] = useState(false);
+  const [acilisGeri, setAcilisGeri] = useKalici("acilisGeri", false);
   const [duzeltilen, setDuzeltilen] = useState<number | null>(null);
-  const [skipped, setSkipped] = useState<string[]>([]);
-  const [dogrulama, setDogrulama] = useState<Dogrulama>({ tur: "yok" });
-  const [bozukHarf, setBozukHarf] = useState(false);
+  const [skipped, setSkipped] = useKalici<string[]>("skipped", []);
+  const [dogrulama, setDogrulama] = useKalici<Dogrulama>("dogrulama", { tur: "yok" });
+  const [bozukHarf, setBozukHarf] = useKalici("bozukHarf", false);
+  /** Hesap hedefinde okunan belge aslında kart ekstresiyse (kart kipinde dönem borcu bulundu) o borç;
+      kullanıcı yanlış hedef seçmiş olabilir — ödeme gelir, harcamalar hesaptan çıkmış gibi yazılırdı. */
+  const [kartIpucu, setKartIpucu] = useKalici<number | null>("kartIpucu", null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   /* PDF: dosya parolalıysa elde tutulur, parola sorulur. Parola yalnız bu cihazda PDF'i açmak için. */
@@ -64,13 +73,17 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
   const [parola, setParola] = useState("");
   /* PDF'ten gelen KONUMLU satırlar (sütunlar konumdan bulunur) ve onlardan üretilen metin. Kullanıcı
      kutudaki metni düzenlerse konum geçersiz olur ve düz metin ayrıştırılır. */
-  const [konumlu, setKonumlu] = useState<{ satirlar: KonumluSatir[]; metin: string } | null>(null);
+  const [konumlu, setKonumlu] = useKalici<{ satirlar: KonumluSatir[]; metin: string } | null>("konumlu", null);
   /** okuma sürerken okuyucunun söylediği adım ("Sayfa 1/2 … OCR %40"); bittikten sonra kaç sayfanın OCR'la okunduğu */
   const [ilerleme, setIlerleme] = useState("");
-  const [ocrSayfa, setOcrSayfa] = useState(0);
+  const [ocrSayfa, setOcrSayfa] = useKalici("ocrSayfa", 0);
   /** Son okunan PDF (ve parolası): önizlemeden "OCR ile yeniden oku" için elde tutulur. */
-  const [sonBelge, setSonBelge] = useState<{ dosya: File; parola?: string; sayfa: number } | null>(null);
+  const [sonBelge, setSonBelge] = useKalici<{ dosya: File; parola?: string; sayfa: number } | null>("sonBelge", null);
   const [yenidenOkunuyor, setYenidenOkunuyor] = useState(false);
+  /** Çıkış: bitmiş (kaydedilmiş ya da vazgeçilmiş) iş bellekten silinir. Sekme değiştirmek çıkış DEĞİLDİR. */
+  const onClose = () => { iceAktarTemizle(); kapat(); };
+  /** Seçili satır varken "Vazgeç" önce sorar: o seçimler okunan belgeyle birlikte silinecek. */
+  const [cikisSor, setCikisSor] = useState(false);
 
   const sugs = useMemo(() => kalemSuggestions(data), [data]);
   /** geçmişte aynı/benzer adla girilmiş kaydın kategorisi (en sık kullanılan eşleşme) */
@@ -83,18 +96,18 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
   };
   /** Hedefin defteri: hesap → o hesabın bütün hareketleri; kart → o kartın harcamaları;
       "yalnız defter" → hesapsız gelir/gider kayıtları. */
-  const karsilastir = (rows: ParsedRow[]): DokumKarsilastirma => {
-    if (cardId != null) return dokumKarsilastir(rows, kartDefteri(data, cardId), { kart: true });
-    if (accountId) {
-      const { defter, acilis } = hesapDefteri(data, +accountId);
+  const karsilastir = (rows: ParsedRow[], h: string): DokumKarsilastirma => {
+    if (h.startsWith("c:")) return dokumKarsilastir(rows, kartDefteri(data, +h.slice(2)), { kart: true });
+    if (h.startsWith("a:")) {
+      const { defter, acilis } = hesapDefteri(data, +h.slice(2));
       return dokumKarsilastir(rows, defter, { acilis });
     }
     return dokumKarsilastir(rows, data.transactions.filter((t) => t.account_id == null)
       .map((t) => ({ kimlik: `t${t.id}`, date: t.date, amount: t.amount, name: t.name, kaynak: { tablo: "transactions", id: t.id } })));
   };
   /** Satırları defterle karşılaştırıp durumlarını yazar; yalnız EKSİK olan önden seçilir. */
-  const durumla = (rows: (ParsedRow & { category_id?: string })[]): Draft[] => {
-    const k = karsilastir(rows);
+  const durumla = (rows: (ParsedRow & { category_id?: string })[], h = hedef): Draft[] => {
+    const k = karsilastir(rows, h);
     setFazla(k.fazla);
     const d = rows.map((r, i) => ({
       ...r, durum: k.satirlar[i].durum, kayit: k.satirlar[i].kayit, include: k.satirlar[i].durum === "eksik", virman: "",
@@ -105,19 +118,48 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
     return d;
   };
 
-  const analyze = (metin = text, satirlar = konumlu?.metin === metin ? konumlu.satirlar : null) => {
+  /** `s`: seçici değeri; "oto" ise hedef belgeden tahmin edilir. Hedef state'i bu render'da henüz
+      güncellenmediğinden çözülmüş hedef (`h`) aşağıya parametreyle geçer. */
+  const analyze = (metin = text, satirlar = konumlu?.metin === metin ? konumlu.satirlar : null, s = secim) => {
     if (!satirlar) { setOcrSayfa(0); setSonBelge(null); }
-    if (islemModu) { setIslemSonuc(parseIslemler(satirlar ?? metin)); setErr(null); return; }
+    const tahmin = s === "oto" ? hedefTahmin(satirlar ?? metin, data) : null;
+    const h = tahmin ? tahmin.hedef : s;
+    setOto(tahmin); setHedef(h);
+    const cardId = h.startsWith("c:") ? +h.slice(2) : null;
+    if (h.startsWith("t:")) { setIslemSonuc(parseIslemler(satirlar ?? metin)); setErr(null); return; }
     /* Kart ekstresinin işaret dili farklıdır (harcama işaretsiz, ödeme "+" ya da "−" ile
        işaretli); ayrıştırıcı `kart` kipinde bunu çözer ve önizlemenin diliyle (− = harcama)
        döndürür. Yine de ters okunursa "işaretleri çevir" tek dokunuş. */
-    const { rows, skipped, dogrulama, bozukHarf } = parseStatement(satirlar ?? metin, cardId != null ? "kart" : defaultSign);
+    const { rows, skipped, dogrulama, bozukHarf } = parseStatement(satirlar ?? metin, cardId != null ? "kart" : "gider");
+    /* Belge kart kipinde "önceki dönem + harcamalar − ödemeler = dönem borcu" özetini taşıyorsa bir
+       kart ekstresidir: hesap dökümünde bu satırlar yoktur. Hedef hesapsa söylenir (gerçek kullanımda
+       Axess ekstresi Akbank hesabına seçildi; ödeme +19.394 gelir göründü). */
+    const kartDog = cardId == null ? parseStatement(satirlar ?? metin, "kart").dogrulama : null;
+    setKartIpucu(kartDog?.tur === "donem" ? kartDog.belge : null);
     setSkipped(skipped);
     setDogrulama(dogrulama);
     setBozukHarf(bozukHarf);
-    setDrafts(durumla(rows));
+    setDrafts(durumla(rows, h));
     setErr(null);
   };
+  /** Önizlemeden hedef değiştirme: belge yeni hedefle yeniden çözülür (dosyayı yeniden seçmeden). */
+  const hedefDegistir = (v: string) => { setSecim(v); analyze(text, undefined, v); };
+  /* Bellekten dönen önizleme, ayrıldığın sırada defterde değişen kayıtları bilmez (ör. Kartlar'da
+     elle girilmiş kopyayı sildin). Veri değişince durumlar yeniden karşılaştırılır; durumu
+     değişmeyen satırın seçimi korunur, yeni "eksik" seçili, zaten defterde olan seçimsiz gelir. */
+  const sonVeri = useRef(bellek.veri as AllData | undefined);
+  useEffect(() => {
+    bellek.veri = data;
+    if (sonVeri.current === data) return;
+    sonVeri.current = data;
+    if (!drafts || hedef.startsWith("t:")) return;
+    const k = karsilastir(drafts, hedef);
+    setFazla(k.fazla);
+    setDrafts(drafts.map((d, i) => {
+      const yeni = k.satirlar[i];
+      return yeni.durum === d.durum ? { ...d, kayit: yeni.kayit } : { ...d, durum: yeni.durum, kayit: yeni.kayit, include: yeni.durum === "eksik" };
+    }));
+  }, [data]);
 
   const pdfOku = async (dosya: File, sifre?: string, ocrZorla = false) => {
     // yeni belge kutudakinin yerini alır: önceki metin kalsa parola sorulurken eski belge çözülebilirdi
@@ -138,6 +180,8 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
       setErr(e instanceof Error ? e.message : "Belge okunamadı");
     }
   };
+
+  const kartaGec = (id: number) => hedefDegistir(`c:${id}`);
 
   const upd = (i: number, patch: Partial<Draft>) =>
     setDrafts((d) => d!.map((r, k) => (k === i ? { ...r, ...patch } : r)));
@@ -237,10 +281,16 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
     try {
       if (cardId != null) {
         // önizleme hesap diliyle (− = harcama) konuşur; kart harcaması tutarı artıdır
-        await api.bulkCardTxs(chosen.map((d) => ({
-          card_id: cardId, date: d.date, name: d.name, amount: -d.amount, installments: 1,
-          category_id: d.category_id ? +d.category_id : null,
-        })));
+        /* Taksit payı alışverişin kendisi olarak yazılır (toplam + sayı + alış günü); paylar kart
+           matematiğiyle ekstrelere dağılır. Pay elle değiştirildiyse toplam yeni paydan türer. */
+        await api.bulkCardTxs(chosen.map((d) => {
+          const t = d.taksit, pay = -d.amount;
+          const toplam = !t ? pay : Math.abs(t.toplam / t.sayi - pay) <= 0.01 ? t.toplam : Math.round(pay * t.sayi * 100) / 100;
+          return {
+            card_id: cardId, date: t?.alis ?? d.date, name: d.name, amount: toplam, installments: t?.sayi ?? 1,
+            category_id: d.category_id ? +d.category_id : null,
+          };
+        }));
       } else {
         const virmanlar = chosen.filter((d) => d.virman).map((d) => ({
           date: d.date, amount: Math.abs(d.amount), note: d.name,
@@ -264,6 +314,32 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
       setBusy(false);
     }
   };
+
+  /** Hedef seçenekleri: 1. adımdaki seçici ile önizlemedeki "değiştir" seçicisi aynı listeyi gösterir. */
+  const hedefSecenekleri = (
+    <>
+      {data.accounts.length > 0 && (
+        <optgroup label="Hesap dökümü → hesap">
+          {data.accounts.map((a) => <option key={a.id} value={`a:${a.id}`}>{a.name} hesabı</option>)}
+        </optgroup>
+      )}
+      {data.cards.length > 0 && (
+        <optgroup label="Kart ekstresi → kart harcaması">
+          {data.cards.map((c) => <option key={c.id} value={`c:${c.id}`}>{c.name} kartı</option>)}
+        </optgroup>
+      )}
+      {data.accounts.length > 0 && (
+        <optgroup label="Aracı kurum ekstresi → portföy işlemleri">
+          {[...data.accounts].sort((a, b) => Number(b.kind === "araci") - Number(a.kind === "araci")).map((a) => (
+            <option key={a.id} value={`t:${a.id}`}>{a.name} hesabına bağla</option>
+          ))}
+          <option value="t:">Hesaba bağlamadan</option>
+        </optgroup>
+      )}
+      <option value="">Yalnız gelir/gider defteri (bakiyeye işleme)</option>
+    </>
+  );
+  const TUR_ADI = { kart: "kart ekstresi", hesap: "hesap dökümü", islem: "aracı kurum ekstresi" } as const;
 
   if (islemSonuc) {
     return <IslemOnizleme data={data} sonuc={islemSonuc} accountId={islemHesap} reload={reload} onClose={onClose} onGeri={() => setIslemSonuc(null)} />;
@@ -298,33 +374,10 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
           style={{ ...css.input, resize: "vertical", lineHeight: 1.5, fontSize: 12.5 }}
         />
         <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-          {cardId == null && !islemModu && <Field label="İşaretsiz tutarlar">
-            <select style={css.input} value={defaultSign} onChange={(e) => setDefaultSign(e.target.value as "gider" | "gelir")}>
-              <option value="gider">Gider (−) sayılsın</option>
-              <option value="gelir">Gelir (+) sayılsın</option>
-            </select>
-          </Field>}
           <Field label="Nereye" flex={2}>
-            <select style={css.input} value={hedef} onChange={(e) => setHedef(e.target.value)}>
-              {data.accounts.length > 0 && (
-                <optgroup label="Hesap dökümü → hesap">
-                  {data.accounts.map((a) => <option key={a.id} value={`a:${a.id}`}>{a.name}</option>)}
-                </optgroup>
-              )}
-              {data.cards.length > 0 && (
-                <optgroup label="Kart ekstresi → kart harcaması">
-                  {data.cards.map((c) => <option key={c.id} value={`c:${c.id}`}>{c.name}</option>)}
-                </optgroup>
-              )}
-              {data.accounts.length > 0 && (
-                <optgroup label="Aracı kurum ekstresi → portföy işlemleri">
-                  {[...data.accounts].sort((a, b) => Number(b.kind === "araci") - Number(a.kind === "araci")).map((a) => (
-                    <option key={a.id} value={`t:${a.id}`}>{a.name} hesabına bağla</option>
-                  ))}
-                  <option value="t:">Hesaba bağlamadan</option>
-                </optgroup>
-              )}
-              <option value="">Yalnız gelir/gider defteri (bakiyeye işleme)</option>
+            <select style={css.input} value={secim} onChange={(e) => setSecim(e.target.value)}>
+              <option value="oto">Otomatik bul (belgeden)</option>
+              {hedefSecenekleri}
             </select>
           </Field>
         </div>
@@ -332,8 +385,9 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
           Sekmeli (Excel kopyası), noktalı virgüllü/virgüllü CSV ve boşlukla hizalanmış metin tanınır.
           Tarih <b>gg.aa.yyyy</b> veya <b>yyyy-aa-gg</b>, tutar <b>1.234,56</b> biçiminde olabilir.
           Eksi işareti olan satırlar gider, bakiye sütunu varsa yön bakiyeden çıkarılır. Belgede
-          yalnız bazı satırlar eksi işaretliyse işaretsiz olanlar gelir sayılır. Kart ekstresinde işaretsiz
-          tutar harcamadır, işaretli olan ödeme.
+          yalnız bazı satırlar eksi işaretliyse işaretsiz olanlar gelir sayılır; hiç işaret yoksa hepsi gider
+          sayılır (ters çıkarsa önizlemede "işaretleri çevir"). Kart ekstresinde işaretsiz tutar harcamadır,
+          işaretli olan ödeme.
         </div>
         {err && <div style={{ color: T.neg, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
         <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
@@ -357,10 +411,47 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
             style={{ background: "none", border: "none", padding: 0, color: T.acc, fontSize: 12.5, cursor: "pointer", minHeight: 0 }}>
             işaretleri çevir
           </button>
-          <span>net: <span style={{ ...css.mono, color: sum < 0 ? T.neg : T.pos }}>{fmtMoney(sum, "TRY", true)}</span></span>
+          <span>seçili toplam: <span style={{ ...css.mono, color: sum < 0 ? T.neg : T.pos }}>{fmtMoney(sum, "TRY", true)}</span></span>
         </div>
       </div>
 
+      {/* Hedef: otomatik bulunduysa nasıl bulunduğu yazılır; emin değilse göze batar. Değiştirmek
+          belgeyi yeni hedefle yeniden çözer. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 12.5, marginBottom: 8,
+        background: T.panel2, borderRadius: 8, padding: "6px 12px", border: oto && !oto.emin ? `1px solid ${T.neg}` : "1px solid transparent" }}>
+        <span style={{ color: T.mut, flex: "1 1 200px" }}>
+          {oto
+            ? <>Bu bir <b style={{ color: T.text }}>{TUR_ADI[oto.tur]}</b>. {oto.hedef === ""
+                ? (oto.tur === "kart" ? "Tanımlı kartın yok — Kart sekmesinde ekle, sonra buradan seç." : "Tanımlı hesabın yok.")
+                : !oto.emin ? "Hangisine ait olduğundan emin değilim, kontrol et:"
+                : oto.eslesen > 0 ? `${oto.eslesen} satırı defterindeki kayıtlarla eşleşti:` : "Hedef:"}</>
+            : "Hedef:"}
+        </span>
+        <select className="inline-select" style={{ ...css.input, padding: "4px 8px", fontSize: 12.5, width: "auto", flex: "0 1 260px", minWidth: 0 }}
+          aria-label="Nereye aktarılsın" value={hedef} onChange={(e) => hedefDegistir(e.target.value)}>
+          {hedefSecenekleri}
+        </select>
+      </div>
+      {kartIpucu != null && (
+        <div style={{ fontSize: 12.5, color: T.text, background: T.panel2, border: `1px solid ${T.neg}`, borderRadius: 8, padding: "8px 12px", marginBottom: 8 }}>
+          <div>
+            Bu bir <b>kredi kartı ekstresi</b> gibi görünüyor (dönem borcu {fmtMoney(kartIpucu, "TRY", true)}).
+            Hesap dökümü olarak aktarılırsa kart ödemesi hesaba giren para, harcamalar da
+            {accountId ? <> <b>{data.accounts.find((a) => a.id === +accountId)?.name}</b> hesabından</> : " hesaptan"} çıkmış gibi yazılır.
+          </div>
+          {data.cards.length > 0 ? (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+              {data.cards.map((c) => (
+                <button key={c.id} type="button" style={{ ...css.ghost, fontSize: 12.5 }} onClick={() => kartaGec(c.id)}>
+                  {c.name} kartının ekstresi olarak oku
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div style={{ color: T.mut, marginTop: 4 }}>Önce Kart sekmesinde kartını tanımla, sonra buradan kart ekstresi olarak aktar.</div>
+          )}
+        </div>
+      )}
       <DogrulamaSatiri d={dogrulama} />
       {/* Metin katmanı okundu ama belgeyle tutmuyor ya da harfler bozuk: katman güvenilmez olabilir
           (bozuk yazı tipi eşlemesi, resim olarak basılmış tutarlar). Karar belgenin kendi doğrulamasına
@@ -414,7 +505,7 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
       {filtre === "farkli" && (
         <Hint>Defterde adı ve günü tutan bir kayıt var ama tutarı farklı. Banka doğruysa "defterdekini düzelt" — kayıt yeni yazılmaz, tutarı düzeltilir. Satırı seçmek ikinci bir kayıt ekler.</Hint>
       )}
-      <div style={{ maxHeight: "42vh", overflowY: "auto", border: `1px solid ${T.line}`, borderRadius: 10 }}>
+      <div style={{ border: `1px solid ${T.line}`, borderRadius: 10 }}>
         {sayfa.gorunen.map(({ d, i }, sira) => (
           <div key={i} style={{
             /* sarılır: 390px'te beş kontrol tek satıra sığmıyor, kategori seçici ekrandan taşıyordu */
@@ -451,6 +542,12 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
                 </div>
               );
             })()}
+            {d.taksit && !d.kayit && (
+              <div style={{ flexBasis: "100%", fontSize: 11.5, color: T.mut3, paddingLeft: 24 }}>
+                taksit {d.taksit.sira}/{d.taksit.sayi} · alışveriş: {kisaTarih(d.taksit.alis)} · toplam <span style={css.mono}>{fmtMoney(d.taksit.toplam, "TRY", true)}</span>
+                {d.include && " — taksitli harcama olarak yazılır, kalan taksitler sonraki ekstrelere düşer"}
+              </div>
+            )}
             {d.kayit && (
               <div style={{ flexBasis: "100%", fontSize: 11.5, color: d.durum === "farkli" ? T.neg : T.mut3, paddingLeft: 24 }}>
                 defterde: {kisaTarih(d.kayit.date)} · {d.kayit.name} · <span style={css.mono}>{fmtMoney(d.kayit.amount, "TRY", true)}</span>
@@ -505,7 +602,7 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
       )}
       <div style={{ fontSize: 12, color: T.mut, marginTop: 10, background: T.panel2, borderRadius: 8, padding: "8px 12px" }}>
         {kart
-          ? <>Seçili satırlar <b>{kart.name}</b> kartına harcama olarak yazılır ve tarihlerine göre ilgili ekstreye düşer. Taksitli satırlar tek seferlik harcama olarak aktarılır. Defterde karşılığı olan satırlar ("Defterde") seçili gelmez.</>
+          ? <>Seçili satırlar <b>{kart.name}</b> kartına harcama olarak yazılır ve tarihlerine göre ilgili ekstreye düşer. Taksitli satırlar alışverişin kendisi olarak (toplam tutar, taksit sayısı, alış günü) yazılır. Defterde karşılığı olan satırlar ("Defterde") seçili gelmez.</>
           : accountId
           ? <>Seçili satırlar gerçekleşen kayıt olarak yazılır ve <b>{data.accounts.find((a) => a.id === +accountId)?.name}</b> bakiyesine toplam <span style={{ ...css.mono, color: sum < 0 ? T.neg : T.pos }}>{fmtMoney(sum, "TRY", true)}</span> işler.
             {chosen.some((d) => d.virman) && <> Bunlardan {chosen.filter((d) => d.virman).length} tanesi virman: gelir/gider sayılmaz, karşı hesaba da yazılır.</>}</>
@@ -517,7 +614,15 @@ export function ImportForm({ data, reload, onClose }: { data: AllData; reload: (
           {busy ? "Kaydediliyor…" : `${chosen.length} kaydı içe aktar`}
         </button>
         <button type="button" style={css.ghost} onClick={() => setDrafts(null)}>Geri</button>
+        <button type="button" style={{ ...css.ghost, marginLeft: "auto" }} onClick={() => (chosen.length ? setCikisSor(true) : onClose())}>Vazgeç</button>
       </div>
+      {cikisSor && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 10, padding: "8px 12px", borderRadius: 8, border: `1px solid ${T.neg}`, fontSize: 12.5 }}>
+          <span style={{ flex: "1 1 220px" }}>Seçtiğin {chosen.length} satır henüz aktarılmadı. Çıkarsan okunan belge ve seçimlerin silinir.</span>
+          <button type="button" style={{ ...css.ghost, fontSize: 12.5, color: T.neg }} onClick={onClose}>Çık, sil</button>
+          <button type="button" style={{ ...css.ghost, fontSize: 12.5 }} onClick={() => setCikisSor(false)}>Devam et</button>
+        </div>
+      )}
     </div>
   );
 }

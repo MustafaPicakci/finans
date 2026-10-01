@@ -60,6 +60,7 @@ async function ocrParcalari(goruntu: HTMLCanvasElement | Blob): Promise<PdfParca
 const OCR_GENISLIK = 2400;
 
 async function pdfOku(veri: ArrayBuffer, parola: string | undefined, ilerle: (m: string) => void, ocrZorla = false) {
+  ilerle("Belge açılıyor…");
   await pdfHazir;
   const gorev = pdfjs.getDocument({ data: new Uint8Array(veri), password: parola, useWasm: false, disableFontFace: true });
   const belge = await gorev.promise;
@@ -67,6 +68,7 @@ async function pdfOku(veri: ArrayBuffer, parola: string | undefined, ilerle: (m:
     const satirlar: KonumluSatir[] = [];
     let ocrSayfa = 0;
     for (let i = 1; i <= belge.numPages; i++) {
+      ilerle(`Sayfa ${i}/${belge.numPages} okunuyor…`); // ebeveynin bekçisi sessizliği takılma sayar
       const sayfa = await belge.getPage(i);
       const icerik = await sayfa.getTextContent();
       const parcalar: PdfParca[] = [];

@@ -256,3 +256,43 @@ describe("parseStatement — ad ve yazı tipi (Faz 45.3)", () => {
     expect(parseStatement(temiz, "kart").bozukHarf).toBe(false);
   });
 });
+
+describe("parseStatement — kart ekstresinde taksit (Faz 45 dilim 2b)", () => {
+  // gerçek Axess ekstresinden (OCR): satır = alış günü, "a/b" = sayı/sıra, parantez = toplam
+  const axess = [
+    "06/09/2025\tMONSTER BİLG.TEK.A.Ş. (65,599.00 TL) 12/12.taksit\t5,466.58",
+    "17/05/2026\tHEPSİPAY/HEPSİPAY HEPSİBU (15,641.73 TL) 6/4.taksit\t2,606.95",
+    "09/06/2026\tOBİLET BİLİŞİM SİSTEMLERİ (978.30 TL) 3/3.taksit\t326.10",
+    "07/08/2026\tS.S.METAL ISCİLERİ TUKETİ\t176.00",
+    "29/08/2026\tOPET-SAYDAM AKARYAKIT\t50.00",
+  ].join("\n");
+
+  it("pay satırı alışverişin kendisine çözülür: toplam, sayı, sıra, alış günü; ad sadeleşir", () => {
+    const r = parseStatement(axess, "kart").rows;
+    expect(r[0]).toEqual({ date: "2025-09-06", name: "MONSTER BİLG.TEK.A.Ş.", amount: -5466.58,
+      taksit: { sayi: 12, sira: 12, toplam: 65599, alis: "2025-09-06" } });
+    expect(r[1].taksit).toEqual({ sayi: 6, sira: 4, toplam: 15641.73, alis: "2026-05-17" });
+    expect(r[2].taksit).toEqual({ sayi: 3, sira: 3, toplam: 978.3, alis: "2026-06-09" });
+    expect(r[3].taksit).toBeUndefined();
+    // amount PAY olarak kalır: belgenin toplamı (dönem borcu doğrulaması) bunu tutar
+    expect(r.reduce((s, x) => s + x.amount, 0)).toBeCloseTo(-8625.63, 2);
+  });
+
+  it("tarih bu dönemdeyse (işlem günü yazan banka) alış günü sıra−1 ay geridedir; toplam yoksa pay × sayı", () => {
+    const txt = "15.08.2026\tTEKNOSA Taksit 4/6\t1.000,00\n20.08.2026\tMARKET\t100,00";
+    expect(parseStatement(txt, "kart").rows[0]).toMatchObject({ name: "TEKNOSA", amount: -1000,
+      taksit: { sayi: 6, sira: 4, toplam: 6000, alis: "2026-05-15" } });
+  });
+
+  it("ay sonu taşması kırpılır; paya uymayan parantez toplam sayılmaz", () => {
+    const txt = "31.08.2026\tX (5,00 TL) 3/2 taksit\t200,00\n30.08.2026\tY\t1,00";
+    expect(parseStatement(txt, "kart").rows[0].taksit).toEqual({ sayi: 3, sira: 2, toplam: 600, alis: "2026-07-31" });
+    const subat = "31.03.2026\tZ 2/3 taksit\t10,00\n30.03.2026\tY\t1,00";
+    expect(parseStatement(subat, "kart").rows[0].taksit?.alis).toBe("2026-02-28");
+  });
+
+  it("ödeme satırı ve hesap dökümü taksit sayılmaz", () => {
+    expect(parseStatement("01.08.2026\tÖDEME 1/2 taksit\t500,00+\n02.08.2026\tA\t10,00", "kart").rows[0].taksit).toBeUndefined();
+    expect(parseStatement("01.08.2026\tX 3/6 taksit\t-500,00", "gider").rows[0].taksit).toBeUndefined();
+  });
+});

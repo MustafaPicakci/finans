@@ -12,7 +12,10 @@ import { metinSadelestir } from "./kayitlar.js";
 import type { KonumluSatir } from "./pdfSatir.js";
 
 /** Ayrıştırılmış tek satır. `amount` işaretlidir: gider −, gelir +. */
-export type ParsedRow = { date: string; name: string; amount: number };
+/** `taksit` (yalnız kart ekstresi): satır taksitli bir alışverişin AYLIK PAYIDIR — `amount` o paydır
+    (ekstrede görünen, belgenin toplamını tutan rakam), alışverişin kendisi `toplam`/`sayi`/`alis`'tadır. */
+export type ParsedRow = { date: string; name: string; amount: number; taksit?: Taksit };
+export type Taksit = { sayi: number; sira: number; toplam: number; alis: string };
 
 /** Bakiye zincirinde iki ardışık satırın arasında açıklanamayan fark: `eksik`, arada okunamamış
     satırların işaretli toplamıdır (gider −, gelir +). */
@@ -430,6 +433,8 @@ export function parseStatement(girdi: string | KonumluSatir[], tur: "gider" | "g
     for (const r of belirsiz) r.amount = artiSay ? Math.abs(r.amount) : -Math.abs(r.amount);
   }
 
+  if (kart) taksitCoz(rows);
+
   let dogrulama: Dogrulama = { tur: "yok" };
   if (hasBalanceCol && zincir.length === rows.length) {
     rows.forEach((r, i) => { zincir[i].amount = r.amount; });
@@ -443,4 +448,58 @@ export function parseStatement(girdi: string | KonumluSatir[], tur: "gider" | "g
     }
   }
   return { rows, skipped, dogrulama, bozukHarf: bozukHarfMi(text) };
+}
+
+/* ————— TAKSİT (Faz 45 dilim 2b) —————
+   Kart ekstresinde taksitli alışveriş, o ayın PAYI olarak tek satırda görünür:
+   "MONSTER BİLG.TEK.A.Ş. (65,599.00 TL) 12/12.taksit   5,466.58". Tek seferlik harcama diye
+   aktarılırsa iki şey bozulur: kalan taksitler gelecek ekstrelerde hiç görünmez (borç eksik) ve
+   harcama özeti alışverişi payı kadar sayar. Doğru kayıt alışverişin kendisidir: toplam tutar,
+   taksit sayısı, alış günü — payları kart matematiği (`txShares`) zaten dağıtır.
+   Bankaya özel kural YOK (Faz 45.3); okunan şey bir durum türüdür:
+   - sıra/sayı "a/b taksit" ya da "taksit a/b" — hangisinin sayı olduğunu bankalar farklı yazar
+     (Axess "12/12", "6/4" = 6 taksitin 4.sü); sıra sayıyı aşamayacağından BÜYÜK olan sayıdır.
+   - toplam parantez içindeki "(… TL)"; yoksa ya da paya uymuyorsa pay × sayı.
+   - satırın tarihi bazı bankalarda alış günü, bazılarında bu dönemin işlem günüdür. Tarih bu
+     dönemin içindeyse (dönemin en yeni taksitsiz satırına 40 günden yakın) ve sıra > 1 ise alış
+     günü (sıra − 1) ay geridedir; değilse satırın tarihi alış günüdür. */
+const TAKSIT_RE = /(\d{1,2})\s*\/\s*(\d{1,2})\s*\.?\s*taksit\w*|taksit\w*\s*:?\s*(\d{1,2})\s*\/\s*(\d{1,2})/i;
+const TOPLAM_RE = /\(\s*([\d.,]+)\s*(?:TL|TRY|₺)?\s*\)/i;
+
+function ayGeri(iso: string, ay: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const hedef = new Date(Date.UTC(y, m - 1 - ay, 1));
+  const son = new Date(Date.UTC(hedef.getUTCFullYear(), hedef.getUTCMonth() + 1, 0)).getUTCDate();
+  hedef.setUTCDate(Math.min(d, son));
+  return hedef.toISOString().slice(0, 10);
+}
+
+/** Kart satırlarındaki taksit bilgisini çözer (yerinde): `taksit` yazılır, ad sadeleşir. */
+export function taksitCoz(rows: ParsedRow[]): void {
+  const bulunan: { row: ParsedRow; sayi: number; sira: number; toplam: number | null }[] = [];
+  for (const row of rows) {
+    if (row.amount >= 0) continue; // karta giren para (ödeme/iade) taksitli olmaz
+    const m = row.name.match(TAKSIT_RE);
+    if (!m) continue;
+    const a = +(m[1] ?? m[3]), b = +(m[2] ?? m[4]);
+    const sayi = Math.max(a, b), sira = Math.min(a, b);
+    if (sayi < 2 || sira < 1) continue;
+    const t = row.name.match(TOPLAM_RE);
+    bulunan.push({ row, sayi, sira, toplam: t ? parseAmount(t[1]) : null });
+    row.name = row.name.replace(TAKSIT_RE, "").replace(TOPLAM_RE, "").replace(/\s{2,}/g, " ").trim() || row.name;
+  }
+  if (!bulunan.length) return;
+  const digerleri = rows.filter((r) => !bulunan.some((x) => x.row === r)).map((r) => r.date);
+  const capa = (digerleri.length ? digerleri : rows.map((r) => r.date)).sort().at(-1)!;
+  for (const { row, sayi, sira, toplam } of bulunan) {
+    const pay = Math.abs(row.amount);
+    // banka payı kuruşa yuvarlar: toplam/sayı paydan en çok yarım kuruş × sayı kadar sapar
+    const uyar = toplam != null && Math.abs(toplam / sayi - pay) <= 0.01;
+    const buDonem = (Date.parse(capa) - Date.parse(row.date)) / 864e5 < 40;
+    row.taksit = {
+      sayi, sira,
+      toplam: uyar ? toplam! : Math.round(pay * sayi * 100) / 100,
+      alis: sira > 1 && buDonem ? ayGeri(row.date, sira - 1) : row.date,
+    };
+  }
 }

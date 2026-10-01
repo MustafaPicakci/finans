@@ -4,7 +4,7 @@ import { project, positions, cardInfos, stmtKey, loanRemaining, portfolioValueTr
 import { api, ApiError, type SessionUser } from "./api";
 import { T, css, fmtMoney, fiyatYasi, FIYAT_YASI_IPUCU, themeCSS, THEME_KEY, CCY_KEY, type ThemeMode } from "./theme";
 import { Center } from "./ui";
-import { NAV, NavIcon, PROFIL_META, TANIMLAR_META, KURULUM_META } from "./nav";
+import { NAV, NavIcon, PROFIL_META, TANIMLAR_META, KURULUM_META, ICE_AKTAR_META, type TabKey } from "./nav";
 import { useTabRoute } from "./route";
 import { useBalancesHidden, toggleBalancesHidden } from "./privacy";
 import { Auth, type UrlAuth } from "./features/auth";
@@ -18,6 +18,7 @@ import { Kartlar } from "./features/kart";
 import { Portfoy } from "./features/portfoy";
 import { Kayitlar } from "./features/kayitlar";
 import { Kurulum } from "./features/kurulum";
+import { ImportForm, iceAktarTemizle } from "./features/forms/ImportForm";
 import { planYukle, bildirimKapat, abonelikDegisti } from "./bildirim";
 import { Asistan, clearChat } from "./features/asistan";
 import { anahtarYukle, anahtarSil } from "./yazim/anahtar";
@@ -114,7 +115,7 @@ export default function App() {
      sınırlı: ağ yoksa çıkış takılmamalı. */
   const logout = useCallback(async () => {
     await Promise.race([bildirimKapat().catch(() => {}), new Promise((r) => setTimeout(r, 3000))]);
-    await api.logout().catch(() => {}); await anahtarSil(); clearChat(); setUser(null); setData(null);
+    await api.logout().catch(() => {}); await anahtarSil(); clearChat(); iceAktarTemizle(); setUser(null); setData(null);
     // sonraki giriş (belki başka hesap) öncekinin ekranında açılmasın — Özet'ten başlasın
     setTab("ozet", true);
   }, [setTab]);
@@ -214,6 +215,8 @@ export default function App() {
      çıkıp yeni hesapla girince bayrak önceki hesaptan dolu kalıyor ve sihirbaz hiç
      denenmiyordu (yeni kayıtta yaşandı — doğrulama e-postasından dönüp aynı sekmede giriş). */
   const kurulumAcildi = useRef<number | null>(null);
+  /** İçe aktarma sayfasından çıkınca dönülecek sekme (geldiğin yer); adresle doğrudan gelindiyse Özet. */
+  const iceAktarDonus = useRef<TabKey>("ozet");
   useEffect(() => {
     if (!data || !user || kurulumAcildi.current === user.id) return;
     kurulumAcildi.current = user.id;
@@ -299,7 +302,7 @@ export default function App() {
 
   const openAdd = (kind: AddState["kind"], prefill?: KalemPrefill) => setAdd({ kind, prefill });
   // profil/tanimlar bilerek NAV dizisinde yok (bkz. nav.tsx) — başlıkları kendi META'larından gelir
-  const meta = NAV.find((n) => n.key === tab) ?? (tab === "tanimlar" ? TANIMLAR_META : tab === "kurulum" ? KURULUM_META : PROFIL_META);
+  const meta = NAV.find((n) => n.key === tab) ?? (tab === "tanimlar" ? TANIMLAR_META : tab === "kurulum" ? KURULUM_META : tab === "ice-aktar" ? ICE_AKTAR_META : PROFIL_META);
   const summary = { netWorthTry, cash, portValueTry, depositsValueTry, cardDebt, loanDebt,
     accountCount: data.accounts.length, portTypes, cardsWaiting, loansActive };
   const initials = (user?.email ?? "?").slice(0, 2).toUpperCase();
@@ -640,6 +643,7 @@ export default function App() {
               onKurumsalOlay={(p: TradePrefill) => setAdd({ kind: "trade", tradePrefill: p })}
               onKurulum={() => setTab("kurulum")} />}
             {tab === "kurulum" && <Kurulum data={data} days={days} reload={reload} onBitir={kurulumBitir} />}
+            {tab === "ice-aktar" && <div style={css.card}><ImportForm data={data} reload={reload} onClose={() => setTab(iceAktarDonus.current, true)} /></div>}
             {tab === "hesaplar" && <Hesaplar data={data} reload={reload} />}
             {tab === "profil" && <Profil user={user} data={data} reload={reload} onDeleted={() => { anahtarSil(); setUser(null); setData(null); }} />}
             {tab === "tanimlar" && <Tanimlar data={data} reload={reload} />}
@@ -654,14 +658,15 @@ export default function App() {
       </main>
 
       {/* Kurulumda gizli: sihirbaz kendi giriş akışıdır ve mobilde düğme "İleri"nin üstüne biniyordu */}
-      {tab !== "kurulum" && <button className="add-fab" aria-label="Ekle" onClick={() => openAdd("pick")} style={{
+      {tab !== "kurulum" && tab !== "ice-aktar" && <button className="add-fab" aria-label="Ekle" onClick={() => openAdd("pick")} style={{
         position: "fixed", right: 18, bottom: "calc(70px + env(safe-area-inset-bottom))", zIndex: 30,
         width: 54, height: 54, borderRadius: 999, border: "none", cursor: "pointer",
         background: T.acc, color: T.accInk, fontSize: 26, fontWeight: 700, alignItems: "center", justifyContent: "center",
         boxShadow: `0 8px 22px -6px ${T.acc}`,
       }}>＋</button>}
 
-      {add !== null && <AddSheet data={data} state={add} setState={setAdd} onClose={() => setAdd(null)} reload={reload} />}
+      {add !== null && <AddSheet data={data} state={add} setState={setAdd} onClose={() => setAdd(null)} reload={reload}
+        onImport={() => { setAdd(null); if (tab !== "ice-aktar") iceAktarDonus.current = tab; setTab("ice-aktar"); }} />}
 
       <nav className="bottom-nav" style={{
         position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 30,

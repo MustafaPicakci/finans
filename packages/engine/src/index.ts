@@ -23,3 +23,4 @@ export * from "./makro.js";
 export * from "./takvim.js";
 export * from "./bildirim.js";
 export * from "./pdfSatir.js";
+export * from "./hedef.js";

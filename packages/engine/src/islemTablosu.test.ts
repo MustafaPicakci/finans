@@ -53,9 +53,23 @@ describe("islemKarsilastir / ozetKarsilastir", () => {
     expect(islemKarsilastir(islemler, [t("BIMAS", "ALIŞ", 6, "2026-08-04"), t("QUICK", "SATIŞ", 50, "2026-07-31")]))
       .toEqual(["eksik", "eslesti", "eksik"]);
   });
+  it("fiyat da aynıysa ±5 gün eşleşir (takas günüyle girilmiş işlem); fiyat farklıysa eşleşmez", () => {
+    const { islemler } = parseIslemler(BELGE); // QUICK 31/07 50 × 76,60
+    const fiyatli = (p: number, d: string) => ({ ...t("QUICK", "ALIŞ", 50, d), price: p });
+    expect(islemKarsilastir(islemler, [fiyatli(76.6, "2026-08-03")])[0]).toBe("eslesti");
+    expect(islemKarsilastir(islemler, [fiyatli(80, "2026-08-03")])[0]).toBe("eksik");
+    expect(islemKarsilastir(islemler, [fiyatli(76.6, "2026-08-10")])[0]).toBe("eksik");
+  });
   it("özet: dönem sonu adedi uygulamadakiyle tutmayan semboller döner", () => {
     const { ozet } = parseIslemler(BELGE);
     expect(ozetKarsilastir(ozet, [t("BIMAS", "ALIŞ", 6, "2026-08-03"), t("KHA", "ALIŞ", 400, "2026-01-01"), t("KHA", "SATIŞ", 17, "2026-02-01")])).toEqual([]);
     expect(ozetKarsilastir(ozet, [t("BIMAS", "ALIŞ", 6, "2026-08-03")])).toEqual([{ symbol: "KHA", belge: 383, uygulama: 0 }]);
+  });
+  it("özet tarihi okunur; o tarihten SONRAKİ işlem sayılmaz", () => {
+    const r = parseIslemler(BELGE);
+    expect(r.ozetTarih).toBe("2026-08-31");
+    const islemler = [t("BIMAS", "ALIŞ", 6, "2026-08-03"), t("KHA", "ALIŞ", 383, "2026-07-01"), t("KHA", "SATIŞ", 383, "2026-09-07")];
+    expect(ozetKarsilastir(r.ozet, islemler, r.ozetTarih)).toEqual([]);
+    expect(ozetKarsilastir(r.ozet, islemler)).toEqual([{ symbol: "KHA", belge: 383, uygulama: 0 }]); // tarihsiz eski davranış
   });
 });

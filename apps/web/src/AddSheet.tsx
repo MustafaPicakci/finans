@@ -2,7 +2,7 @@ import React, { useMemo } from "react";
 import type { AllData } from "@finans/engine";
 import { T, css, fmtMoney } from "./theme";
 import { Modal } from "./ui";
-import { KalemForm, TransferForm, CardTxForm, RecurringForm, LoanForm, TradeForm, BedelliForm, DepositForm, ImportForm, type AddKind, type KalemPrefill, type CardTxPrefill, type TradePrefill } from "./features/forms";
+import { KalemForm, TransferForm, CardTxForm, RecurringForm, LoanForm, TradeForm, BedelliForm, DepositForm, type AddKind, type KalemPrefill, type CardTxPrefill, type TradePrefill } from "./features/forms";
 import { shortcuts } from "./features/forms/recall";
 
 export type { AddKind, KalemPrefill, TradePrefill };
@@ -40,8 +40,10 @@ const TITLES: Record<AddKind, string> = {
   import: "Toplu İçe Aktar",
 };
 
-export function AddSheet({ data, state, setState, onClose, reload }: {
+export function AddSheet({ data, state, setState, onClose, reload, onImport }: {
   data: AllData; state: AddState; setState: (s: AddState) => void; onClose: () => void; reload: () => void;
+  /** toplu içe aktarma popup değil kendi sayfasıdır (ICE_AKTAR_META) — seçenek oraya götürür */
+  onImport: () => void;
 }) {
   // en sık girilen kalemler — tek tıkla ilgili form önden doldurulmuş açılır
   const chips = useMemo(() => (state.kind === "pick" ? shortcuts(data) : []), [data, state.kind]);
@@ -69,7 +71,7 @@ export function AddSheet({ data, state, setState, onClose, reload }: {
               : o.kind === "transfer" && data.accounts.length < 2 ? "Virman için en az iki hesap gerekir (Özet → Hesaplar)"
                 : null;
             return (
-              <button key={o.kind} disabled={!!blocked} onClick={() => setState({ kind: o.kind })} style={{
+              <button key={o.kind} disabled={!!blocked} onClick={() => (o.kind === "import" ? onImport() : setState({ kind: o.kind }))} style={{
                 display: "flex", alignItems: "flex-start", gap: 12, textAlign: "left", cursor: blocked ? "not-allowed" : "pointer",
                 background: T.panel2, border: `1px solid ${T.line}`, borderRadius: 12, padding: "12px 14px",
                 fontFamily: T.disp, color: T.text, opacity: blocked ? 0.5 : 1,
@@ -100,7 +102,6 @@ export function AddSheet({ data, state, setState, onClose, reload }: {
       {state.kind === "trade" && <TradeForm {...props} prefill={state.tradePrefill} />}
       {state.kind === "bedelli" && <BedelliForm {...props} />}
       {state.kind === "deposit" && <DepositForm {...props} />}
-      {state.kind === "import" && <ImportForm {...props} />}
     </Modal>
   );
 }
