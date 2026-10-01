@@ -8,10 +8,9 @@
  * Şema hedefte initDb() ile kurulur (prod'un şeması kopyalanmaz — kod neyi bekliyorsa o).
  * Veri tek transaction içinde taşınır: hata olursa yerel veritabanı olduğu gibi kalır.
  *
- * Çalıştırma (apps/server dizininden):
- *   read -rs "PROD_URL?Neon URL: "; export PROD_URL
- *   pnpm exec tsx scripts/prod-to-local.mjs
- *   unset PROD_URL
+ * Çalıştırma: kökten `pnpm prod-kopya` (scripts/prod-kopya.mjs) — hedef veritabanı adını ve
+ * Neon adresini sorar, prod'un şemasına uyan db.ts'i seçer. Doğrudan çalıştırmak, şu anki
+ * kodun initDb'si prod'un şemasıyla uyuşmuyorsa kolon atlar (bkz. prod-kopya.mjs başı).
  *
  * Hedef = .env'deki DATABASE_URL. Güvenlik kilidi: localhost değilse çalışmaz (prod'un üstüne
  * yazmak tek bir yanlış env ile mümkün olurdu). Zorlamak için: ALLOW_REMOTE_TARGET=1.

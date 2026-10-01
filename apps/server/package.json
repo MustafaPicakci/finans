@@ -9,7 +9,8 @@
     "build": "tsx scripts/check-ai-routes.ts && tsx scripts/check-no-crypto.ts && tsx scripts/check-zarf-sema.ts && tsc --noEmit",
     "test": "vitest run",
     "migrate": "cross-env NODE_OPTIONS=--experimental-sqlite tsx scripts/migrate-sqlite-to-pg.mjs",
-    "gmail-token": "node scripts/gmail-token.mjs"
+    "gmail-token": "node scripts/gmail-token.mjs",
+    "prod-kopya": "tsx scripts/prod-kopya.mjs"
   },
   "dependencies": {
     "@finans/asistan": "workspace:*",

@@ -8,7 +8,8 @@
     "dev": "concurrently -n api,web -c yellow,cyan \"pnpm --filter @finans/server dev\" \"pnpm --filter @finans/web dev\"",
     "build": "pnpm -r build",
     "test": "pnpm -r test",
-    "start": "pnpm --filter @finans/server start"
+    "start": "pnpm --filter @finans/server start",
+    "prod-kopya": "pnpm --filter @finans/server prod-kopya"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

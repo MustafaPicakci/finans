@@ -6,3 +6,6 @@ data
 
 # Claude Code yerel yapılandırması (oturuma özgü izinler + kilit dosyası — paylaşılacak bir şey yok)
 .claude/
+
+# pnpm prod-kopya — eski commit db.ts için geçici klasör (iş bitince silinir)
+apps/server/.prod-kopya/
