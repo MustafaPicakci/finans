@@ -5,6 +5,8 @@ COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY apps/server/package.json apps/server/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/engine/package.json packages/engine/package.json
+COPY packages/crypto/package.json packages/crypto/package.json
+COPY packages/asistan/package.json packages/asistan/package.json
 RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm -r build
