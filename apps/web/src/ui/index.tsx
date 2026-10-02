@@ -144,9 +144,11 @@ export const Money = ({ v, size = 14, sign, mut }: { v: number; size?: number; s
     bu çukur şeritte toplanır — kullanıcı "bu düğme bir şey yapar mı, yoksa sadece süzer mi?"
     sorusunu düğmeyi okuyarak değil, nerede durduğuna bakarak cevaplasın. Yeni bir filtre
     eklerken bunun İÇİNE koy; dışına koyulan her filtre ayrımı tekrar bulanıklaştırır. */
-export const FiltreSeridi = ({ children, sag }: { children: React.ReactNode; sag?: React.ReactNode }) => (
+/** `kaydir`: seçenekler sarmaz, şerit yatay kayar (çok seçenekli süzgeçte ikinci satıra düşen tek
+    seçenek şeridi iki katına çıkarıyordu — içe aktarma önizlemesi, telefon). */
+export const FiltreSeridi = ({ children, sag, kaydir }: { children: React.ReactNode; sag?: React.ReactNode; kaydir?: boolean }) => (
   <div style={{
-    display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 10,
+    display: "flex", gap: 6, flexWrap: kaydir ? "nowrap" : "wrap", overflowX: kaydir ? "auto" : undefined, alignItems: "center", marginBottom: kaydir ? 0 : 10,
     background: T.panel2, border: `1px solid ${T.line2}`, borderRadius: 12, padding: "8px 10px",
   }}>
     <span aria-hidden="true" title="süzgeç" style={{ fontSize: 11, color: T.mut3, flexShrink: 0, letterSpacing: "-0.05em" }}>▽</span>

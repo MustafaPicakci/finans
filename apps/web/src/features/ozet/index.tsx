@@ -1,10 +1,9 @@
 import React from "react";
 import {
-  AreaChart, Area, ComposedChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, CartesianGrid,
-  PieChart, Pie, Cell,
+  AreaChart, Area, ComposedChart, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, CartesianGrid,
 } from "recharts";
 import {
-  fmtD, parseD, keyOf, convert, depositValueOn, fundSellSuggestion, setupGaps, kurulumGerekli, balancesByAccount,
+  fmtD, parseD, keyOf, convert, depositValueOn, fundSellSuggestion, setupGaps, kurulumGerekli,
   kurumsalOneriler, dripSet, type KurumsalOneri,
   type AllData, type Day, type Position, type Rates,
 } from "@finans/engine";
@@ -12,6 +11,7 @@ import { api } from "../../api";
 import { T, css, tl, fmtPay, fmtMoney, TYPE_COLORS } from "../../theme";
 import { Money, Empty, Aciklama, useSayfalama, DahaFazla } from "../../ui";
 import type { TradePrefill } from "../../AddSheet";
+import type { TabKey } from "../../nav";
 
 const SETUP_DISMISS_KEY = "finans-setup-dismissed";
 
@@ -24,37 +24,71 @@ const todayStr = () => {
 const fmtAdet = (v: number) =>
   Number.isInteger(v) ? String(v) : v.toFixed(4).replace(/0+$/, "").replace(/\.$/, "").replace(".", ",");
 
+/** Dağılım şeridindeki görünen ad — veri anahtarı (KRIPTO…) değişmez, yalnız okunuşu */
+const SINIF_ADI: Record<string, string> = { KRIPTO: "Kripto", FON: "Fon", ALTIN: "Altın", DOVIZ: "Döviz" };
+
 export type OzetSummary = {
   netWorthTry: number; cash: number; portValueTry: number; depositsValueTry: number;
   cardDebt: number; loanDebt: number; accountCount: number; portTypes: string[];
   cardsWaiting: number; loansActive: number;
 };
 
-/** Sabit WxH kutuda alan+çizgi path'i (net varlık hero sparkline'ı) */
-function sparkPath(vals: number[], W: number, H: number, pad = 6): { line: string; area: string } {
-  if (vals.length < 2) return { line: "", area: "" };
-  const n = vals.length, mn = Math.min(...vals), mx = Math.max(...vals), rng = (mx - mn) || 1;
-  const x = (i: number) => pad + (i * (W - 2 * pad)) / (n - 1);
-  const y = (v: number) => (H - pad) - ((v - mn) / rng) * (H - 2 * pad);
-  const line = "M" + vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" L");
-  const area = `${line} L${x(n - 1).toFixed(1)},${H} L${x(0).toFixed(1)},${H} Z`;
-  return { line, area };
+/* Görünümü değiştiren küçük seçici (Faz 24 kural 2: çukur şerit, seçili = beyaz yüzey + mor metin) */
+function Secici<V extends string | number>({ secenek, deger, sec, ad }: {
+  secenek: { v: V; l: string }[]; deger: V; sec: (v: V) => void; ad: string;
+}) {
+  return (
+    <div role="group" aria-label={ad} style={{ display: "inline-flex", padding: 3, gap: 2, background: T.panel2, borderRadius: 10, flexShrink: 0 }}>
+      {secenek.map((s) => {
+        const on = s.v === deger;
+        return (
+          <button key={String(s.v)} onClick={() => sec(s.v)} aria-pressed={on} className="ozet-secici" style={{
+            border: "none", borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontFamily: T.disp, fontSize: 13,
+            fontWeight: on ? 600 : 500, background: on ? T.panel : "transparent", color: on ? T.acc : T.mut,
+            boxShadow: on ? "var(--shadow-sm)" : "none", whiteSpace: "nowrap",
+          }}>{s.l}</button>
+        );
+      })}
+    </div>
+  );
 }
 
+const Tamam = () => (
+  <span style={{ width: 18, height: 18, flexShrink: 0, borderRadius: 999, background: T.posSoft, color: T.pos, display: "grid", placeItems: "center" }}>
+    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M2 5.2l2 2L8 3" /></svg>
+  </span>
+);
+const Kapat = ({ onClick }: { onClick: () => void }) => (
+  <button title="Bir daha gösterme" aria-label="Bir daha gösterme" onClick={onClick} className="ozet-x" style={{
+    background: "none", border: "none", color: T.mut, cursor: "pointer", padding: 6, borderRadius: 7, display: "grid", placeItems: "center", flexShrink: 0,
+  }}>
+    <svg width="11" height="11" viewBox="0 0 12 12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M3 3l6 6M9 3l-6 6" /></svg>
+  </button>
+);
+/** Satır içi eylem: mor METİN (dolgulu düğme değil) — bir listede dört dolu düğme yan yana
+    durunca hiçbiri öne çıkmıyordu. `ikincil` gri: aynı satırdaki ikinci seçenek. */
+const Eylem = ({ onClick, children, ikincil, title }: { onClick: () => void; children: React.ReactNode; ikincil?: boolean; title?: string }) => (
+  <button onClick={onClick} title={title} style={{
+    background: "none", border: "none", cursor: "pointer", fontFamily: T.disp, fontSize: 13.5, padding: "6px 4px",
+    fontWeight: ikincil ? 500 : 600, color: ikincil ? T.mut : T.acc, whiteSpace: "nowrap",
+  }}>{children}</button>
+);
+const grpBaslik: React.CSSProperties = { fontSize: 11, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: T.mut, padding: "12px 0 6px" };
+
 /* Özet grafikleri TRY canonical'dır (nakit projeksiyonu + portföy değeri geçmişi hep TRY).
-   Hero net varlık + KPI kartları buradadır (değerler App.tsx'te TRY hesaplanıp görüntü birimine çevrilerek gelir).
-   Hesap/mevduat yönetimi Hesaplar sekmesindedir; burada yalnız özet + "Yönet" kısayolu. */
-export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAccounts, onGoPortfolio, onSellFund, onKurumsalOlay, onKurulum }: {
+   Net varlık + kutular buradadır (değerler App.tsx'te TRY hesaplanıp görüntü birimine çevrilerek gelir).
+   Hesap bakiyeleri Hesaplar sekmesindedir (kullanıcı bakiyelere oradan bakıyor — yeniden tasarım, Ekim 2026). */
+export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGo, onSellFund, onKurumsalOlay, onKurulum }: {
   data: AllData; days: Day[]; pos: Position[]; cash: number; rates: Rates; reload: () => void;
-  summary: OzetSummary; m: (v: number, dec?: boolean) => string; onGoAccounts: () => void;
-  onSellFund: (p: TradePrefill) => void; onGoPortfolio: () => void;
+  summary: OzetSummary; m: (v: number, dec?: boolean) => string;
+  /** kutulara / önerilere dokununca ilgili sekme */
+  onGo: (t: TabKey) => void;
+  onSellFund: (p: TradePrefill) => void;
   /** Faz 36 — kaçırılan kurumsal olayı önden dolu işlem formuyla açar */
   onKurumsalOlay: (p: TradePrefill) => void;
   /** Kurulum sihirbazını açar (hiçbir şey girilmemiş hesapta Özet'in tek anlamlı eylemi) */
   onKurulum: () => void;
 }) {
-  // bakiye kolonu yok, defterden türetilir (E2EE aşama 1a)
-  const hesapBakiyeleri = balancesByAccount(data.account_entries);
   /* "Ödeme öncesi fon boz" önerisi (Faz 17): saf nakit önümüzdeki hafta eksiye düşüyorsa,
      nakit sayılan fondan ne kadar bozulacağını hesaplar. Bkz. funds.ts — tutar pencerenin
      EN DERİN noktasından gelir, yoksa iki gün sonra yine açık verilir. */
@@ -72,7 +106,7 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAcc
   const chart = days
     .filter((_, i) => i % Math.max(1, Math.floor(days.length / 240)) === 0)
     .map((d) => ({ x: fmtD(d.date, { day: "numeric", month: "short" }), bal: Math.round(eff(d)) }));
-  /* Toplam varlık serisi: Nakit Haritası ile AYNI örnekleme (aynı ufuk, aynı x ekseni). */
+  /* Varlık ve borç serisi (Faz 33 Toplam Varlık): Nakit modu ile AYNI örnekleme. */
   const varlik = days
     .filter((_, i) => i % Math.max(1, Math.floor(days.length / 240)) === 0)
     .map((d) => ({
@@ -83,6 +117,7 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAcc
   const varlikNegatif = varlik.some((r) => r.worth < 0);
   const varlikSon = varlik.at(-1);
   const worthDelta = varlikSon && varlik[0] ? varlikSon.worth - varlik[0].worth : 0;
+  const ufuk = data.settings.horizon || "6";
   const upcoming = days.filter((d) => d.ev.length).slice(0, 20)
     .flatMap((d) => d.ev.map((e) => ({ ...e, date: d.date }))).slice(0, 6);
   const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -90,8 +125,8 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAcc
   const runwayDay = days.find((d) => eff(d) < 0);
   const runwayIn = runwayDay ? Math.round((runwayDay.date.getTime() - today.getTime()) / 86_400_000) : null;
   const depositsValue = data.deposits.reduce((s, d) => s + depositValueOn(d, today), 0);
-  /* Dağılım BÜYÜKTEN KÜÇÜĞE: "paramın çoğu nerede" sorusu listenin ilk satırında cevaplanmalı;
-     sabit sıra (nakit → türler → vadeli) bunu tesadüfe bırakıyordu. */
+  /* Dağılım BÜYÜKTEN KÜÇÜĞE (eski Varlık Dağılımı halkasının bilgisi — artık net varlık kartındaki
+     şeritte): "paramın çoğu nerede" sorusu ilk sırada cevaplanmalı. Pay işaretsizdir (fmtPay). */
   const alloc = [
     { name: "Nakit", value: Math.max(0, cash) },
     ...Object.entries(pos.reduce((m, p) => {
@@ -100,37 +135,26 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAcc
     { name: "Vadeli", value: depositsValue },
   ].filter((a) => a.value > 0).sort((a, b) => b.value - a.value);
   const allocTotal = alloc.reduce((s, a) => s + a.value, 0);
-  /* Hero sparkline NET VARLIK izler — üstündeki rakamın ta kendisi. Eskiden likit nakit
-     eğrisiydi: "Net Varlık" başlığının altında nakit eğrisi çizmek, kart borcu eriyip
-     portföy dururken düşen bir çizgi gösterebiliyordu. `worth` projection.ts'te. */
-  const sparkVals = days.length >= 2
-    ? days.filter((_, i) => i % Math.max(1, Math.floor(days.length / 56)) === 0).map((d) => d.worth)
-    : [];
-  const sp = sparkPath(sparkVals, 560, 90, 6);
 
-  const kpis: { name: string; color: string; val: string; sub: string; neg?: boolean }[] = [
-    { name: "Nakit", color: "var(--type-nakit)", val: m(summary.cash), sub: `${summary.accountCount} hesap` },
-    { name: "Portföy", color: T.acc, val: m(summary.portValueTry), sub: summary.portTypes.length ? summary.portTypes.join(" · ") : "henüz işlem yok" },
-    { name: "Kart Borcu", color: T.neg, neg: summary.cardDebt > 0, val: (summary.cardDebt > 0 ? "−" : "") + m(summary.cardDebt), sub: summary.cardsWaiting > 0 ? `${summary.cardsWaiting} ekstre bekliyor` : "borç yok" },
-    { name: "Kredi Borcu", color: T.neg, neg: summary.loanDebt > 0, val: (summary.loanDebt > 0 ? "−" : "") + m(summary.loanDebt), sub: summary.loansActive > 0 ? `${summary.loansActive} aktif kredi` : "borç yok" },
+  const kpis: { name: string; color: string; val: string; sub: string; neg?: boolean; tab: TabKey }[] = [
+    { name: "Nakit", color: "var(--type-nakit)", val: m(summary.cash), sub: `${summary.accountCount} hesap`, tab: "hesaplar" },
+    { name: "Portföy", color: "var(--type-etf)", val: m(summary.portValueTry), sub: summary.portTypes.length ? summary.portTypes.join(" · ") : "henüz işlem yok", tab: "portfoy" },
+    { name: "Kart borcu", color: "color-mix(in srgb, var(--neg) 50%, var(--surface))", neg: summary.cardDebt > 0, val: (summary.cardDebt > 0 ? "−" : "") + m(summary.cardDebt), sub: summary.cardsWaiting > 0 ? `${summary.cardsWaiting} ekstre bekliyor` : "borç yok", tab: "kart" },
+    { name: "Kredi borcu", color: T.neg, neg: summary.loanDebt > 0, val: (summary.loanDebt > 0 ? "−" : "") + m(summary.loanDebt), sub: summary.loansActive > 0 ? `${summary.loansActive} aktif kredi` : "borç yok", tab: "plan" },
   ];
 
-  /* Kurulum eksikleri (Faz 16/17 opt-in yetenekleri): kullanıcı kurmadıysa özellikler atıl
-     kalıyor ve uygulama bunu hiç söylemiyordu. Kural engine'de (setupGaps), burası yalnız
+  const [mod, setMod] = React.useState<"nakit" | "varlik">("nakit");
+  /* Kurulum eksikleri (Faz 16/17 opt-in yetenekleri): kural engine'de (setupGaps), burası yalnız
      gösterir; kapatılan uyarı localStorage'da saklanır (kendi kararı kalıcı olsun). */
-  /* Mobilde sekmelenen ikili kart (masaüstünde ikisi de görünür, bu durum kullanılmaz) */
-  const [duo, setDuo] = React.useState<"alokasyon" | "yaklasan">("alokasyon");
   const [dismissed, setDismissed] = React.useState<string[]>(
     () => (localStorage.getItem(SETUP_DISMISS_KEY) || "").split(",").filter(Boolean),
   );
   const gaps = setupGaps(data, keyOf(new Date())).filter((g) => !dismissed.includes(g.key));
+  const [acikDetay, setAcikDetay] = React.useState<string | null>(null);
 
   /* Faz 36 — KAÇIRILAN KURUMSAL OLAYLAR. Kural engine'de (kurumsalOneriler); burası yalnız
-     gösterir ve önden dolu formu açar. Kayıt YAZILMAZ: adet kullanıcının defteridir, bedelsizi
-     onun adına yazmak "portföyün düzeldi" diye yanlış bir sayı üretebilirdi (Yahoo'nun oranı
-     yanlışsa ya da hisse aracı kurumda farklı işlendiyse).
-     `dismissed` ile AYNI kapatma kutusunu kullanır ama ayrı anahtar alanı (`ca:SYM:TARİH`):
-     "ilgilenmiyorum" demek kalıcı olmalı, yoksa kart her açılışta geri gelir. */
+     gösterir ve önden dolu formu açar. Kayıt YAZILMAZ: adet kullanıcının defteridir.
+     `dismissed` ile AYNI kapatma kutusunu kullanır ama ayrı anahtar alanı (`ca:…`). */
   const olaylar = React.useMemo(() => kurumsalOneriler(data.trades, data.corporate_actions ?? [], {
     dripSymbols: dripSet(data.settings),
     priceHistory: data.price_history,
@@ -138,431 +162,322 @@ export function Ozet({ data, days, pos, cash, rates, reload, summary, m, onGoAcc
   }), [data]);
   const olayKey = (o: KurumsalOneri) => `ca:${o.kind}:${o.asset_type}:${o.symbol}:${o.date}`;
   const gorunenOlaylar = olaylar.filter((o) => !dismissed.includes(olayKey(o)));
-  /* Kart UZUNLUĞU sınırlanır: kaynak (`corporate_actions`) zamanla büyüyen bir dizi ve
-     kaçırılan kayıtlar birikiyor — gerçek veride 9 kayıtsız temettü çıkmıştı, yani kart
-     mobilde ~1000px'e uzuyor ve Özet'in kendisini aşağı itiyordu. Dilim 3, çünkü bu bir liste
-     ekranı değil bir UYARI: amacı "eksik var, şuradan başla" demek. `useSayfalama` + `DahaFazla`
-     ev kuralı (kaç kaydın gizlendiği HER ZAMAN yazılır); 3'ün altında denetim hiç çizilmez. */
+  /* Liste UZUNLUĞU sınırlanır (gerçek veride 9 kayıtsız temettü çıkmıştı): bu bir uyarı, liste
+     ekranı değil. `useSayfalama` + `DahaFazla` ev kuralı. */
   const sOlay = useSayfalama(gorunenOlaylar, 3, dismissed.length);
   const dismiss = (key: string) => {
     const next = [...dismissed, key];
     setDismissed(next);
     localStorage.setItem(SETUP_DISMISS_KEY, next.join(","));
   };
+  /* Mobilde kurulum önerileri katlı başlar: düzeltme (eksik kayıt) öneriden önce gelir.
+     Düzeltme yoksa açık başlar — yoksa kart boş bir başlıktan ibaret kalırdı. */
+  const [kurAcik, setKurAcik] = React.useState(() => gorunenOlaylar.length === 0);
+  const ikiGrup = gorunenOlaylar.length > 0 && gaps.length > 0;
+
+  const tooltipStil = { background: T.panel2, border: `1px solid ${T.line}`, borderRadius: 8, fontFamily: T.mono, fontSize: 12 };
+  const eksen = { fill: T.mut, fontSize: 10, fontFamily: T.mono };
 
   return (<>
-    <div className="hero-grid">
-      <div style={{ ...css.card, display: "flex", flexDirection: "column", padding: "24px 26px" }}>
-        <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase", color: T.mut3 }}>Net Varlık</div>
-        <div className="nw-value" style={{ ...css.mono, fontSize: 44, fontWeight: 600, letterSpacing: "-0.02em", marginTop: 8, lineHeight: 1 }}>{m(summary.netWorthTry)}</div>
-        <div style={{ fontSize: 12.5, color: T.mut3, marginTop: 8 }}>nakit + portföy{summary.depositsValueTry > 0 ? " + vadeli" : ""} − kart borcu − kredi borcu</div>
-        {sp.line && (
-          <svg viewBox="0 0 560 90" preserveAspectRatio="none" style={{ width: "100%", height: 66, marginTop: "auto", overflow: "visible" }}>
-            <defs><linearGradient id="nwg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={T.acc} stopOpacity={0.22} /><stop offset="100%" stopColor={T.acc} stopOpacity={0} /></linearGradient></defs>
-            <path d={sp.area} fill="url(#nwg)" />
-            <path d={sp.line} fill="none" stroke={T.acc} strokeWidth={2} vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        )}
-      </div>
-      {/* kpi-grid: mobilde tek sütuna inmez, 2×2 kalır (bkz. App.tsx medya sorgusu) */}
-      <div className="grid2 kpi-grid">
-        {kpis.map((k) => (
-          <div key={k.name} className="kpi-card" style={{ ...css.card, padding: "16px 18px" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, fontWeight: 500, color: T.mut }}>
-              <span style={{ width: 8, height: 8, borderRadius: 3, background: k.color, flexShrink: 0 }} />{k.name}
-            </div>
-            <div className="kpi-val" style={{ ...css.mono, fontSize: 21, fontWeight: 600, letterSpacing: "-0.01em", whiteSpace: "nowrap", marginTop: 7, color: k.neg ? T.neg : T.text }}>{k.val}</div>
-            <div className="kpi-sub" style={{ fontSize: 11.5, color: T.mut3, marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{k.sub}</div>
+    {/* ————— NET VARLIK + KUTULAR —————
+        Kutular eski yerleşimle durur (öğrenilmiş yer); eski hero eğrisinin yerinde "varlıkların
+        nerede" şeridi var — Varlık Dağılımı halkasının bilgisi, ayrı bir kart açmadan. */}
+    <div className="ozet-ust">
+      <div style={{ ...css.card, display: "flex", flexDirection: "column", padding: "22px 24px" }}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 14, color: T.mut }}>Net varlık</div>
+            <div className="nw-value" style={{ ...css.mono, fontSize: 42, fontWeight: 600, letterSpacing: "-0.02em", marginTop: 4, lineHeight: 1.05, color: summary.netWorthTry < 0 ? T.neg : T.text }}>{m(summary.netWorthTry)}</div>
+            <div className="desktop-only" style={{ fontSize: 12.5, color: T.mut, marginTop: 6 }}>nakit + portföy{summary.depositsValueTry > 0 ? " + vadeli" : ""} − kart borcu − kredi borcu</div>
           </div>
-        ))}
-      </div>
-    </div>
-
-    {/* Kaçırılan kurumsal olaylar — kurulum kartının ÜSTÜNDE, çünkü bu bir öneri değil
-        DÜZELTMEdir: kaydedilmezse portföyün adedi eksik kalır ve K/Z yanlış okunur.
-        Kurulum kartı "şu özelliği de kurabilirsin" der; bu "defterinde eksik var" der.
-
-        DÜZEN (Faz 37'de elden geçti — ilk hâli dağınıktı ve kullanıcı "hiç şık durmamış"
-        dedi). Ölçülen kusurlar ve karşılıkları:
-        · Başlık 390px'te tam satırı yiyordu (41 karakter, BÜYÜK HARF + harf aralığı) → kısaldı,
-          sayı ayrı bir rozete çıktı.
-        · İki olay arasında hiçbir ayırıcı yoktu; "Bedelsizi kaydet" düğmesinin hangi olaya ait
-          olduğu görünmüyordu → her olay kendi bloğu, aralarında çizgi.
-        · Tarih HAM ISO idi ("2026-08-29") — uygulamanın başka hiçbir yerinde öyle yazmıyor.
-        · Her satır kendi içinde "Kaydetmezsen portföyün eksik görünür" ve "(stopaj düşülmemiş)"
-          diyordu; iki olayda aynı cümle iki kez okunuyor ve satırı üç sıraya sarıyordu → ikisi
-          de KART DİBİNE, bir kez yazılan nota indi (brüt notu yalnız temettü varsa çıkar).
-        · Kart kenarlığı + başlık + iki düğme hep marka moruydu; mor "sıradaki eylem" için
-          ayrılmıştır (Faz 24 kural 2) → tek birincil eylem ("Kaydet") mor kaldı, tür rozeti
-          kendi rengini aldı, ikincil eylem sade ghost. */}
-    {gorunenOlaylar.length > 0 && (
-      /* Kenarlık/başlık/sayaç NÖTR (kurulum kartıyla aynı dil). Yukarıdaki not Faz 37'de
-         yazıldı ama o commit yalnız ikincil düğmeyi sadeleştirmişti; üç mor öğe kalmıştı ve
-         "Kaydet" yine öne çıkmıyordu. */
-      <div style={{ ...css.card, padding: 14 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-          <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: T.mut3 }}>
-            Defterinde eksik kayıt
-          </span>
-          <span style={{
-            ...css.mono, fontSize: 11, fontWeight: 700, color: T.mut, background: T.panel2,
-            borderRadius: 20, padding: "1px 7px", lineHeight: 1.6,
-          }}>{gorunenOlaylar.length}</span>
-        </div>
-        {sOlay.gorunen.map((o, i) => {
-          const bedelsiz = o.kind === "bedelsiz";
-          /* Tür rozeti kendi rengini taşır: temettü para GİRİŞİdir (yeşil), bedelsiz adet
-             değişimidir (mavi). Marka moru burada kullanılmaz. */
-          const renk = bedelsiz ? "var(--cat-1)" : T.pos;
-          return (
-            <div key={olayKey(o)} className="ui-row" style={{
-              display: "flex", alignItems: "center", columnGap: 8, rowGap: 3, flexWrap: "wrap",
-              padding: "9px 0 0", borderBottom: "none",
-              ...(i > 0 ? { borderTop: `1px solid ${T.line}`, marginTop: 10 } : {}),
-            }}>
-              <span className="row-lead" style={{
-                fontSize: 10, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase",
-                color: renk, border: `1px solid ${renk}`, borderRadius: 6, padding: "2px 7px", flexShrink: 0,
-              }}>{bedelsiz ? "bedelsiz" : "temettü"}</span>
-              <span className="row-title" style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "baseline", gap: 7 }}>
-                <span style={{ ...css.mono, fontSize: 13.5, fontWeight: 700 }}>{o.symbol}</span>
-                <span style={{ fontSize: 11.5, color: T.mut3, whiteSpace: "nowrap" }}>
-                  {fmtD(parseD(o.date), { day: "numeric", month: "short", year: "numeric" })}
-                </span>
-              </span>
-              <button className="row-end" title="Bu olayı bir daha gösterme" onClick={() => dismiss(olayKey(o))}
-                style={{ background: "none", border: "none", color: T.mut3, cursor: "pointer", fontSize: 15, lineHeight: 1, padding: "4px 2px", minHeight: 0 }}>×</button>
-              <span className="row-break" aria-hidden="true" />
-              {/* Açıklama TEK satır ve kendi sırasında (flexBasis:100%): düğmelerle aynı sıraya
-                  girseydi 390px'te ikisi de kırpılırdı. */}
-              <div style={{ flexBasis: "100%", fontSize: 12, color: T.mut, lineHeight: 1.5 }}>
-                {bedelsiz
-                  ? <><b>{fmtAdet(o.qtyBefore)}</b> adet → <b>+{fmtAdet(o.qty)}</b> adet eklenmeli</>
-                  : <><b>{fmtAdet(o.qty)}</b> adet × {fmtMoney(o.perShare, o.currency, true)} = <b>{fmtMoney(o.amount, o.currency, true)}</b> brüt</>}
-                {!bedelsiz && o.reinvest && (
-                  <span style={{ display: "block", color: T.mut3 }}>
-                    geri yatırım: <b>{fmtAdet(o.reinvest.qty)}</b> adet @ {fmtMoney(o.reinvest.price, o.currency, true)}
-                  </span>
-                )}
-                {/* DRIP açık ama ödeme gününün fiyatı yok (sunucu o gün kapalıydı / geçmiş
-                    doldurulamadı): adet UYDURULMAZ, ama sessiz de kalınmaz — yoksa DRIP'i açan
-                    kullanıcı özelliği bozuk sanıyordu. */}
-                {!bedelsiz && o.drip && !o.reinvest && (
-                  <span style={{ display: "block", color: T.mut3 }}>
-                    geri yatırım: o günün fiyatı yok — alışı tutarla gir, adedi fiyattan hesaplanır
-                  </span>
-                )}
+          {/* "N ay sonra" = eski Toplam Varlık rozetinin rakamı (Day.worth, ufkun son günü) —
+              net varlığın yönünü, hero eğrisinin söylediği şeyi tek rakamla söyler. */}
+          {varlikSon && varlik.length > 1 && (
+            <div style={{ textAlign: "right", paddingTop: 2, flexShrink: 0 }}>
+              <div style={{ fontSize: 12.5, color: T.mut }}>{ufuk} ay sonra</div>
+              <div style={{ ...css.mono, fontSize: 15, fontWeight: 500, color: worthDelta >= 0 ? T.pos : T.neg, whiteSpace: "nowrap" }}>
+                {worthDelta >= 0 ? "↗" : "↘"} {m(varlikSon.worth)}
               </div>
-              <div style={{ flexBasis: "100%", display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap", marginTop: 2 }}>
-                {!bedelsiz && o.drip && (
-                  <button style={{ ...css.ghost, padding: "6px 12px", fontSize: 12 }}
-                    title="Temettü tutarıyla aynı hisseden alış kaydı aç (önce temettüyü kaydet)"
-                    onClick={() => onKurumsalOlay(o.reinvest
-                      ? {
-                        asset_type: o.asset_type, symbol: o.symbol, side: "ALIŞ",
-                        qty: o.reinvest.qty, price: o.reinvest.price, date: o.date,
-                      }
-                      /* fiyat yok → qty VERİLMEZ, form tutar modunda açılır (TradeForm'un
-                         `prefill.qty == null` kuralı); adedi kullanıcının girdiği fiyattan türer */
-                      : { asset_type: o.asset_type, symbol: o.symbol, side: "ALIŞ", amount: o.amount, date: o.date })}>Geri yatır</button>
-                )}
-                <button style={{ ...css.ghost, padding: "6px 12px", fontSize: 12, color: T.acc, borderColor: T.acc }}
-                  onClick={() => onKurumsalOlay(bedelsiz
-                    ? { asset_type: o.asset_type, symbol: o.symbol, side: "BEDELSİZ", qty: o.qty, price: 0, date: o.date }
-                    /* Temettüde `price` = HİSSE BAŞINA tutar (formun kendi temsili), `qty` = adet.
-                       Tutar alanı ikisinin çarpımıdır; brüt geldiği için kullanıcı düzeltebilsin
-                       diye form adet modunda açılır. */
-                    : { asset_type: o.asset_type, symbol: o.symbol, side: "TEMETTÜ", qty: o.qty, price: o.perShare, date: o.date })}>
-                  Kaydet
-                </button>
-              </div>
-            </div>
-          );
-        })}
-        <DahaFazla s={sOlay} ad="olay" yon="fazla" />
-        {/* Kart dibinde BİR KEZ: eskiden her satırda tekrarlanıyordu. Brüt notu yalnız listede
-            temettü varsa çıkar — bedelsizde stopaj diye bir şey yok, yazmak gürültü olurdu. */}
-        <div style={{ fontSize: 11, color: T.mut3, marginTop: 12, lineHeight: 1.5 }}>
-          Kaydetmezsen portföyünün adedi eksik kalır ve düşüş zarar gibi okunur.
-          {gorunenOlaylar.some((o) => o.kind === "temettu") &&
-            " Temettü tutarı brüttür (stopaj düşülmemiş) — hesabına giren net tutarı formda düzeltebilirsin."}
-        </div>
-      </div>
-    )}
-
-    {/* Boş hesap: sihirbaz "Sonra" ile kapatılmış olabilir. Bu durumda Özet'teki her kart boştur
-        ve tek anlamlı eylem kurulumdur — setupGaps de hiç hesap yokken bilerek susar. */}
-    {kurulumGerekli(data) && (
-      <div style={{ ...css.card, padding: 16, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-        <div style={{ flex: 1, minWidth: 200 }}>
-          <div style={{ fontWeight: 650, fontSize: 15 }}>Birkaç soruda kuralım</div>
-          <div style={{ fontSize: 12.5, color: T.mut, marginTop: 3 }}>Hesaplar, gelir, kartlar, düzenli giderler ve krediler — sonunda ay sonunda ne kalacağını görürsün.</div>
-        </div>
-        <button style={css.btn} onClick={onKurulum}>Kurulumu başlat</button>
-      </div>
-    )}
-
-    {/* Kurulum uyarıları HERO'NUN ALTINDA. Üstteyken açılışta ilk görülen şey kullanıcının
-        net varlığı değil, yapmadığı işler oluyordu (mobilde ilk 450px'i yiyordu). Satır başına
-        tek sıra: başlık + detay + eylem; detay ikinci satırda, düğmeler sağda. */}
-    {gaps.length > 0 && (
-      <div style={{ ...css.card, padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
-        <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: T.mut3 }}>
-          Kurulumunu tamamla
-        </div>
-        {gaps.map((g) => (
-          <div key={g.key} className="ui-row" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: 0, borderBottom: "none" }}>
-            <div className="row-title" style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 600 }}>{g.title}</div>
-              <div style={{ fontSize: 11.5, color: T.mut, marginTop: 1, lineHeight: 1.45 }}>{g.detail}</div>
-            </div>
-            <button className="row-end" title="Bu uyarıyı bir daha gösterme" onClick={() => dismiss(g.key)}
-              style={{ background: "none", border: "none", color: T.mut3, cursor: "pointer", fontSize: 15, lineHeight: 1, padding: "4px 2px", minHeight: 0 }}>×</button>
-            <span className="row-break" aria-hidden="true" />
-            <button style={{ ...css.ghost, padding: "7px 13px", fontSize: 12.5, color: T.acc, borderColor: T.acc }}
-              onClick={() => (g.tab === "hesaplar" ? onGoAccounts() : onGoPortfolio())}>{g.action}</button>
-          </div>
-        ))}
-      </div>
-    )}
-
-    <div style={{ ...css.card, paddingBottom: 6 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-        <div style={{ fontWeight: 700, fontSize: 15 }}>Nakit Haritası</div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {days.length > 0 && (
-            <div style={{
-              background: eff(minDay) < 0 ? T.negSoft : T.panel2, border: `1px solid ${eff(minDay) < 0 ? T.neg : T.line}`,
-              borderRadius: 20, padding: "4px 12px", fontSize: 12, ...css.mono,
-            }}>
-              en düşük: {fmtD(minDay.date, { day: "numeric", month: "short" })} ·{" "}
-              <span style={{ color: eff(minDay) < 0 ? T.neg : T.pos }}>{tl.format(Math.round(eff(minDay)))}</span>
-            </div>
-          )}
-          <select style={{ ...css.input, width: 90, padding: "5px 8px", fontSize: 12 }} value={data.settings.horizon || "6"}
-            onChange={async (e) => { await api.put("settings", { horizon: e.target.value }); reload(); }}>
-            {[3, 6, 12, 24].map((m) => <option key={m} value={m}>{m} ay</option>)}
-          </select>
-        </div>
-      </div>
-      <Aciklama k="likit-nakit" label="likit nakit nedir?">
-        Likit nakit = hesap bakiyeleri + “nakit say” işaretli para piyasası fonları. Portföy, hisse ve vadeli mevduat buna dahil değildir (onlar toplam varlıkta).
-      </Aciklama>
-      {runwayDay ? (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, color: runwayIn! <= 0 ? T.neg : T.warn, background: runwayIn! <= 0 ? T.negSoft : T.warnSoft, borderRadius: 10, padding: "8px 12px", fontSize: 13, marginTop: 8, fontWeight: 500 }}>
-          {runwayIn! <= 0
-            ? <>⚠ Likit nakitiniz şu an ekside ({tl.format(Math.round(eff(runwayDay)))}). Gelir kalemi girmemiş veya bir hesap bakiyesi eksi olabilir.</>
-            : <>⚠ Likit nakitiniz <b>{fmtD(runwayDay.date, { day: "numeric", month: "long" })}</b> dolayında tükeniyor (~{runwayIn} gün sonra).</>}
-        </div>
-      ) : (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, color: T.pos, background: T.posSoft, borderRadius: 10, padding: "8px 12px", fontSize: 13, marginTop: 8, fontWeight: 500 }}>
-          ✓ Seçili {data.settings.horizon || "6"} ay boyunca likit nakitiniz eksiye düşmüyor.
-        </div>
-      )}
-      {/* Ödeme öncesi fon boz önerisi — kullanıcının gerçek ritüelinin tek tıkla karşılığı.
-          Etkin nakit (bal + fon) değil SAF nakit eksiye düştüğünde çıkar: yapılacak iş zaten
-          fondaki parayı nakde çevirmek. Tıklayınca TradeForm tutar modunda önden dolu açılır. */}
-      {sell && (
-        <div style={{
-          display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 8,
-          background: T.panel2, border: `1px solid ${T.acc}`, borderRadius: 10, padding: "10px 12px",
-        }}>
-          <div style={{ flex: 1, minWidth: 220, fontSize: 13 }}>
-            <b>{fmtD(sell.gap.firstNegative.date, { day: "numeric", month: "long" })}</b> günü nakitin{" "}
-            <span style={{ ...css.mono, color: T.neg }}>{tl.format(Math.round(sell.gap.amount))}</span> açık veriyor.{" "}
-            <b>{sell.fund.symbol}</b> fonundan <span style={{ ...css.mono, color: T.acc }}>{tl.format(Math.round(sell.amount))}</span> bozarsan kapanır.
-            <div style={{ fontSize: 11.5, color: T.mut3, marginTop: 2 }}>
-              en geç {fmtD(sell.sellBy, { day: "numeric", month: "long" })} · fonda{" "}
-              {tl.format(Math.round(sell.fund.valueTry))} var
-              {!sell.covered && <span style={{ color: T.warn }}> · fon açığın tamamını kapatmıyor</span>}
-            </div>
-          </div>
-          <button style={{ ...css.btn, padding: "8px 14px", fontSize: 13 }} onClick={() => onSellFund({
-            asset_type: "FON", symbol: sell.fund.symbol, side: "SATIŞ",
-            amount: +sell.amount.toFixed(2),
-            date: keyOf(sell.sellBy), // yerel gün — toISOString UTC'ye kaydırıp bir gün geri alırdı
-            account_id: sellAccountId,
-          })}>Fon boz</button>
-        </div>
-      )}
-      <div style={{ height: 220, marginTop: 8 }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={chart} margin={{ top: 8, right: 4, left: 4, bottom: 0 }}>
-            <defs>
-              <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={T.acc} stopOpacity={0.45} />
-                <stop offset="100%" stopColor={T.acc} stopOpacity={0.02} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid stroke={T.line} strokeDasharray="2 6" vertical={false} />
-            <XAxis dataKey="x" tick={{ fill: T.mut, fontSize: 10, fontFamily: T.mono }} tickLine={false} axisLine={{ stroke: T.line }} minTickGap={40} />
-            <YAxis tick={{ fill: T.mut, fontSize: 10, fontFamily: T.mono }} tickLine={false} axisLine={false} width={52}
-              tickFormatter={(v: number) => (Math.abs(v) >= 1000 ? `${Math.round(v / 1000)}k` : String(v))} />
-            <Tooltip contentStyle={{ background: T.panel2, border: `1px solid ${T.line}`, borderRadius: 8, fontFamily: T.mono, fontSize: 12 }}
-              labelStyle={{ color: T.mut }} formatter={(v: number) => [tl.format(v), "Likit nakit"]} />
-            <ReferenceLine y={0} stroke={T.neg} strokeDasharray="4 4" />
-            <Area type="monotone" dataKey="bal" stroke={T.acc} strokeWidth={2} fill="url(#g)" />
-          </AreaChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
-
-    {/* ————— TOPLAM VARLIK (Faz 33) —————
-        Özet'te büyüklüğe dair tek grafik Nakit Haritası'ydı ve o LİKİDİTE sorusunu
-        cevaplar ("param yeter mi") — portföy, vadeli ve borç oraya hiç girmez. "Ne
-        kadarım var, nereye gidiyor" sorusunun hiçbir grafiği yoktu: hero tek bir rakam
-        veriyor, altındaki sparkline ise (düzeltilene dek) nakit eğrisiydi.
-
-        İKİ seri: dolu alan = TOPLAM VARLIK (nakit + portföy + vadeli), çizgi = NET VARLIK
-        (borç düşülmüş). İkisi de motorda hesaplanır (`Day.total` / `Day.worth`) ve net
-        varlık hero'daki rakamla tanımı gereği AYNIDIR — ayrı bir tanım uydurmak aynı
-        soruya iki cevap veren iki ekran demekti (bkz. Faz 31'in `portfolioFlow` notu).
-        Aradaki boşluk BORCUN kendisidir; kapandıkça borç erimiş demektir.
-
-        Denenip BIRAKILAN tasarım — nakit/portföy/vadeli yığını: (1) nakit bandı, hemen
-        üstteki Nakit Haritası'nın zaten çizdiği eğrinin üçüncü kopyasıydı; (2) portföy
-        (marka moru) ile vadeli (--cat-5) neredeyse aynı mor — ölçüldü: #5B5BD6 / #5A4EC2,
-        yığında ayırt edilemiyordu; (3) marka moru bu panelde "sıradaki eylem"e ayrılmıştır
-        (Faz 24 kural 2). Dağılımı zaten hemen altındaki Varlık Dağılımı halkası, üstelik
-        oranlarıyla söylüyor.
-
-        Eğrinin eğimi PİYASA DEĞİLDİR: portföy bugünkü fiyatla taşınır, ileriye dönük fiyat
-        tahmini yoktur — eğimi yapan şey para akışı, borcun erimesi ve vadeli faizidir. */}
-    {varlik.length > 1 && (
-      <div style={{ ...css.card, paddingBottom: 6 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-          <div style={{ fontWeight: 700, fontSize: 15 }}>Toplam Varlık</div>
-          {varlikSon && (
-            <div style={{
-              background: T.panel2, border: `1px solid ${T.line}`, borderRadius: 20,
-              padding: "4px 12px", fontSize: 12, ...css.mono,
-            }}>
-              {data.settings.horizon || "6"} ay sonra net:{" "}
-              <span style={{ color: worthDelta >= 0 ? T.pos : T.neg }}>{tl.format(varlikSon.worth)}</span>
             </div>
           )}
         </div>
-        <Aciklama k="toplam-varlik" label="bu grafik neyi gösteriyor?">
-          Dolu alan <b>toplam varlığın</b>: nakit + portföy + vadeli mevduat. Üstündeki çizgi
-          <b> net varlığın</b> — aynı toplamdan kart ve kredi borcu düşülmüş hâli, yani en üstteki
-          rakamla aynı tanım. <b>Aradaki boşluk borcundur</b>; kapandıkça borç erimiş demektir.
-          Borç ödemek net varlığı değiştirmez (nakit azalır, borç da azalır) — çizgiyi yukarı
-          taşıyan şey birikimdir. Portföy <b>bugünkü fiyatla</b> taşınır; ileriye dönük bir fiyat
-          tahmini yoktur.
-        </Aciklama>
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 8, fontSize: 11.5, color: T.mut }}>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-            <span style={{ width: 9, height: 9, borderRadius: 3, background: T.acc, opacity: 0.55, flexShrink: 0 }} />Toplam varlık
-          </span>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-            <span style={{ width: 13, height: 2, borderRadius: 2, background: T.text, flexShrink: 0 }} />Net varlık
-          </span>
-          <span style={{ color: T.mut3 }}>aradaki boşluk = borç</span>
-        </div>
-        <div style={{ height: 220, marginTop: 8 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={varlik} margin={{ top: 8, right: 4, left: 4, bottom: 0 }}>
-              <defs>
-                <linearGradient id="tv" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={T.acc} stopOpacity={0.4} />
-                  <stop offset="100%" stopColor={T.acc} stopOpacity={0.04} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid stroke={T.line} strokeDasharray="2 6" vertical={false} />
-              <XAxis dataKey="x" tick={{ fill: T.mut, fontSize: 10, fontFamily: T.mono }} tickLine={false} axisLine={{ stroke: T.line }} minTickGap={40} />
-              <YAxis tick={{ fill: T.mut, fontSize: 10, fontFamily: T.mono }} tickLine={false} axisLine={false} width={52}
-                tickFormatter={(v: number) => (Math.abs(v) >= 1000 ? `${Math.round(v / 1000)}k` : String(v))} />
-              <Tooltip contentStyle={{ background: T.panel2, border: `1px solid ${T.line}`, borderRadius: 8, fontFamily: T.mono, fontSize: 12 }}
-                labelStyle={{ color: T.mut }} formatter={(v: number, n: string) => [tl.format(v), VARLIK_ETIKET[n] ?? n]} />
-              {varlikNegatif && <ReferenceLine y={0} stroke={T.neg} strokeDasharray="4 4" />}
-              <Area type="monotone" dataKey="total" stroke={T.acc} strokeWidth={2} fill="url(#tv)" />
-              <Line type="monotone" dataKey="worth" stroke={T.text} strokeWidth={2} dot={false} />
-            </ComposedChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-    )}
-
-    {/* İki kart masaüstünde YAN YANA, mobilde SEKMELİ tek kart (duo-*, App.tsx).
-        Alt alta iki tam kart mobilde ~400px yiyordu ve ikisi de "bir bakışta" bilgi;
-        aynı anda ikisine birden bakılmıyor. Masaüstünde sekme çubuğu hiç render edilmez. */}
-    {/* display'i BURADA verme: inline stil sınıf kuralını yener ve masaüstünde de görünürdü
-        (görünüyordu da — sekmeler çıkıyor, tıklamak bir şey değiştirmiyordu çünkü orada
-        iki kart zaten yan yana). Görünürlük tamamen .duo-tabs sınıfının işi. */}
-    <div className="duo-tabs" style={{ borderRadius: 10, overflow: "hidden", border: `1px solid ${T.line}`, marginBottom: -6 }}>
-      {([["alokasyon", "Varlık Dağılımı"], ["yaklasan", "Yaklaşan Hareketler"]] as const).map(([k, label]) => (
-        <button key={k} onClick={() => setDuo(k)} style={{
-          flex: 1, padding: "9px 10px", border: "none", cursor: "pointer", fontSize: 12.5, fontFamily: T.disp,
-          fontWeight: duo === k ? 700 : 500, background: duo === k ? T.panel : T.panel2, color: duo === k ? T.acc : T.mut,
-        }}>{label}</button>
-      ))}
-    </div>
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 14 }}>
-      <div className="duo-pane" data-on={duo === "alokasyon"} style={css.card}>
-        <div className="duo-baslik" style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Varlık Dağılımı</div>
-        {alloc.length === 0 ? <Empty>Hesap bakiyesi veya işlem ekleyin.</Empty> : (
-          /* Lejant ORAN + tutar verir. Yalnız tutar varken "ne kadarı nerede" sorusu
-             satırları kafadan toplamayı gerektiriyordu; oran pastanın zaten çizdiği
-             bilginin okunabilir hâli. Pay işaretsizdir (fmtPay) — "+%38,2" artış sanılır.
-             Dizilim sarmalı: 130px pasta + üç sütunluk satır dar kartta taşıyordu. */
-          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            <div style={{ width: 112, height: 112, flexShrink: 0 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={alloc} dataKey="value" innerRadius={32} outerRadius={52} strokeWidth={0}>
-                    {alloc.map((a) => <Cell key={a.name} fill={TYPE_COLORS[a.name] || T.mut} />)}
-                  </Pie>
-                  <Tooltip contentStyle={{ background: T.panel2, border: `1px solid ${T.line}`, borderRadius: 8, fontFamily: T.mono, fontSize: 12 }}
-                    formatter={(v: number, n: string) => [`${tl.format(Math.round(v))} · ${fmtPay(allocTotal > 0 ? v / allocTotal : 0)}`, n]} />
-                </PieChart>
-              </ResponsiveContainer>
+        {alloc.length > 0 && (
+          <div style={{ marginTop: "auto", paddingTop: 18, display: "grid", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "baseline", fontSize: 12.5, color: T.mut }}>
+              <span style={{ flex: 1 }}>Varlıkların nerede</span>
+              <span style={css.mono}>{m(allocTotal)}</span>
             </div>
-            <div style={{ flex: "1 1 150px", minWidth: 0, display: "grid", gap: 5 }}>
+            <div style={{ display: "flex", height: 12, gap: 2, borderRadius: 4, overflow: "hidden" }}>
               {alloc.map((a) => (
-                <div key={a.name} style={{ display: "flex", alignItems: "baseline", gap: 8, fontSize: 12 }}>
-                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    <span style={{ color: TYPE_COLORS[a.name] || T.mut }}>●</span> {a.name}
-                  </span>
-                  <span style={{ ...css.mono, fontWeight: 600 }}>{fmtPay(allocTotal > 0 ? a.value / allocTotal : 0)}</span>
-                  <span style={{ ...css.mono, color: T.mut3, fontSize: 11 }}>{tl.format(Math.round(a.value))}</span>
-                </div>
+                <span key={a.name} title={`${SINIF_ADI[a.name] ?? a.name} · ${fmtPay(a.value / allocTotal)} · ${tl.format(Math.round(a.value))}`}
+                  style={{ width: `${(a.value / allocTotal) * 100}%`, minWidth: 3, background: TYPE_COLORS[a.name] || T.mut }} />
+              ))}
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px", fontSize: 12.5, color: T.mut }}>
+              {alloc.map((a) => (
+                <span key={a.name} style={{ display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 2, background: TYPE_COLORS[a.name] || T.mut }} />
+                  {SINIF_ADI[a.name] ?? a.name} <b style={{ ...css.mono, color: T.text, fontWeight: 600 }}>{fmtPay(a.value / allocTotal)}</b>
+                </span>
               ))}
             </div>
           </div>
         )}
       </div>
-      <div className="duo-pane" data-on={duo === "yaklasan"} style={css.card}>
-        <div className="duo-baslik" style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Yaklaşan Hareketler</div>
-        {upcoming.length === 0 ? <Empty>Plan sekmesinden gelir/gider ekleyin.</Empty> : upcoming.map((e, i) => (
-          <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: i < upcoming.length - 1 ? `1px solid ${T.line}` : "none" }}>
-            <div style={{ fontSize: 13 }}>
-              <span style={{ ...css.mono, color: T.mut, marginRight: 8 }}>{fmtD(e.date, { day: "2-digit", month: "short" })}</span>{e.n}
-            </div>
-            <Money v={e.a} sign />
-          </div>
+      <div className="ozet-kpi">
+        {kpis.map((k) => (
+          <button key={k.name} className="ozet-kutu" onClick={() => onGo(k.tab)} style={{
+            ...css.card, padding: "16px 18px", textAlign: "left", cursor: "pointer", fontFamily: T.disp, color: T.text,
+            display: "flex", flexDirection: "column", gap: 6, minWidth: 0, borderRadius: 16,
+          }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13, color: T.mut }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: k.color, flexShrink: 0 }} />{k.name}
+            </span>
+            <span className="kpi-val" style={{ ...css.mono, fontSize: 22, fontWeight: 600, letterSpacing: "-0.01em", whiteSpace: "nowrap", color: k.neg ? T.neg : T.text }}>{k.val}</span>
+            <span className="kpi-sub" style={{ fontSize: 12, color: T.mut, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>{k.sub}</span>
+          </button>
         ))}
       </div>
     </div>
 
-
-    <div style={css.card}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-        <div>
-          <div style={{ fontWeight: 700, fontSize: 15 }}>Hesaplar</div>
-          <div style={{ fontSize: 12, color: T.mut3, marginTop: 2 }}>bakiye güncelleme ve vadeli mevduat Hesaplar sekmesinde</div>
+    {/* Boş hesap: sihirbaz "Sonra" ile kapatılmış olabilir. Bu durumda Özet'teki her kart boştur
+        ve tek anlamlı eylem kurulumdur — setupGaps de hiç hesap yokken bilerek susar. */}
+    {kurulumGerekli(data) && (
+      <div style={{ ...css.card, padding: 20, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <div style={{ fontWeight: 700, fontSize: 16 }}>Birkaç soruda kuralım</div>
+          <div style={{ fontSize: 14, color: T.mut, marginTop: 4, lineHeight: 1.45 }}>Hesaplar, gelir, kartlar, düzenli giderler ve krediler — sonunda ay sonunda ne kalacağını görürsün.</div>
         </div>
-        <button style={{ ...css.ghost, padding: "7px 13px" }} onClick={onGoAccounts}>Yönet →</button>
+        <button style={css.btn} onClick={onKurulum}>Kurulumu başlat</button>
       </div>
-      {data.accounts.length === 0
-        ? <Empty>Henüz hesap yok. Hesaplar sekmesinden ekleyebilirsin.</Empty>
-        : data.accounts.map((a, i) => (
-          <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 13, padding: "12px 0", borderBottom: i < data.accounts.length - 1 ? `1px solid ${T.line2}` : "none" }}>
-            <span style={{ width: 34, height: 34, borderRadius: 10, background: T.panel2, display: "grid", placeItems: "center", fontSize: 14, color: "var(--type-nakit)" }}>◈</span>
-            <div style={{ flex: 1, fontSize: 13.5, fontWeight: 500 }}>{a.name}</div>
-            <span style={{ ...css.mono, fontSize: 14, fontWeight: 500 }}>{m(hesapBakiyeleri.get(a.id) ?? 0)}</span>
+    )}
+
+    {/* ————— SENDEN BEKLEYENLER —————
+        Eski "Defterinde eksik kayıt" + "Kurulumunu tamamla" kartları TEK kartta, ama EŞİTLENMEDEN:
+        düzeltme (kaydedilmezse rakam yanlış) önce/solda, öneri (bir özelliği kur) sonra/sağda. */}
+    {(gorunenOlaylar.length > 0 || gaps.length > 0) && (
+      <div style={{ ...css.card, padding: "16px 22px 12px" }}>
+        <div style={{ fontWeight: 700, fontSize: 16 }}>Senden bekleyenler</div>
+        <div className={ikiGrup ? "ozet-bek" : undefined}>
+          {gorunenOlaylar.length > 0 && (
+            <div style={{ minWidth: 0 }}>
+              <div style={grpBaslik}>Defterinde eksik · {gorunenOlaylar.length}</div>
+              {sOlay.gorunen.map((o) => {
+                const bedelsiz = o.kind === "bedelsiz";
+                /* Tür rozeti kendi rengini taşır: temettü para GİRİŞİdir (yeşil), bedelsiz adet
+                   değişimidir (mavi). Marka moru burada kullanılmaz. */
+                const renk = bedelsiz ? "var(--cat-1)" : T.pos;
+                const kaydet = () => onKurumsalOlay(bedelsiz
+                  ? { asset_type: o.asset_type, symbol: o.symbol, side: "BEDELSİZ", qty: o.qty, price: 0, date: o.date }
+                  /* Temettüde `price` = HİSSE BAŞINA tutar (formun kendi temsili), `qty` = adet. */
+                  : { asset_type: o.asset_type, symbol: o.symbol, side: "TEMETTÜ", qty: o.qty, price: o.perShare, date: o.date });
+                const geriYatir = o.kind === "bedelsiz" ? null : ((t) => () => onKurumsalOlay(t.reinvest
+                  ? { asset_type: t.asset_type, symbol: t.symbol, side: "ALIŞ", qty: t.reinvest.qty, price: t.reinvest.price, date: t.date }
+                  /* fiyat yok → qty VERİLMEZ, form tutar modunda açılır */
+                  : { asset_type: t.asset_type, symbol: t.symbol, side: "ALIŞ", amount: t.amount, date: t.date }))(o);
+                return (
+                  <div key={olayKey(o)} style={{ borderTop: `1px solid ${T.line2}`, padding: "8px 0 6px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{
+                        fontSize: 10, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", flexShrink: 0,
+                        color: renk, background: `color-mix(in srgb, ${renk} 12%, transparent)`, borderRadius: 5, padding: "2px 6px",
+                      }}>{bedelsiz ? "bedelsiz" : "temettü"}</span>
+                      <span style={{ ...css.mono, fontSize: 14, fontWeight: 600 }}>{o.symbol}</span>
+                      <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: T.mut, whiteSpace: "nowrap" }}>
+                        {fmtD(parseD(o.date), { day: "numeric", month: "short", year: "numeric" })}
+                      </span>
+                      <Kapat onClick={() => dismiss(olayKey(o))} />
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 2 }}>
+                      <div style={{ flex: "1 1 200px", minWidth: 0, fontSize: 13, color: T.text, lineHeight: 1.5 }}>
+                        {bedelsiz
+                          ? <><b style={css.mono}>{fmtAdet(o.qtyBefore)}</b> adet → <b style={css.mono}>+{fmtAdet(o.qty)}</b> adet eklenmeli</>
+                          : <><span style={css.mono}>{fmtAdet(o.qty)}</span> adet × <span style={css.mono}>{fmtMoney(o.perShare, o.currency, true)}</span> = <b style={css.mono}>{fmtMoney(o.amount, o.currency, true)}</b> brüt</>}
+                        {!bedelsiz && o.reinvest && (
+                          <span style={{ display: "block", color: T.mut, fontSize: 12.5 }}>
+                            geri yatırım: <span style={css.mono}>{fmtAdet(o.reinvest.qty)}</span> adet @ <span style={css.mono}>{fmtMoney(o.reinvest.price, o.currency, true)}</span>
+                          </span>
+                        )}
+                        {/* DRIP açık ama ödeme gününün fiyatı yok: adet UYDURULMAZ, ama sessiz de kalınmaz */}
+                        {!bedelsiz && o.drip && !o.reinvest && (
+                          <span style={{ display: "block", color: T.mut, fontSize: 12.5 }}>
+                            geri yatırım: o günün fiyatı yok — alışı tutarla gir, adedi fiyattan hesaplanır
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ display: "flex", gap: 10, marginLeft: "auto" }}>
+                        {!bedelsiz && o.drip && geriYatir && <Eylem ikincil onClick={geriYatir} title="Temettü tutarıyla aynı hisseden alış kaydı aç (önce temettüyü kaydet)">Geri yatır</Eylem>}
+                        <Eylem onClick={kaydet}>Kaydet</Eylem>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              <DahaFazla s={sOlay} ad="olay" yon="fazla" />
+              {/* Dip notunda BİR KEZ: eskiden her satırda tekrarlanıyordu. Brüt notu yalnız temettü varsa. */}
+              <div style={{ fontSize: 12, color: T.mut, lineHeight: 1.45, padding: "4px 0 6px" }}>
+                Kaydetmezsen adet eksik kalır ve düşüş zarar gibi okunur.
+                {gorunenOlaylar.some((o) => o.kind === "temettu") && " Temettü brüttür (stopaj düşülmemiş) — formda düzeltebilirsin."}
+              </div>
+            </div>
+          )}
+          {gaps.length > 0 && (
+            <div style={{ minWidth: 0 }}>
+              {/* masaüstünde başlık, mobilde katlanan başlık (App.tsx .kur-*) */}
+              <div className="kur-baslik" style={grpBaslik}>Kurulum önerisi · {gaps.length}</div>
+              <button className="kur-toggle" onClick={() => setKurAcik((a) => !a)} aria-expanded={kurAcik} style={{
+                alignItems: "center", gap: 8, width: "100%", background: "none", border: "none",
+                borderTop: gorunenOlaylar.length ? `1px solid ${T.line2}` : "none", padding: "12px 0",
+                cursor: "pointer", fontFamily: T.disp, fontSize: 14, color: T.text, textAlign: "left",
+              }}>
+                <span style={{ flex: 1 }}>Kurulum önerisi</span>
+                <span style={{ ...css.mono, fontSize: 12, padding: "1px 7px", borderRadius: 10, background: T.panel2, color: T.mut }}>{gaps.length}</span>
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke={T.mut} strokeWidth="1.6" strokeLinecap="round" style={{ transform: kurAcik ? "rotate(180deg)" : "none" }}><path d="M3 4.5l3 3 3-3" /></svg>
+              </button>
+              <div className="kur-liste" data-acik={kurAcik}>
+                {gaps.map((g) => (
+                  <div key={g.key} style={{ borderTop: `1px solid ${T.line2}`, padding: "6px 0" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ flex: 1, minWidth: 0, fontSize: 14 }}>{g.title}</span>
+                      <button aria-label="Neden?" title="Neden?" aria-expanded={acikDetay === g.key}
+                        onClick={() => setAcikDetay((k) => (k === g.key ? null : g.key))}
+                        style={{ background: "none", border: "none", color: acikDetay === g.key ? T.acc : T.mut, cursor: "pointer", padding: 6, display: "grid", placeItems: "center" }}>
+                        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="8" cy="8" r="6.5" /><path d="M8 7.2v4M8 4.8v.1" strokeLinecap="round" /></svg>
+                      </button>
+                      <Eylem onClick={() => onGo(g.tab as TabKey)}>{g.action}</Eylem>
+                      <Kapat onClick={() => dismiss(g.key)} />
+                    </div>
+                    {acikDetay === g.key && <div style={{ fontSize: 12.5, color: T.mut, lineHeight: 1.5, padding: "0 0 6px" }}>{g.detail}</div>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    )}
+
+    {/* ————— GRAFİK | YAKLAŞAN —————
+        Yan yana ve eşit yükseklikte: Yaklaşan listesi grafiğin basamaklarını (kira, maaş, ekstre)
+        açıklıyor. Grafik iki moddur: Nakit (eski Nakit Haritası) | Varlık ve borç (eski Toplam
+        Varlık, Faz 33) — aynı x ekseni ve ufukla iki ayrı kart çiziliyordu. */}
+    <div className="ozet-alt">
+      <div style={{ ...css.card, padding: "18px 22px 12px", display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <Secici ad="Grafik" deger={mod} sec={setMod} secenek={[{ v: "nakit", l: "Nakit" }, { v: "varlik", l: "Varlık ve borç" }]} />
+          <span style={{ flex: 1 }} />
+          {/* Ufuk KALICI bir ayardır (settings.horizon): Nakit Akışı'nın penceresini de değiştirir */}
+          <Secici ad="Ufuk" deger={ufuk} sec={async (v) => { await api.put("settings", { horizon: v }); reload(); }}
+            secenek={["3", "6", "12", "24"].map((v) => ({ v, l: `${v} ay` }))} />
+        </div>
+
+        {runwayDay ? (
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 8, color: runwayIn! <= 0 ? T.neg : T.warn, background: runwayIn! <= 0 ? T.negSoft : T.warnSoft, borderRadius: 10, padding: "9px 12px", fontSize: 14, lineHeight: 1.45 }}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" style={{ flexShrink: 0, marginTop: 2 }}><path d="M8 2l6.5 11.5h-13Z" /><path d="M8 6.5v3M8 11.5v.1" /></svg>
+            <span>{runwayIn! <= 0
+              ? <>Likit nakitin şu an ekside (<span style={css.mono}>{tl.format(Math.round(eff(runwayDay)))}</span>). Gelir kalemi girmemiş veya bir hesap bakiyesi eksi olabilir.</>
+              : <>Likit nakitin <b>{fmtD(runwayDay.date, { day: "numeric", month: "long" })}</b> dolayında tükeniyor (~{runwayIn} gün sonra).</>}</span>
+          </div>
+        ) : mod === "nakit" && days.length > 0 ? (
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 14, lineHeight: 1.45 }}>
+            <Tamam />
+            <span>Likit nakit {ufuk} ay boyunca eksiye düşmüyor. En düşük: <b style={{ fontWeight: 600 }}>{fmtD(minDay.date, { day: "numeric", month: "short" })}</b> · <span style={{ ...css.mono, fontWeight: 500 }}>{tl.format(Math.round(eff(minDay)))}</span></span>
+          </div>
+        ) : null}
+
+        {mod === "nakit" ? (
+          <Aciklama k="likit-nakit" label="likit nakit nedir?">
+            Likit nakit = hesap bakiyeleri + “nakit say” işaretli para piyasası fonları. Portföy, hisse ve vadeli mevduat buna dahil değildir (onlar toplam varlıkta).
+          </Aciklama>
+        ) : (<>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 12.5, color: T.mut, alignItems: "center" }}>
+            {varlikSon && <span style={{ color: T.text, fontSize: 13.5 }}>{ufuk} ay sonra net varlık <b style={{ ...css.mono, fontWeight: 600, color: worthDelta >= 0 ? T.pos : T.neg }}>{tl.format(varlikSon.worth)}</b></span>}
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 14, height: 10, borderRadius: 2, background: "color-mix(in srgb, var(--type-etf) 22%, var(--surface))", border: "1px solid var(--type-etf)" }} />net varlık</span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 14, height: 10, borderRadius: 2, background: T.negSoft }} />borç (üst bant)</span>
+          </div>
+          <Aciklama k="toplam-varlik" label="bu grafik neyi gösteriyor?">
+            Yeşil alan <b>net varlığın</b> (en üstteki rakamla aynı tanım), üstündeki kırmızı bant
+            <b> borcun</b>; ikisi birlikte <b>toplam varlığın</b>: nakit + portföy + vadeli mevduat.
+            Bant inceldikçe borç eriyor demektir. Borç ödemek net varlığı değiştirmez (nakit azalır,
+            borç da azalır) — yeşili yukarı taşıyan şey birikimdir. Portföy <b>bugünkü fiyatla</b>
+            taşınır; ileriye dönük bir fiyat tahmini yoktur.
+          </Aciklama>
+        </>)}
+
+        {/* Ödeme öncesi fon boz önerisi — grafiğin İÇİNDE (sebep ile çare yan yana). Etkin nakit
+            değil SAF nakit eksiye düştüğünde çıkar. Ekranın tek dolgulu mor düğmesi. */}
+        {sell && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", border: `1px solid ${T.line}`, borderRadius: 10, padding: "10px 12px" }}>
+            <div style={{ flex: 1, minWidth: 220, fontSize: 14, lineHeight: 1.45 }}>
+              <b>{fmtD(sell.gap.firstNegative.date, { day: "numeric", month: "long" })}</b> günü nakitin{" "}
+              <span style={{ ...css.mono, color: T.neg }}>{tl.format(Math.round(sell.gap.amount))}</span> açık veriyor.{" "}
+              <b>{sell.fund.symbol}</b> fonundan <span style={css.mono}>{tl.format(Math.round(sell.amount))}</span> bozarsan kapanır.
+              <div style={{ fontSize: 12.5, color: T.mut, marginTop: 2 }}>
+                en geç {fmtD(sell.sellBy, { day: "numeric", month: "long" })} · fonda{" "}
+                <span style={css.mono}>{tl.format(Math.round(sell.fund.valueTry))}</span> var
+                {!sell.covered && <span style={{ color: T.warn }}> · fon açığın tamamını kapatmıyor</span>}
+              </div>
+            </div>
+            <button style={{ ...css.btn, padding: "9px 14px", fontSize: 13.5 }} onClick={() => onSellFund({
+              asset_type: "FON", symbol: sell.fund.symbol, side: "SATIŞ",
+              amount: +sell.amount.toFixed(2),
+              date: keyOf(sell.sellBy), // yerel gün — toISOString UTC'ye kaydırıp bir gün geri alırdı
+              account_id: sellAccountId,
+            })}>Fon boz</button>
+          </div>
+        )}
+
+        <div style={{ height: 220, marginTop: "auto" }}>
+          <ResponsiveContainer width="100%" height="100%">
+            {mod === "nakit" ? (
+              <AreaChart data={chart} margin={{ top: 8, right: 4, left: 4, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="ozet-nakit" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="var(--type-nakit)" stopOpacity={0.22} />
+                    <stop offset="100%" stopColor="var(--type-nakit)" stopOpacity={0.02} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid stroke={T.line2} vertical={false} />
+                <XAxis dataKey="x" tick={eksen} tickLine={false} axisLine={false} minTickGap={40} />
+                <YAxis tick={eksen} tickLine={false} axisLine={false} width={46}
+                  tickFormatter={(v: number) => (Math.abs(v) >= 1000 ? `${Math.round(v / 1000)}k` : String(v))} />
+                <Tooltip contentStyle={tooltipStil} labelStyle={{ color: T.mut }} formatter={(v: number) => [tl.format(v), "Likit nakit"]} />
+                <ReferenceLine y={0} stroke={T.neg} strokeDasharray="4 4" />
+                <Area type="stepAfter" dataKey="bal" stroke="var(--type-nakit)" strokeWidth={2} fill="url(#ozet-nakit)" />
+              </AreaChart>
+            ) : (
+              <ComposedChart data={varlik} margin={{ top: 8, right: 4, left: 4, bottom: 0 }}>
+                <CartesianGrid stroke={T.line2} vertical={false} />
+                <XAxis dataKey="x" tick={eksen} tickLine={false} axisLine={false} minTickGap={40} />
+                <YAxis tick={eksen} tickLine={false} axisLine={false} width={46}
+                  tickFormatter={(v: number) => (Math.abs(v) >= 1000 ? `${Math.round(v / 1000)}k` : String(v))} />
+                <Tooltip contentStyle={tooltipStil} labelStyle={{ color: T.mut }} formatter={(v: number, n: string) => [tl.format(v), VARLIK_ETIKET[n] ?? n]} />
+                {varlikNegatif && <ReferenceLine y={0} stroke={T.neg} strokeDasharray="4 4" />}
+                {/* Önce toplam (kırmızı bant), üstüne net (yeşil): aradaki görünen bant = borç */}
+                <Area type="stepAfter" dataKey="total" stroke="color-mix(in srgb, var(--neg) 40%, var(--surface))" strokeWidth={1.5} fill="var(--neg-soft)" fillOpacity={1} />
+                <Area type="stepAfter" dataKey="worth" stroke="var(--type-etf)" strokeWidth={2} fill="color-mix(in srgb, var(--type-etf) 22%, var(--surface))" fillOpacity={1} />
+              </ComposedChart>
+            )}
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      <div style={{ ...css.card, padding: "16px 20px 8px", minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 4 }}>
+          <div style={{ flex: 1, fontWeight: 700, fontSize: 16 }}>Yaklaşan</div>
+          <button onClick={() => onGo("nakit")} style={{ background: "none", border: "none", color: T.acc, fontFamily: T.disp, fontSize: 13.5, fontWeight: 500, cursor: "pointer", padding: "6px 0" }}>Nakit akışı →</button>
+        </div>
+        {upcoming.length === 0 ? <Empty>Plan sekmesinden gelir/gider ekleyin.</Empty> : upcoming.map((e, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "9px 0", borderTop: `1px solid ${T.line2}` }}>
+            <div style={{ width: 34, textAlign: "center", lineHeight: 1.05, flexShrink: 0 }}>
+              <div style={{ ...css.mono, fontSize: 15, fontWeight: 600 }}>{fmtD(e.date, { day: "2-digit" })}</div>
+              <div style={{ fontSize: 11, color: T.mut }}>{fmtD(e.date, { month: "short" })}</div>
+            </div>
+            <div style={{ flex: 1, minWidth: 0, fontSize: 14.5, overflow: "hidden", textOverflow: "ellipsis" }}>{e.n}</div>
+            <Money v={e.a} sign size={14.5} />
           </div>
         ))}
+      </div>
     </div>
-
   </>);
 }

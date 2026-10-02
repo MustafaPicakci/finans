@@ -4,7 +4,7 @@ import { project, positions, cardInfos, stmtKey, loanRemaining, portfolioValueTr
 import { api, ApiError, type SessionUser } from "./api";
 import { T, css, fmtMoney, fiyatYasi, FIYAT_YASI_IPUCU, themeCSS, THEME_KEY, CCY_KEY, type ThemeMode } from "./theme";
 import { Center } from "./ui";
-import { NAV, NavIcon, PROFIL_META, TANIMLAR_META, KURULUM_META, ICE_AKTAR_META, type TabKey } from "./nav";
+import { NAV, NavIcon, PROFIL_META, TANIMLAR_META, KURULUM_META, ICE_AKTAR_META, MENU_META, type TabKey } from "./nav";
 import { useTabRoute } from "./route";
 import { useBalancesHidden, toggleBalancesHidden } from "./privacy";
 import { Auth, type UrlAuth } from "./features/auth";
@@ -18,6 +18,7 @@ import { Kartlar } from "./features/kart";
 import { Portfoy } from "./features/portfoy";
 import { Kayitlar } from "./features/kayitlar";
 import { Kurulum } from "./features/kurulum";
+import { Menu } from "./features/menu";
 import { ImportForm, iceAktarTemizle } from "./features/forms/ImportForm";
 import { planYukle, bildirimKapat, abonelikDegisti } from "./bildirim";
 import { Asistan, clearChat } from "./features/asistan";
@@ -52,9 +53,10 @@ export default function App() {
     const text = [p.get("ekle"), p.get("title"), p.get("url")].filter(Boolean).join(" ").trim();
     return text || null;
   });
-  /* Mobil üst çubuk taşma menüsü: 390px'te beş kontrol (yenile/₺$/göz/tema/çıkış) başlığı
-     eziyor, "Nakit Akışı" iki satıra kırılıyordu. Sık kullanılan ₺/$ üstte kalır, gerisi
-     buranın altına iner. Masaüstünde bu düğme yok — orada zaten kenar çubuğu taşıyor. */
+  /* Masaüstü kullanıcı menüsü (kenar çubuğunun dibindeki kimlik satırı): Hesabım, Tanımlar, tema,
+     çıkış. Eskiden satırda üç simge düğmesi (göz/tema/çıkış) + ayrı bir "Tanımlar" düğmesi vardı;
+     göz üst çubuğa çıktı (her ekranda lazım), gerisi burada. Telefonda bu işi Menü sayfası görür
+     (eski ⋯ taşma menüsü kalktı). */
   const [menuOpen, setMenuOpen] = useState(false);
   const [urlAuth, setUrlAuth] = useState<UrlAuth>(() => { // e-posta bağlantısındaki reset/verify token'ı
     const p = new URLSearchParams(window.location.search);
@@ -302,22 +304,27 @@ export default function App() {
 
   const openAdd = (kind: AddState["kind"], prefill?: KalemPrefill) => setAdd({ kind, prefill });
   // profil/tanimlar bilerek NAV dizisinde yok (bkz. nav.tsx) — başlıkları kendi META'larından gelir
-  const meta = NAV.find((n) => n.key === tab) ?? (tab === "tanimlar" ? TANIMLAR_META : tab === "kurulum" ? KURULUM_META : tab === "ice-aktar" ? ICE_AKTAR_META : PROFIL_META);
+  const meta = NAV.find((n) => n.key === tab) ?? (tab === "tanimlar" ? TANIMLAR_META : tab === "kurulum" ? KURULUM_META : tab === "ice-aktar" ? ICE_AKTAR_META : tab === "menu" ? MENU_META : PROFIL_META);
+  const iceAktaraGit = () => { if (tab !== "ice-aktar") iceAktarDonus.current = tab; setTab("ice-aktar"); };
   const summary = { netWorthTry, cash, portValueTry, depositsValueTry, cardDebt, loanDebt,
     accountCount: data.accounts.length, portTypes, cardsWaiting, loansActive };
   const initials = (user?.email ?? "?").slice(0, 2).toUpperCase();
 
+  /* Görüntü para birimi: GÖRÜNÜMÜ değiştirir → çukur şerit, seçili = beyaz yüzey + mor metin
+     (Faz 24 kural 2; eskiden mor dolguydu ve üst çubuğun en baskın öğesiydi). */
   const ccyToggle = (
-    <div style={{ display: "flex", border: `1px solid ${T.line}`, borderRadius: 999, overflow: "hidden", flexShrink: 0, background: T.panel }}>
+    <div role="group" aria-label="Görüntü para birimi" style={{ display: "flex", padding: 3, gap: 2, borderRadius: 10, flexShrink: 0, background: T.panel2, border: `1px solid ${T.line}` }}>
       {(["TRY", "USD"] as const).map((k) => {
         const disabled = k === "USD" && !usdReady;
+        const on = ccy === k;
         return (
-          <button key={k} onClick={() => !disabled && setCcy(k)} disabled={disabled}
+          <button key={k} className="ccy-btn" onClick={() => !disabled && setCcy(k)} disabled={disabled} aria-pressed={on}
             title={disabled ? "USD kuru için önce fiyatları yenile" : `Görüntü: ${k}`}
             style={{
-              border: "none", cursor: disabled ? "not-allowed" : "pointer", padding: "7px 15px", fontSize: 13, fontWeight: 700,
+              border: "none", borderRadius: 7, cursor: disabled ? "not-allowed" : "pointer", width: 32, height: 28, fontSize: 13, fontWeight: on ? 700 : 500,
               /* mono font: Schibsted Grotesk'in ₺ (Lira) glifi bozuk (£ olarak render ediliyor) — bkz. tema notu */
-              fontFamily: T.mono, background: ccy === k ? T.acc : "transparent", color: ccy === k ? T.accInk : disabled ? T.mut3 : T.mut,
+              fontFamily: T.mono, background: on ? T.panel : "transparent", color: on ? T.acc : disabled ? T.mut3 : T.mut,
+              boxShadow: on ? "var(--shadow-sm)" : "none",
             }}>{k === "TRY" ? "₺" : "$"}</button>
         );
       })}
@@ -380,46 +387,47 @@ export default function App() {
            yanlışlıkla basılsa da geri alınabilir bir kontrol). */
         .inline-select{background:transparent!important;border-color:transparent!important;min-height:0!important;cursor:pointer}
         .inline-select:hover,.inline-select:focus{border-color:${T.line}!important;background:${T.panel2}!important}
-        .hero-grid{display:grid;grid-template-columns:1.15fr 1fr;gap:16px}
         .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
         .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
         /* grid item'ların varsayılan min-width:auto'su, içindeki taşan içeriği (örn. kaydırılabilir ay şeridi)
            sütunu genişletip sayfayı sağa taşırabilir — grid item'ları büzülebilir kılıyoruz. */
-        .tab-grid > *, .hero-grid > *, .grid2 > *, .grid3 > * { min-width: 0; }
-        /* İkili kart: masaüstünde iki kart yan yana görünür, sekme çubuğu gizli. Mobilde
-           çubuk belirir ve yalnız seçili pane render edilir (Özet, ozet/index.tsx).
-           Taban kuralı MEDYA SORGULARINDAN ÖNCE durmalı: medya sorgusu özgüllük katmaz,
-           eşit özgüllükte SONRAKİ kural kazanır — taban "display:none" aşağıdayken mobil
-           "display:flex"i eziyordu, yani çubuk hiç çıkmıyordu. Görünen sonuç: mobilde
-           Varlık Dağılımı kartı başlıksız kalıyor (.duo-baslik gizli) ve Yaklaşan
-           Hareketler'e ulaşmanın hiçbir yolu kalmıyordu. */
-        .duo-tabs{display:none}
-        @media (max-width:900px){ .hero-grid,.grid2,.grid3{grid-template-columns:1fr} }
-        /* KPI'lar mobilde 2×2 kalır. grid2'nin tek sütuna inmesi bunlar için yanlıştı:
-           dört kart tam genişlikte ~600px yiyip Özet'i yedi ekran boyuna çıkarıyordu.
-           İçerik tek satırlık sayı — dar sütun yeter, yeter ki yazı ölçeği küçülsün.
-           !important gerekli: kartlar stillerini inline veriyor. */
+        .tab-grid > *, .grid2 > *, .grid3 > *, .ozet-ust > *, .ozet-alt > *, .ozet-bek > * { min-width: 0; }
+        /* Özet (yeniden tasarım, Ekim 2026): net varlık + 2×2 kutu | senden bekleyenler (iki grup) |
+           grafik + yaklaşan YAN YANA (eşit yükseklik — alt alta dizilince grafiğin altında ~400px
+           boşluk kalıyordu). */
+        .ozet-ust{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,500px);gap:16px}
+        .ozet-kpi{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+        .ozet-bek{display:grid;grid-template-columns:1fr 1fr;column-gap:40px}
+        .ozet-alt{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:16px;align-items:stretch}
+        .ozet-kutu{transition:border-color .15s}
+        .ozet-kutu:hover{border-color:${T.mut3}!important}
+        .kur-toggle{display:none!important}
+        /* İçe aktarma önizlemesinin eylem çubuğu: liste kayarken altta yapışık durur */
+        .ice-eylem{position:sticky;bottom:12px}
         @media (max-width:900px){
-          .kpi-grid{grid-template-columns:1fr 1fr!important;gap:10px!important}
-          .kpi-card{padding:13px 14px!important}
-          .kpi-val{font-size:17px!important;margin-top:5px!important}
-          .kpi-sub{font-size:10.5px!important}
-          .duo-tabs{display:flex}
-          .duo-pane[data-on="false"]{display:none!important}
-          .duo-baslik{display:none} /* başlığı sekme çubuğu söylüyor, tekrarlama */
+          .grid2,.grid3,.ozet-ust,.ozet-alt,.ozet-bek{grid-template-columns:1fr}
+          /* Kutular mobilde 2×2 kalır: tam genişlikte dört kart ~600px yiyordu */
+          .ozet-kpi{gap:10px}
+          .ozet-kutu{padding:13px 14px!important;border-radius:14px!important}
+          .kpi-val{font-size:19px!important}
+          .kpi-sub{font-size:11.5px!important}
+          .nw-value{font-size:34px!important}
+          .kur-toggle{display:flex!important}
+          .kur-baslik{display:none}
+          .kur-liste[data-acik="false"]{display:none}
+          .ozet-secici{padding:7px 10px!important}
+          .ice-eylem{bottom:calc(70px + env(safe-area-inset-bottom))}
         }
         .bottom-nav{display:none}
-        .add-fab{display:none}
         .mobile-only{display:none!important}
         .row-break{display:none} /* yalnız mobil sarmalamada iş görür (bkz. Row) */
         @media (max-width:900px){
           .desktop-only{display:none!important}
           .sidebar{display:none!important}
           .bottom-nav{display:flex}
-          .add-fab{display:flex}
           .mobile-only{display:grid!important}
           .content-pad{padding:18px 16px calc(90px + env(safe-area-inset-bottom))!important}
-          .topbar{padding:14px 16px!important}
+          .topbar{padding:12px 16px!important}
           .btn-label{display:none}
           input,select,button{min-height:40px}
           /* Liste satırı yerleşimi mobilde SABİT — bkz. ui/index.tsx'teki Row açıklaması.
@@ -480,7 +488,6 @@ export default function App() {
           fontFamily: T.disp, cursor: "pointer", boxShadow: `0 4px 14px -5px ${T.acc}`,
         }}><span style={{ fontSize: 16, lineHeight: 0 }}>＋</span> Ekle</button>
 
-        <div style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: "0.09em", textTransform: "uppercase", color: T.mut3, padding: "2px 10px 8px" }}>Menü</div>
         <nav style={{ display: "flex", flexDirection: "column", gap: 3 }}>
           {NAV.map((n) => {
             const on = tab === n.key;
@@ -494,33 +501,47 @@ export default function App() {
           })}
         </nav>
 
-        {/* Tanımlar: ana menüde değil ama kenar çubuğunun dibinde erişilebilir — günlük iş
-            listesini şişirmeden, aradığında bulunabilir bir yerde. */}
-        <button className="nav-btn" onClick={() => setTab("tanimlar")} style={{
-          marginTop: "auto", display: "flex", alignItems: "center", gap: 11, padding: "9px 11px",
-          border: "none", borderRadius: 11, cursor: "pointer", fontSize: 13, fontFamily: T.disp,
-          fontWeight: tab === "tanimlar" ? 600 : 500, textAlign: "left",
-          background: tab === "tanimlar" ? T.accSoft : "none", color: tab === "tanimlar" ? T.acc : T.mut3,
-        }}><NavIcon tab="tanimlar" /> Tanımlar</button>
-
-        <div style={{ paddingTop: 12, borderTop: `1px solid ${T.line}`, display: "flex", alignItems: "center", gap: 10 }}>
-          {/* Kullanıcı kartı artık tıklanabilir: kimliğin durduğu yer, kullanıcı hesabı
-              ekranının da giriş kapısıdır (Hesabım — banka "Hesaplar"ıyla karıştırılmasın). */}
-          <button className="nav-btn" onClick={() => setTab("profil")} title="Hesabım"
-            style={{
-              display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0, textAlign: "left",
-              background: tab === "profil" ? T.accSoft : "none", border: "none", borderRadius: 10,
-              padding: "4px 6px", cursor: "pointer", fontFamily: T.disp,
+        {/* Kimlik satırı: Hesabım / Tanımlar / tema / çıkış tek menüde (eskiden satırda üç simge +
+            ayrı Tanımlar düğmesi vardı). Menü yukarı açılır — satır kenar çubuğunun dibinde. */}
+        <div style={{ marginTop: "auto", paddingTop: 12, borderTop: `1px solid ${T.line}`, position: "relative" }}>
+          {menuOpen && (
+            <div onClick={(e) => e.stopPropagation()} role="menu" style={{
+              position: "absolute", bottom: "calc(100% + 6px)", left: 0, right: 0, zIndex: 40,
+              background: T.panel, border: `1px solid ${T.line}`, borderRadius: 14, boxShadow: "var(--shadow)",
+              padding: 6, display: "grid", gap: 2,
             }}>
-            <span style={{ width: 32, height: 32, borderRadius: 10, background: T.accSoft, color: T.acc, display: "grid", placeItems: "center", fontWeight: 700, fontSize: 13, flexShrink: 0 }}>{initials}</span>
+              {([
+                { label: "Hesabım", icon: <NavIcon tab="profil" size={15} />, on: () => setTab("profil") },
+                { label: "Tanımlar", icon: <NavIcon tab="tanimlar" size={15} />, on: () => setTab("tanimlar") },
+                { label: theme === "light" ? "Koyu tema" : "Açık tema", icon: <ThemeIcon />, on: () => setTheme((t) => (t === "light" ? "dark" : "light")) },
+              ]).map((it) => (
+                <button key={it.label} role="menuitem" className="nav-btn" onClick={() => { it.on(); setMenuOpen(false); }} style={{
+                  display: "flex", alignItems: "center", gap: 11, width: "100%", textAlign: "left", background: "none", border: "none",
+                  borderRadius: 9, padding: "9px 11px", cursor: "pointer", fontSize: 13.5, fontFamily: T.disp, fontWeight: 500, color: T.text,
+                }}><span style={{ width: 18, display: "grid", placeItems: "center", color: T.mut }}>{it.icon}</span>{it.label}</button>
+              ))}
+              {/* Çıkış EN ALTTA ve ayırıcının altında: yanlışlıkla basılması en pahalı madde */}
+              <button role="menuitem" className="nav-btn" onClick={() => { setMenuOpen(false); logout(); }} style={{
+                display: "flex", alignItems: "center", gap: 11, width: "100%", textAlign: "left", background: "none", border: "none",
+                borderTop: `1px solid ${T.line}`, borderRadius: 0, marginTop: 4, padding: "11px 11px 8px", cursor: "pointer",
+                fontSize: 13.5, fontFamily: T.disp, fontWeight: 500, color: T.neg,
+              }}><span style={{ width: 18, display: "grid", placeItems: "center" }}><PowerIcon /></span>Çıkış yap</button>
+            </div>
+          )}
+          <button className="nav-btn" aria-haspopup="menu" aria-expanded={menuOpen}
+            onClick={(e) => { e.stopPropagation(); setMenuOpen((o) => !o); }}
+            style={{
+              display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left",
+              background: menuOpen || tab === "profil" || tab === "tanimlar" ? T.accSoft : "none", border: "none", borderRadius: 10,
+              padding: "6px 6px", cursor: "pointer", fontFamily: T.disp,
+            }}>
+            <span style={{ width: 32, height: 32, borderRadius: 999, background: T.accSoft, color: T.acc, display: "grid", placeItems: "center", fontWeight: 700, fontSize: 12.5, flexShrink: 0 }}>{initials}</span>
             <span style={{ flex: 1, minWidth: 0, lineHeight: 1.2 }}>
-              <span style={{ display: "block", fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: tab === "profil" ? T.acc : T.text }}>{user?.email?.split("@")[0]}</span>
-              <span style={{ display: "block", fontSize: 11, color: T.mut3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{user?.email}</span>
+              <span style={{ display: "block", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: T.text }}>{user?.email?.split("@")[0]}</span>
+              <span style={{ display: "block", fontSize: 11.5, color: T.mut, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{user?.email}</span>
             </span>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill={T.mut} aria-hidden="true"><circle cx="3.5" cy="8" r="1.3" /><circle cx="8" cy="8" r="1.3" /><circle cx="12.5" cy="8" r="1.3" /></svg>
           </button>
-          {privacyBtn({ width: 30, height: 30, borderRadius: 9 })}
-          <button className="icon-btn" title="Açık / koyu tema" aria-label="Açık / koyu tema" onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))} style={{ ...iconBtn, width: 30, height: 30, borderRadius: 9 }}><ThemeIcon /></button>
-          <button className="icon-btn" title="Çıkış yap" aria-label="Çıkış yap" onClick={logout} style={{ ...iconBtn, width: 30, height: 30, borderRadius: 9 }}><PowerIcon /></button>
         </div>
       </aside>
 
@@ -530,101 +551,21 @@ export default function App() {
           position: "sticky", top: 0, zIndex: 20, display: "flex", alignItems: "center", gap: 12, padding: "16px 32px",
           background: `color-mix(in srgb, ${T.bg} 82%, transparent)`, backdropFilter: "blur(14px)", borderBottom: `1px solid ${T.line}`,
         }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: "-0.02em" }}>{meta.title}</div>
-            <div className="topbar-sub" style={{ fontSize: 12.5, color: T.mut3, marginTop: 1 }}>{meta.sub}</div>
-          </div>
+          {/* Alt başlık (meta.sub) kalktı: sekme başlığı zaten söylüyor, yeniden tasarımın 5. ilkesi */}
+          <div style={{ minWidth: 0, fontSize: 21, fontWeight: 700, letterSpacing: "-0.02em" }}>{meta.title}</div>
           <div style={{ flex: 1 }} />
-          {fiyatTazelik && (
-            <span className="desktop-only" title={FIYAT_YASI_IPUCU}
-              style={{ fontSize: 12, color: T.mut3, whiteSpace: "nowrap" }}>Fiyatlar {fiyatTazelik}</span>
-          )}
-          <button className="icon-btn desktop-only" onClick={refresh} disabled={refreshing} title="Fiyatları yenile" style={{
-            display: "flex", alignItems: "center", gap: 7, width: "auto", height: 34, padding: "0 13px", borderRadius: 10,
-            border: `1px solid ${T.line}`, background: T.panel, color: T.mut, fontSize: 12.5, fontWeight: 500, fontFamily: T.disp, cursor: "pointer",
-          }}>
-            <span style={{ fontSize: 13, display: "inline-block", animation: refreshing ? "spin 1s linear infinite" : "none" }}>↻</span>
-            <span className="btn-label">{refreshing ? "Yenileniyor…" : "Fiyatları yenile"}</span>
+          {/* Fiyat yaşı + yenile TEK kontrol: yaşın cevap verdiği soru ("yenilemem gerekiyor mu?")
+              düğmeye basmadan önce sorulur. Telefonda Menü sayfasında. */}
+          <button className="icon-btn desktop-only" onClick={refresh} disabled={refreshing}
+            title={fiyatTazelik ? `${FIYAT_YASI_IPUCU} Dokun: yenile.` : "Fiyatları yenile"} style={{
+              display: "flex", alignItems: "center", gap: 7, width: "auto", height: 34, padding: "0 12px", borderRadius: 10,
+              border: `1px solid ${T.line}`, background: T.panel, color: T.mut, fontSize: 13, fontWeight: 400, fontFamily: T.disp, cursor: "pointer",
+            }}>
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" style={{ animation: refreshing ? "spin 1s linear infinite" : "none" }}><path d="M11.5 7A4.5 4.5 0 1 1 10 3.6" /><path d="M10.5 1.5v2.5H8" /></svg>
+            {refreshing ? "Yenileniyor…" : fiyatTazelik ? `Fiyatlar ${fiyatTazelik}` : "Fiyatları yenile"}
           </button>
           {ccyToggle}
-          {/* Mobil taşma menüsü — masaüstünde gizli (orada kenar çubuğu bu işi görür) */}
-          <div className="mobile-only" style={{ position: "relative", placeItems: "center" }}>
-            <button className="icon-btn" aria-label="Diğer" aria-expanded={menuOpen}
-              onClick={(e) => { e.stopPropagation(); setMenuOpen((o) => !o); }}
-              style={{ ...iconBtn, ...(menuOpen ? { borderColor: T.acc, color: T.acc } : {}) }}>⋯</button>
-            {menuOpen && (
-              <div onClick={(e) => e.stopPropagation()} style={{
-                position: "absolute", top: "calc(100% + 8px)", right: 0, zIndex: 40, minWidth: 210,
-                background: T.panel, border: `1px solid ${T.line}`, borderRadius: 14, boxShadow: "var(--shadow)",
-                padding: 6, display: "grid", gap: 2,
-              }}>
-                {([
-                  /* `alt`: mobilde fiyat yaşının durabileceği tek yer burası — üst çubukta
-                     390px'te yer yok, kartlara koymak Faz 32'de çıkarılan üçüncü kopyayı
-                     geri getirirdi. Eylemin altında duran bir DURUM satırı, ayrı bir eylem
-                     gibi okunmasın diye küçük ve soluk. */
-                  { label: refreshing ? "Yenileniyor…" : "Fiyatları yenile", alt: fiyatTazelik ? `son çekim ${fiyatTazelik}` : undefined, icon: <span style={{ display: "inline-block", animation: refreshing ? "spin 1s linear infinite" : "none" }}>↻</span>, on: () => refresh(), disabled: refreshing },
-                  /* renkli emoji yerine kenar çubuğuyla aynı SVG: menüdeki simgeler tek renk kalsın */
-                  { label: balancesHidden ? "Bakiyeleri göster" : "Bakiyeleri gizle", icon: <EyeIcon off={balancesHidden} />, on: toggleBalancesHidden },
-                  { label: theme === "light" ? "Koyu tema" : "Açık tema", icon: <ThemeIcon />, on: () => setTheme((t) => (t === "light" ? "dark" : "light")) },
-                ] as { label: string; alt?: string; icon: React.ReactNode; on: () => void; disabled?: boolean; danger?: boolean }[]).map((it) => (
-                  <button key={it.label} disabled={it.disabled}
-                    onClick={() => { it.on(); setMenuOpen(false); }}
-                    style={{
-                      display: "flex", alignItems: "center", gap: 11, width: "100%", textAlign: "left",
-                      background: "none", border: "none", borderRadius: 9, padding: "10px 11px", cursor: "pointer",
-                      fontSize: 13.5, fontFamily: T.disp, fontWeight: 500, color: it.danger ? T.neg : T.text,
-                      opacity: it.disabled ? 0.5 : 1,
-                    }}>
-                    <span style={{ width: 18, display: "grid", placeItems: "center", fontSize: 13, color: it.danger ? T.neg : T.mut }}>{it.icon}</span>
-                    {it.alt
-                      ? <span style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
-                        {it.label}
-                        <span style={{ fontSize: 11, fontWeight: 500, color: T.mut3 }}>{it.alt}</span>
-                      </span>
-                      : it.label}
-                  </button>
-                ))}
-                {/* Mobilde kenar çubuğu yok — kullanıcı hesabı ekranının kapısı burası.
-                    E-posta salt metin değil, tıklanabilir: kimliğin durduğu yer. */}
-                <button onClick={() => { setTab("tanimlar"); setMenuOpen(false); }}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 11, width: "100%", textAlign: "left",
-                    background: "none", border: "none", borderRadius: 9,
-                    padding: "10px 11px", cursor: "pointer", fontFamily: T.disp,
-                    fontSize: 13.5, fontWeight: 500, color: T.text,
-                  }}>
-                  <span style={{ width: 18, display: "grid", placeItems: "center", color: T.mut }}><NavIcon tab="tanimlar" size={15} /></span>
-                  Tanımlar
-                </button>
-                <button onClick={() => { setTab("profil"); setMenuOpen(false); }}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 11, width: "100%", textAlign: "left",
-                    background: "none", border: "none", borderRadius: 9,
-                    padding: "10px 11px", cursor: "pointer", fontFamily: T.disp,
-                  }}>
-                  <span style={{ width: 18, display: "grid", placeItems: "center", color: T.mut }}><NavIcon tab="profil" size={15} /></span>
-                  <span style={{ minWidth: 0 }}>
-                    <span style={{ display: "block", fontSize: 13.5, fontWeight: 500, color: T.text }}>Hesabım</span>
-                    <span style={{ display: "block", fontSize: 11, color: T.mut3, overflow: "hidden", textOverflow: "ellipsis" }}>{user?.email}</span>
-                  </span>
-                </button>
-                {/* Çıkış EN ALTTA ve ayırıcının altında: oturumu bitiren eylem, ayar
-                    değiştiren ve ekran açan maddelerle aynı öbekte durmamalı — yanlışlıkla
-                    basılması en pahalı madde odur. */}
-                <button onClick={() => { logout(); setMenuOpen(false); }}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 11, width: "100%", textAlign: "left",
-                    background: "none", border: "none", borderTop: `1px solid ${T.line}`, borderRadius: 0,
-                    marginTop: 4, padding: "12px 11px 8px", cursor: "pointer",
-                    fontSize: 13.5, fontFamily: T.disp, fontWeight: 500, color: T.neg,
-                  }}>
-                  <span style={{ width: 18, display: "grid", placeItems: "center", color: T.neg }}><PowerIcon /></span>
-                  Çıkış yap
-                </button>
-              </div>
-            )}
-          </div>
+          {privacyBtn()}
         </div>
 
         <div className="content-pad" style={{ flex: 1, padding: "26px 32px 56px", maxWidth: 1180, width: "100%", margin: "0 auto" }}>
@@ -637,13 +578,12 @@ export default function App() {
             </div>
           )}
           <div key={tab} className="tab-grid" style={{ animation: "fadeUp .4s ease both", display: "grid", gap: 16 }}>
-            {tab === "ozet" && <Ozet data={data} days={days} pos={pos} cash={cash} rates={rates} reload={reload} summary={summary} m={m} onGoAccounts={() => setTab("hesaplar")}
-              onGoPortfolio={() => setTab("portfoy")}
+            {tab === "ozet" && <Ozet data={data} days={days} pos={pos} cash={cash} rates={rates} reload={reload} summary={summary} m={m} onGo={setTab}
               onSellFund={(p: TradePrefill) => setAdd({ kind: "trade", tradePrefill: p })}
               onKurumsalOlay={(p: TradePrefill) => setAdd({ kind: "trade", tradePrefill: p })}
               onKurulum={() => setTab("kurulum")} />}
             {tab === "kurulum" && <Kurulum data={data} days={days} reload={reload} onBitir={kurulumBitir} />}
-            {tab === "ice-aktar" && <div style={css.card}><ImportForm data={data} reload={reload} onClose={() => setTab(iceAktarDonus.current, true)} /></div>}
+            {tab === "ice-aktar" && <ImportForm data={data} reload={reload} onClose={() => setTab(iceAktarDonus.current, true)} />}
             {tab === "hesaplar" && <Hesaplar data={data} reload={reload} />}
             {tab === "profil" && <Profil user={user} data={data} reload={reload} onDeleted={() => { anahtarSil(); setUser(null); setData(null); }} />}
             {tab === "tanimlar" && <Tanimlar data={data} reload={reload} />}
@@ -652,33 +592,46 @@ export default function App() {
             {tab === "kart" && <Kartlar data={data} reload={reload} onAdd={(k) => openAdd(k)} />}
             {tab === "portfoy" && <Portfoy data={data} pos={pos} rates={rates} ccy={ccy} reload={reload} />}
             {tab === "kayitlar" && <Kayitlar data={data} reload={reload} />}
+            {tab === "menu" && <Menu data={data} user={user} theme={theme} setTheme={setTheme} refresh={refresh} refreshing={refreshing}
+              fiyatTazelik={fiyatTazelik} onGo={setTab} onImport={iceAktaraGit} logout={logout} cardsWaiting={cardsWaiting} />}
             {tab === "asistan" && <Asistan data={data} reload={reload} initialText={shared} onConsumed={() => setShared(null)} />}
           </div>
         </div>
       </main>
 
-      {/* Kurulumda gizli: sihirbaz kendi giriş akışıdır ve mobilde düğme "İleri"nin üstüne biniyordu */}
-      {tab !== "kurulum" && tab !== "ice-aktar" && <button className="add-fab" aria-label="Ekle" onClick={() => openAdd("pick")} style={{
-        position: "fixed", right: 18, bottom: "calc(70px + env(safe-area-inset-bottom))", zIndex: 30,
-        width: 54, height: 54, borderRadius: 999, border: "none", cursor: "pointer",
-        background: T.acc, color: T.accInk, fontSize: 26, fontWeight: 700, alignItems: "center", justifyContent: "center",
-        boxShadow: `0 8px 22px -6px ${T.acc}`,
-      }}>＋</button>}
-
       {add !== null && <AddSheet data={data} state={add} setState={setAdd} onClose={() => setAdd(null)} reload={reload}
-        onImport={() => { setAdd(null); if (tab !== "ice-aktar") iceAktarDonus.current = tab; setTab("ice-aktar"); }} />}
+        onImport={() => { setAdd(null); iceAktaraGit(); }} />}
 
+      {/* Telefon alt çubuğu (yeniden tasarım, Ekim 2026): sekiz sekme 390px'e sığmıyordu (10px etiket,
+          kırpılmış adlar). Çubukta kullanıcının en sık kullandıkları — Özet, Asistan (harcamalar oradan
+          söyleniyor), Portföy — ortada "+" ve kalanı için Menü. "+" çubuğun İÇİNDE: eski yüzen düğme
+          içeriğin üstüne biniyordu. Menü, çubukta olmayan her sekmede seçili görünür (neredeyim?). */}
       <nav className="bottom-nav" style={{
         position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 30,
-        background: `color-mix(in srgb, ${T.panel} 92%, transparent)`, backdropFilter: "blur(14px)", borderTop: `1px solid ${T.line}`,
-        padding: "6px 2px calc(6px + env(safe-area-inset-bottom))", justifyContent: "space-around", alignItems: "center",
+        background: `color-mix(in srgb, ${T.panel} 94%, transparent)`, backdropFilter: "blur(14px)", borderTop: `1px solid ${T.line}`,
+        padding: "4px 6px calc(4px + env(safe-area-inset-bottom))", alignItems: "center",
       }}>
-        {NAV.map((n) => (
-          <button key={n.key} onClick={() => setTab(n.key)} style={{
-            display: "flex", flexDirection: "column", alignItems: "center", gap: 2, background: "none", border: "none",
-            padding: "6px 2px", cursor: "pointer", color: tab === n.key ? T.acc : T.mut3, fontSize: 9.5, fontWeight: 600, fontFamily: T.disp,
-          }}><NavIcon tab={n.key} size={18} /> {n.short}</button>
-        ))}
+        {(["ozet", "asistan", "+", "portfoy", "menu"] as const).map((k) => {
+          if (k === "+") return (
+            <div key="+" style={{ flex: 1, display: "flex", justifyContent: "center" }}>
+              <button aria-label="Ekle" onClick={() => openAdd("pick")} style={{
+                width: 50, height: 50, borderRadius: 16, border: "none", cursor: "pointer", background: T.acc, color: T.accInk,
+                display: "grid", placeItems: "center", boxShadow: `0 6px 16px -6px ${T.acc}`,
+              }}>
+                <svg width="22" height="22" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M7 2v10M2 7h10" /></svg>
+              </button>
+            </div>
+          );
+          const on = k === "menu" ? !["ozet", "asistan", "portfoy"].includes(tab) : tab === k;
+          const ad = k === "menu" ? MENU_META.short : NAV.find((n) => n.key === k)!.short;
+          return (
+            <button key={k} onClick={() => setTab(k)} aria-current={on ? "page" : undefined} style={{
+              flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3,
+              background: "none", border: "none", height: 56, cursor: "pointer", color: on ? T.acc : T.mut,
+              fontSize: 11, fontWeight: on ? 600 : 500, fontFamily: T.disp,
+            }}><NavIcon tab={k} size={22} />{ad}</button>
+          );
+        })}
       </nav>
     </div>
   );

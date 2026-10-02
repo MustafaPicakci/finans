@@ -4,7 +4,7 @@ import React from "react";
 /* "profil" bilerek NAV dizisinde DEĞİL: ana menü zaten sekiz sekme ve orası günlük iş için.
    Kullanıcı hesabı ekranı kimliğin durduğu yerden açılır (kenar çubuğu kullanıcı kartı /
    mobil ⋯ menüsü). Sekme başlığı NAV'da bulunmadığından App.tsx PROFIL_META'ya düşer. */
-export type TabKey = "ozet" | "nakit" | "plan" | "kart" | "portfoy" | "kayitlar" | "hesaplar" | "asistan" | "profil" | "tanimlar" | "kurulum" | "ice-aktar";
+export type TabKey = "ozet" | "nakit" | "plan" | "kart" | "portfoy" | "kayitlar" | "hesaplar" | "asistan" | "profil" | "tanimlar" | "kurulum" | "ice-aktar" | "menu";
 
 export const NAV: { key: TabKey; label: string; short: string; title: string; sub: string }[] = [
   { key: "ozet", label: "Özet", short: "Özet", title: "Özet", sub: "genel finansal durumun" },
@@ -25,6 +25,9 @@ export const KURULUM_META = { key: "kurulum" as TabKey, label: "Kurulum", short:
 /** Toplu içe aktarma kendi sayfasıdır (eskiden "+ Ekle" popup'ıydı): dakikalar süren bir iş, popup'ın
     dışına bir tık hepsini siliyordu ve 735 satırlık döküm ekranın yarısında kaydırılıyordu. */
 export const ICE_AKTAR_META = { key: "ice-aktar" as TabKey, label: "İçe aktar", short: "İçe aktar", title: "Toplu İçe Aktar", sub: "banka/kart/aracı kurum ekstresini deftere aktar" };
+/** Telefonun "Menü" sayfası — alt çubukta olmayan sekmeler + ayarlar (yeniden tasarım, Ekim 2026).
+    Alt çubuk kullanıcının en sık kullandıklarıdır (Özet · Asistan · Portföy); kalanı buradan açılır. */
+export const MENU_META = { key: "menu" as TabKey, label: "Menü", short: "Menü", title: "Menü", sub: "" };
 export const PROFIL_META = { key: "profil" as TabKey, label: "Hesabım", short: "Hesabım", title: "Hesabım", sub: "kullanıcı hesabın & verilerin" };
 
 const PATHS: Record<TabKey, React.ReactNode> = {
@@ -39,6 +42,7 @@ const PATHS: Record<TabKey, React.ReactNode> = {
   profil: <><circle cx="8.5" cy="6" r="3" /><path d="M2.5 15c0-3.3 2.7-5 6-5s6 1.7 6 5" /></>,
   kurulum: <><path d="M3 3.5h11v10H3z" /><path d="M6 8.5l2 2 3.5-4" /></>,
   "ice-aktar": <><path d="M8.5 2v8.5M5 7l3.5 3.5L12 7" /><path d="M2.5 11.5v3h12v-3" /></>,
+  menu: <path d="M2.5 4.5h12M2.5 8.5h12M2.5 12.5h12" />,
   asistan: <><path d="M2.5 3.5h12a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H7l-3.5 3v-3H2.5a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1Z" /><path d="M5.5 7.5h6" /></>,
 };
 

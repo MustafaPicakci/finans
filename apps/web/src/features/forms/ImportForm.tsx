@@ -5,7 +5,7 @@ import {
 } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, fmtMoney } from "../../theme";
-import { DahaFazla, Field, FiltreSeridi, Hint, useSayfalama } from "../../ui";
+import { DahaFazla, Field, FiltreSeridi, useSayfalama } from "../../ui";
 import { kalemSuggestions, normName } from "./recall";
 import { belgeOku, PdfParolaGerekli } from "./pdfOku";
 import { IslemOnizleme } from "./IslemOnizleme";
@@ -84,6 +84,10 @@ export function ImportForm({ data, reload, onClose: kapat }: { data: AllData; re
   const onClose = () => { iceAktarTemizle(); kapat(); };
   /** Seçili satır varken "Vazgeç" önce sorar: o seçimler okunan belgeyle birlikte silinecek. */
   const [cikisSor, setCikisSor] = useState(false);
+  /** Ad/tutar düzenlemesi açık satır: satırlar salt okunur görünür, ✎ ile yalnız o satır alanlara döner.
+      Eskiden her satırda üç giriş kutusu vardı (ad, tutar, kategori) ve telefonda satır üç sıraya
+      yayılıyordu; ad/tutar düzeltmesi istisnadır (OCR hatası), kategori ise satırda kaldı. */
+  const [duzenlenen, setDuzenlenen] = useState<number | null>(null);
 
   const sugs = useMemo(() => kalemSuggestions(data), [data]);
   /** geçmişte aynı/benzer adla girilmiş kaydın kategorisi (en sık kullanılan eşleşme) */
@@ -342,13 +346,13 @@ export function ImportForm({ data, reload, onClose: kapat }: { data: AllData; re
   const TUR_ADI = { kart: "kart ekstresi", hesap: "hesap dökümü", islem: "aracı kurum ekstresi" } as const;
 
   if (islemSonuc) {
-    return <IslemOnizleme data={data} sonuc={islemSonuc} accountId={islemHesap} reload={reload} onClose={onClose} onGeri={() => setIslemSonuc(null)} />;
+    return <div style={css.card}><IslemOnizleme data={data} sonuc={islemSonuc} accountId={islemHesap} reload={reload} onClose={onClose} onGeri={() => setIslemSonuc(null)} /></div>;
   }
 
   /* ——— 1. adım: metni yapıştır ——— */
   if (drafts === null) {
     return (
-      <div>
+      <div style={css.card}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
           <label style={{ ...css.ghost, display: "inline-flex", alignItems: "center", cursor: pdf?.okunuyor ? "wait" : "pointer" }}>
             {pdf?.okunuyor ? "Okunuyor…" : "PDF ya da ekran görüntüsü seç"}
@@ -398,177 +402,205 @@ export function ImportForm({ data, reload, onClose: kapat }: { data: AllData; re
     );
   }
 
-  /* ——— 2. adım: önizleme + düzeltme ——— */
+  /* ——— 2. adım: önizleme + düzeltme —————
+     Yerleşim (yeniden tasarım, Ekim 2026): (1) belge kartı — ne okundu, nereye gidecek, belgeyle
+     tutuyor mu; (2) süzgeç şeridi; (3) satır listesi; (4) altta yapışkan eylem çubuğu (seçili sayı +
+     toplam + içe aktar). Eskiden üstte dört ayrı gri kutu, her satırda üç giriş kutusu ve satır
+     başına tekrarlanan taksit açıklaması vardı; sayfanın kendisi de bir kartın içindeydi (kutu içinde
+     kutu içinde kutu). */
+  const satirMetni: React.CSSProperties = { fontSize: 12.5, color: T.mut, lineHeight: 1.45 };
   return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-        <div style={{ fontSize: 13, color: T.mut }}>
-          <b style={{ color: T.text }}>{drafts.length}</b> satır · <b style={{ color: T.text }}>{sayac.get("eslesti") ?? 0}</b> zaten defterde
-          · <b style={{ color: T.text }}>{sayac.get("eksik") ?? 0}</b> eksik · <b style={{ color: T.text }}>{chosen.length}</b> seçili
+    <div style={{ display: "grid", gap: 12 }}>
+      <div style={{ ...css.card, padding: "16px 18px", display: "grid", gap: 10 }}>
+        {/* Hedef: otomatik bulunduysa nasıl bulunduğu yazılır; emin değilse göze batar. Değiştirmek
+            belgeyi yeni hedefle yeniden çözer. */}
+        <div style={{ display: "grid", gap: 2 }}>
+          {/* Belge türü (otomatik bulunduysa) ya da hedefin türü; altında hedefin kendisi, değiştirilebilir */}
+          <span style={{ fontSize: 12.5, color: T.mut }}>
+            {oto ? TUR_ADI[oto.tur].replace(/^./, (c) => c.toLocaleUpperCase("tr"))
+              : hedef.startsWith("c:") ? "Kart ekstresi" : hedef.startsWith("a:") ? "Hesap dökümü" : "Gelir/gider defteri"} · aktarılacak yer
+          </span>
+          <select className="inline-select" style={{ ...css.input, fontFamily: T.disp, fontSize: 16, fontWeight: 650, padding: "4px 6px", margin: "0 -6px", width: "auto", maxWidth: "calc(100% + 12px)", minWidth: 0, color: T.text,
+            border: oto && !oto.emin ? `1px solid ${T.neg}` : undefined }}
+            aria-label="Nereye aktarılsın" value={hedef} onChange={(e) => hedefDegistir(e.target.value)}>
+            {hedefSecenekleri}
+          </select>
         </div>
-        <div style={{ fontSize: 13, color: T.mut, display: "flex", alignItems: "center", gap: 10 }}>
+        {oto && (oto.hedef === "" || !oto.emin || oto.eslesen > 0) && (
+          <div style={{ ...satirMetni, color: oto.hedef === "" || !oto.emin ? T.neg : T.mut, marginTop: -4 }}>
+            {oto.hedef === ""
+              ? (oto.tur === "kart" ? "Tanımlı kartın yok — Kartlar'da ekle, sonra buradan seç." : "Tanımlı hesabın yok.")
+              : !oto.emin ? "Hangisine ait olduğundan emin değilim, kontrol et."
+              : `${oto.eslesen} satırı defterindeki kayıtlarla eşleşti.`}
+          </div>
+        )}
+        <DogrulamaSatiri d={dogrulama} />
+        {(ocrSayfa > 0 || bozukHarf) && (
+          <div style={satirMetni}>
+            {ocrSayfa > 0 && <>Belgenin {ocrSayfa} sayfası görüntüden okundu (OCR); adlarda harf hatası olabilir. </>}
+            {bozukHarf && <>Yazı tipi Türkçe harfleri bozuk veriyor ("%deme" gibi) — tutarlar etkilenmez, adları kontrol et.</>}
+          </div>
+        )}
+        {/* Metin katmanı okundu ama belgeyle tutmuyor ya da harfler bozuk: katman güvenilmez olabilir.
+            Karar belgenin kendi doğrulamasına bağlı; sonuç yine aynı doğrulamadan geçer. */}
+        {sonBelge && ocrSayfa < sonBelge.sayfa && (bozukHarf || (dogrulama.tur !== "yok" && !dogrulama.tamam)) && (
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ ...satirMetni, flex: "1 1 220px" }}>
+              {yenidenOkunuyor ? (ilerleme || "OCR hazırlanıyor…")
+                : <>Metin katmanı {bozukHarf ? "bozuk görünüyor" : "belgeyle tutmuyor"}. Sayfaları görüntüden okumayı dene (sayfa başına birkaç saniye).</>}
+            </span>
+            <button type="button" style={{ ...css.ghost, fontSize: 13 }} disabled={yenidenOkunuyor}
+              onClick={async () => { setYenidenOkunuyor(true); await pdfOku(sonBelge.dosya, sonBelge.parola, true); setYenidenOkunuyor(false); }}>
+              {yenidenOkunuyor ? "Okunuyor…" : "OCR ile yeniden oku"}
+            </button>
+          </div>
+        )}
+        {kartIpucu != null && (
+          <div style={{ fontSize: 13, lineHeight: 1.45, border: `1px solid ${T.neg}`, borderRadius: 10, padding: "10px 12px" }}>
+            Bu bir <b>kredi kartı ekstresi</b> gibi görünüyor (dönem borcu <span style={css.mono}>{fmtMoney(kartIpucu, "TRY", true)}</span>).
+            Hesap dökümü olarak aktarılırsa kart ödemesi hesaba giren para, harcamalar da
+            {accountId ? <> <b>{data.accounts.find((a) => a.id === +accountId)?.name}</b> hesabından</> : " hesaptan"} çıkmış gibi yazılır.
+            {data.cards.length > 0 ? (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                {data.cards.map((c) => (
+                  <button key={c.id} type="button" style={{ ...css.ghost, fontSize: 13 }} onClick={() => kartaGec(c.id)}>{c.name} kartının ekstresi olarak oku</button>
+                ))}
+              </div>
+            ) : <div style={{ color: T.mut, marginTop: 4 }}>Önce Kartlar'da kartını tanımla, sonra buradan kart ekstresi olarak aktar.</div>}
+          </div>
+        )}
+        <div style={{ ...satirMetni, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline", borderTop: `1px solid ${T.line2}`, paddingTop: 10 }}>
+          <span style={{ flex: 1, minWidth: 0 }}>
+            <b style={{ color: T.text }}>{drafts.length}</b> satır · <b style={{ color: T.text }}>{sayac.get("eksik") ?? 0}</b> eksik · <b style={{ color: T.text }}>{sayac.get("eslesti") ?? 0}</b> zaten defterde
+          </span>
           <button type="button" onClick={isaretCevir} title="Gider ↔ gelir: belgede harcama artı yazılıyorsa"
-            style={{ background: "none", border: "none", padding: 0, color: T.acc, fontSize: 12.5, cursor: "pointer", minHeight: 0 }}>
+            style={{ background: "none", border: "none", padding: 0, color: T.acc, fontSize: 13, fontFamily: T.disp, cursor: "pointer", minHeight: 0 }}>
             işaretleri çevir
           </button>
-          <span>seçili toplam: <span style={{ ...css.mono, color: sum < 0 ? T.neg : T.pos }}>{fmtMoney(sum, "TRY", true)}</span></span>
         </div>
       </div>
 
-      {/* Hedef: otomatik bulunduysa nasıl bulunduğu yazılır; emin değilse göze batar. Değiştirmek
-          belgeyi yeni hedefle yeniden çözer. */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 12.5, marginBottom: 8,
-        background: T.panel2, borderRadius: 8, padding: "6px 12px", border: oto && !oto.emin ? `1px solid ${T.neg}` : "1px solid transparent" }}>
-        <span style={{ color: T.mut, flex: "1 1 200px" }}>
-          {oto
-            ? <>Bu bir <b style={{ color: T.text }}>{TUR_ADI[oto.tur]}</b>. {oto.hedef === ""
-                ? (oto.tur === "kart" ? "Tanımlı kartın yok — Kart sekmesinde ekle, sonra buradan seç." : "Tanımlı hesabın yok.")
-                : !oto.emin ? "Hangisine ait olduğundan emin değilim, kontrol et:"
-                : oto.eslesen > 0 ? `${oto.eslesen} satırı defterindeki kayıtlarla eşleşti:` : "Hedef:"}</>
-            : "Hedef:"}
-        </span>
-        <select className="inline-select" style={{ ...css.input, padding: "4px 8px", fontSize: 12.5, width: "auto", flex: "0 1 260px", minWidth: 0 }}
-          aria-label="Nereye aktarılsın" value={hedef} onChange={(e) => hedefDegistir(e.target.value)}>
-          {hedefSecenekleri}
-        </select>
-      </div>
-      {kartIpucu != null && (
-        <div style={{ fontSize: 12.5, color: T.text, background: T.panel2, border: `1px solid ${T.neg}`, borderRadius: 8, padding: "8px 12px", marginBottom: 8 }}>
-          <div>
-            Bu bir <b>kredi kartı ekstresi</b> gibi görünüyor (dönem borcu {fmtMoney(kartIpucu, "TRY", true)}).
-            Hesap dökümü olarak aktarılırsa kart ödemesi hesaba giren para, harcamalar da
-            {accountId ? <> <b>{data.accounts.find((a) => a.id === +accountId)?.name}</b> hesabından</> : " hesaptan"} çıkmış gibi yazılır.
-          </div>
-          {data.cards.length > 0 ? (
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-              {data.cards.map((c) => (
-                <button key={c.id} type="button" style={{ ...css.ghost, fontSize: 12.5 }} onClick={() => kartaGec(c.id)}>
-                  {c.name} kartının ekstresi olarak oku
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div style={{ color: T.mut, marginTop: 4 }}>Önce Kart sekmesinde kartını tanımla, sonra buradan kart ekstresi olarak aktar.</div>
-          )}
-        </div>
-      )}
-      <DogrulamaSatiri d={dogrulama} />
-      {/* Metin katmanı okundu ama belgeyle tutmuyor ya da harfler bozuk: katman güvenilmez olabilir
-          (bozuk yazı tipi eşlemesi, resim olarak basılmış tutarlar). Karar belgenin kendi doğrulamasına
-          bağlı — sabit bir eşiği değiştirmek yerine. Sonuç yine aynı doğrulamadan geçer. */}
-      {sonBelge && ocrSayfa < sonBelge.sayfa && (bozukHarf || (dogrulama.tur !== "yok" && !dogrulama.tamam)) && (
-        <div style={{ fontSize: 12.5, color: T.mut, background: T.panel2, borderRadius: 8, padding: "8px 12px", marginBottom: 8, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ flex: "1 1 220px" }}>
-            {yenidenOkunuyor ? (ilerleme || "OCR hazırlanıyor…")
-              : <>Belge metin katmanından okundu ama {bozukHarf ? "harfler bozuk görünüyor" : "belgeyle tutmuyor"}. Sayfaları görüntüden okumayı dene — sayfa başına birkaç saniye sürer.</>}
-          </span>
-          <button type="button" style={{ ...css.ghost, fontSize: 12.5 }} disabled={yenidenOkunuyor}
-            onClick={async () => { setYenidenOkunuyor(true); await pdfOku(sonBelge.dosya, sonBelge.parola, true); setYenidenOkunuyor(false); }}>
-            {yenidenOkunuyor ? "Okunuyor…" : "OCR ile yeniden oku"}
-          </button>
-        </div>
-      )}
-      {ocrSayfa > 0 && (
-        <Hint>Belgenin {ocrSayfa} sayfası görüntüden okundu (OCR). Rakamlar yukarıdaki doğrulamayla denetlenir; adlarda harf hatası olabilir — tutmuyorsa satırları gözden geçir.</Hint>
-      )}
-      {bozukHarf && (
-        <Hint>Bu belgenin yazı tipi Türkçe harfleri bozuk veriyor ("%deme" gibi). Tutarlar etkilenmez, ama adları aktarmadan önce kontrol et.</Hint>
-      )}
-      <FiltreSeridi>
+      <FiltreSeridi kaydir>
         {(["eksik", "farkli", "eslesti", "acilis", "odeme", "hepsi"] as const).filter((f) => f === "hepsi" || sayac.get(f)).map((f) => (
           <button key={f} type="button" onClick={() => setFiltre(f)} style={{
-            padding: "5px 10px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 12, fontFamily: T.disp,
-            fontWeight: filtre === f ? 700 : 500, background: filtre === f ? T.panel : "transparent", color: filtre === f ? T.acc : T.mut,
+            padding: "6px 11px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 13, fontFamily: T.disp, whiteSpace: "nowrap", flexShrink: 0,
+            fontWeight: filtre === f ? 600 : 500, background: filtre === f ? T.panel : "transparent", color: filtre === f ? T.acc : T.mut,
+            boxShadow: filtre === f ? "var(--shadow-sm)" : "none", minHeight: 0,
           }}>{FILTRE_ADI[f]} <span style={css.mono}>{sayac.get(f) ?? 0}</span></button>
         ))}
       </FiltreSeridi>
       {filtre === "acilis" && (
         acilisKaydi ? (
-          <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 12.5, color: T.mut, background: T.panel2, borderRadius: 8, padding: "8px 12px", marginBottom: 8, cursor: "pointer" }}>
-            <input type="checkbox" checked={acilisGeri} style={{ marginTop: 2 }} onChange={(e) => {
+          <label style={{ display: "flex", gap: 10, alignItems: "flex-start", fontSize: 13, lineHeight: 1.45, color: T.mut, cursor: "pointer", padding: "0 4px" }}>
+            <input type="checkbox" checked={acilisGeri} style={{ marginTop: 3, accentColor: "var(--brand)" }} onChange={(e) => {
               const acik = e.target.checked;
               setAcilisGeri(acik);
               setDrafts((ds) => ds!.map((r) => (r.durum === "acilis" ? { ...r, include: acik } : r)));
             }} />
             <span>
               Bu satırlar hesabın açılış gününde ya da öncesinde: açılış bakiyesinin içinde zaten sayıldılar.
-              <b> Geçmişi de ekle</b>: seçili satırlar eklenir ve açılış bakiyesi aynı toplam kadar geriye çekilir —
+              <b style={{ color: T.text }}> Geçmişi de ekle</b>: seçili satırlar eklenir ve açılış bakiyesi aynı toplam kadar geriye çekilir —
               bugünkü bakiye değişmez, geçmiş deftere ve raporlara girer.
               {yeniAcilis && <> Açılış: <span style={css.mono}>{kisaTarih(acilisKaydi.date)} {fmtMoney(acilisKaydi.amount, "TRY", true)}</span> → <span style={css.mono}>{kisaTarih(yeniAcilis.date)} {fmtMoney(yeniAcilis.amount, "TRY", true)}</span></>}
             </span>
           </label>
-        ) : <Hint>Bu satırlar hesabın açılış gününde ya da öncesinde: açılış bakiyesinin içinde zaten sayıldılar. Seçersen bakiye o kadar şişer.</Hint>
+        ) : <div style={{ ...satirMetni, padding: "0 4px" }}>Bu satırlar hesabın açılış gününde ya da öncesinde: açılış bakiyesinin içinde zaten sayıldılar. Seçersen bakiye o kadar şişer.</div>
       )}
       {filtre === "acilis" && !acilisGeri && acilisSecilen.length > 0 && acilisKaydi && (
-        <Hint>Açılıştan önceki {acilisSecilen.length} satır seçili ama açılış geri çekilmiyor — bakiye o kadar şişer.</Hint>
+        <div style={{ ...satirMetni, color: T.neg, padding: "0 4px" }}>Açılıştan önceki {acilisSecilen.length} satır seçili ama açılış geri çekilmiyor — bakiye o kadar şişer.</div>
       )}
       {filtre === "farkli" && (
-        <Hint>Defterde adı ve günü tutan bir kayıt var ama tutarı farklı. Banka doğruysa "defterdekini düzelt" — kayıt yeni yazılmaz, tutarı düzeltilir. Satırı seçmek ikinci bir kayıt ekler.</Hint>
+        <div style={{ ...satirMetni, padding: "0 4px" }}>Defterde adı ve günü tutan bir kayıt var ama tutarı farklı. Banka doğruysa "defterdekini düzelt" — kayıt yeni yazılmaz, tutarı düzeltilir. Satırı seçmek ikinci bir kayıt ekler.</div>
       )}
-      <div style={{ border: `1px solid ${T.line}`, borderRadius: 10 }}>
-        {sayfa.gorunen.map(({ d, i }, sira) => (
-          <div key={i} style={{
-            /* sarılır: 390px'te beş kontrol tek satıra sığmıyor, kategori seçici ekrandan taşıyordu */
-            display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", flexWrap: "wrap",
-            borderTop: sira === 0 ? "none" : `1px solid ${T.line}`, opacity: d.include ? 1 : 0.55,
-            background: d.durum === "farkli" ? "color-mix(in srgb, var(--neg) 7%, transparent)" : "transparent",
-          }}>
-            <input type="checkbox" checked={d.include} disabled={kartaGiren(d)} onChange={(e) => upd(i, { include: e.target.checked })} />
-            <span style={{ ...css.mono, fontSize: 11.5, color: T.mut3, flexShrink: 0 }}>{kisaTarih(d.date)}</span>
-            <input style={{ ...css.input, padding: "5px 8px", fontSize: 12.5, flex: "1 1 120px", minWidth: 0 }}
-              value={d.name} onChange={(e) => upd(i, { name: e.target.value })} />
-            <input style={{ ...css.input, padding: "5px 8px", fontSize: 12.5, width: 92, flexShrink: 0, color: d.amount < 0 ? T.neg : T.pos }}
-              value={String(d.amount)} onChange={(e) => upd(i, { amount: Number(e.target.value.replace(",", ".")) || 0 })} />
-            {/* Kategori ve virman TEK seçicide: ayrı iki seçici mobilde satırı üç sıraya çıkarıyordu.
-                "v:<hesap>" = kendi hesapların arası virman (kategorisi olmaz). */}
-            <select style={{ ...css.input, padding: "5px 8px", fontSize: 12, flex: "0 1 130px", minWidth: 0 }} aria-label="Kategori ya da virman"
-              value={d.virman ? `v:${d.virman}` : d.category_id}
-              onChange={(e) => { const v = e.target.value; upd(i, v.startsWith("v:") ? { virman: v.slice(2), category_id: "" } : { virman: "", category_id: v }); }}>
-              <option value="">Kategorisiz</option>
-              {data.categories.filter((c) => c.kind === (d.amount < 0 ? "expense" : "income")).map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-              {digerHesaplar.length > 0 && (
-                <optgroup label="Kendi hesabıma virman">
-                  {digerHesaplar.map((a) => <option key={a.id} value={`v:${a.id}`}>Virman {d.amount < 0 ? "→" : "←"} {a.name}</option>)}
-                </optgroup>
-              )}
-            </select>
-            {(() => {
-              const k = karsiKayit(d);
-              return k && (
-                <div style={{ flexBasis: "100%", fontSize: 11.5, color: T.neg, paddingLeft: 24 }}>
-                  {data.accounts.find((a) => a.id === +d.virman)?.name} hesabında bu paranın kaydı var gibi: {kisaTarih(k.date)} · {k.name} · <span style={css.mono}>{fmtMoney(k.amount, "TRY", true)}</span> — virman yazarsan orada ikinci kez sayılır.
+      {filtre === "odeme" && drafts.some(kartaGiren) && (
+        <div style={{ ...satirMetni, padding: "0 4px" }}>Karta para giren satırlar (ekstre ödemesi ya da iade) aktarılmaz: ekstre ödemesi Kartlar'da "Ödedim" ile kaydedilir.</div>
+      )}
+
+      <div style={{ ...css.card, padding: 0, overflow: "hidden" }}>
+        {sayfa.gorunen.map(({ d, i }, sira) => {
+          const k = karsiKayit(d);
+          const acik = duzenlenen === i;
+          return (
+            <div key={i} style={{
+              display: "flex", alignItems: "flex-start", gap: 12, padding: "12px 14px",
+              borderTop: sira === 0 ? "none" : `1px solid ${T.line2}`, opacity: d.include ? 1 : 0.55,
+              background: d.durum === "farkli" ? "color-mix(in srgb, var(--neg) 6%, transparent)" : "transparent",
+            }}>
+              <input type="checkbox" aria-label={`${d.name} aktarılsın`} checked={d.include} disabled={kartaGiren(d)}
+                onChange={(e) => upd(i, { include: e.target.checked })}
+                style={{ width: 18, height: 18, minHeight: 0, marginTop: 2, flexShrink: 0, accentColor: "var(--brand)" }} />
+              <div style={{ flex: 1, minWidth: 0, display: "grid", gap: 3 }}>
+                {acik ? (
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <input aria-label="Ad" autoFocus style={{ ...css.input, fontFamily: T.disp, padding: "7px 10px", fontSize: 14, flex: "1 1 180px", minWidth: 0 }}
+                      value={d.name} onChange={(e) => upd(i, { name: e.target.value })} />
+                    <input aria-label="Tutar" inputMode="decimal" style={{ ...css.input, padding: "7px 10px", fontSize: 14, width: 120, flexShrink: 0, color: d.amount < 0 ? T.neg : T.pos }}
+                      value={String(d.amount)} onChange={(e) => upd(i, { amount: Number(e.target.value.replace(",", ".")) || 0 })} />
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+                    <span style={{ flex: 1, minWidth: 0, fontSize: 14.5, lineHeight: 1.35, overflowWrap: "anywhere" }}>{d.name}</span>
+                    <span style={{ ...css.mono, fontSize: 14.5, fontWeight: 500, whiteSpace: "nowrap", color: d.amount < 0 ? T.neg : T.pos }}>{fmtMoney(d.amount, "TRY", true)}</span>
+                  </div>
+                )}
+                <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", ...satirMetni }}>
+                  <span style={css.mono}>{kisaTarih(d.date)}</span>
+                  <span aria-hidden="true">·</span>
+                  {/* Kategori ve virman TEK seçicide (Faz 45.8). "v:<hesap>" = kendi hesapların arası virman. */}
+                  <select className="inline-select" aria-label="Kategori ya da virman"
+                    style={{ ...css.input, fontFamily: T.disp, padding: "2px 4px", margin: "-2px 0", fontSize: 12.5, width: "auto", maxWidth: 200, minWidth: 0,
+                      color: d.virman ? T.acc : d.category_id ? T.text : T.mut }}
+                    value={d.virman ? `v:${d.virman}` : d.category_id}
+                    onChange={(e) => { const v = e.target.value; upd(i, v.startsWith("v:") ? { virman: v.slice(2), category_id: "" } : { virman: "", category_id: v }); }}>
+                    <option value="">Kategorisiz</option>
+                    {data.categories.filter((c) => c.kind === (d.amount < 0 ? "expense" : "income")).map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                    {digerHesaplar.length > 0 && (
+                      <optgroup label="Kendi hesabıma virman">
+                        {digerHesaplar.map((a) => <option key={a.id} value={`v:${a.id}`}>Virman {d.amount < 0 ? "→" : "←"} {a.name}</option>)}
+                      </optgroup>
+                    )}
+                  </select>
                 </div>
-              );
-            })()}
-            {d.taksit && !d.kayit && (
-              <div style={{ flexBasis: "100%", fontSize: 11.5, color: T.mut3, paddingLeft: 24 }}>
-                taksit {d.taksit.sira}/{d.taksit.sayi} · alışveriş: {kisaTarih(d.taksit.alis)} · toplam <span style={css.mono}>{fmtMoney(d.taksit.toplam, "TRY", true)}</span>
-                {d.include && " — taksitli harcama olarak yazılır, kalan taksitler sonraki ekstrelere düşer"}
-              </div>
-            )}
-            {d.kayit && (
-              <div style={{ flexBasis: "100%", fontSize: 11.5, color: d.durum === "farkli" ? T.neg : T.mut3, paddingLeft: 24 }}>
-                defterde: {kisaTarih(d.kayit.date)} · {d.kayit.name} · <span style={css.mono}>{fmtMoney(d.kayit.amount, "TRY", true)}</span>
-                {d.kayit.taksit && d.kayit.taksit > 1 ? ` (${d.kayit.taksit} taksit)` : ""}
-                {duzeltilebilir(d) && (
-                  <button type="button" disabled={duzeltilen != null} onClick={() => duzelt(i)} style={{
-                    marginLeft: 8, background: "none", border: "none", padding: 0, color: T.acc, fontSize: 11.5, cursor: "pointer", minHeight: 0,
-                  }}>{duzeltilen === i ? "düzeltiliyor…" : `defterdekini düzelt → ${fmtMoney(d.amount, "TRY", true)}`}</button>
+                {d.taksit && !d.kayit && (
+                  <div style={satirMetni}>taksit {d.taksit.sira}/{d.taksit.sayi} · toplam <span style={css.mono}>{fmtMoney(d.taksit.toplam, "TRY", true)}</span> · alış <span style={css.mono}>{kisaTarih(d.taksit.alis)}</span></div>
+                )}
+                {k && (
+                  <div style={{ ...satirMetni, color: T.neg }}>
+                    {data.accounts.find((a) => a.id === +d.virman)?.name} hesabında bu paranın kaydı var gibi: {kisaTarih(k.date)} · {k.name} · <span style={css.mono}>{fmtMoney(k.amount, "TRY", true)}</span> — virman yazarsan orada ikinci kez sayılır.
+                  </div>
+                )}
+                {d.kayit && (
+                  <div style={{ ...satirMetni, color: d.durum === "farkli" ? T.neg : T.mut }}>
+                    defterde: {kisaTarih(d.kayit.date)} · {d.kayit.name} · <span style={css.mono}>{fmtMoney(d.kayit.amount, "TRY", true)}</span>
+                    {d.kayit.taksit && d.kayit.taksit > 1 ? ` (${d.kayit.taksit} taksit)` : ""}
+                    {duzeltilebilir(d) && (
+                      <button type="button" disabled={duzeltilen != null} onClick={() => duzelt(i)} style={{
+                        marginLeft: 8, background: "none", border: "none", padding: 0, color: T.acc, fontSize: 12.5, fontFamily: T.disp, cursor: "pointer", minHeight: 0,
+                      }}>{duzeltilen === i ? "düzeltiliyor…" : `defterdekini düzelt → ${fmtMoney(d.amount, "TRY", true)}`}</button>
+                    )}
+                  </div>
                 )}
               </div>
-            )}
-          </div>
-        ))}
+              <button type="button" aria-label={acik ? "Düzenlemeyi kapat" : "Adı ya da tutarı düzelt"} title={acik ? "Tamam" : "Adı ya da tutarı düzelt"}
+                onClick={() => setDuzenlenen(acik ? null : i)}
+                style={{ background: acik ? T.accSoft : "none", border: "none", borderRadius: 8, color: acik ? T.acc : T.mut, cursor: "pointer",
+                  width: 32, height: 32, minHeight: 0, display: "grid", placeItems: "center", flexShrink: 0, marginTop: -5, marginRight: -6 }}>
+                {acik
+                  ? <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M2.5 7.2l3 3L11.5 4" /></svg>
+                  : <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round"><path d="M9.5 2.5l2 2L5 11H3v-2z" /></svg>}
+              </button>
+            </div>
+          );
+        })}
         {drafts.length === 0 && <div style={{ padding: 16, textAlign: "center", color: T.mut, fontSize: 13 }}>Hiçbir satır çözülemedi</div>}
         {drafts.length > 0 && gorunen.length === 0 && <div style={{ padding: 16, textAlign: "center", color: T.mut, fontSize: 13 }}>Bu grupta satır yok</div>}
       </div>
       <DahaFazla s={sayfa} ad="satır" yon="fazla" />
 
       {mutabakat && (
-        <div style={{ fontSize: 12.5, marginTop: 10, background: T.panel2, borderRadius: 8, padding: "8px 12px",
-          color: Math.abs(mutabakat.banka - mutabakat.defter) < 0.005 ? T.pos : T.text }}>
+        <div style={{ ...satirMetni, fontSize: 13, padding: "0 4px", color: Math.abs(mutabakat.banka - mutabakat.defter) < 0.005 ? T.pos : T.text }}>
           {Math.abs(mutabakat.banka - mutabakat.defter) < 0.005
             ? <>✓ Aktarımdan sonra {kisaTarih(mutabakat.tarih)} itibarıyla defter bankayla aynı: <span style={css.mono}>{fmtMoney(mutabakat.banka, "TRY", true)}</span>.</>
             : <>Aktarımdan sonra {kisaTarih(mutabakat.tarih)} itibarıyla defter <span style={css.mono}>{fmtMoney(mutabakat.defter, "TRY", true)}</span>,
@@ -577,52 +609,59 @@ export function ImportForm({ data, reload, onClose: kapat }: { data: AllData; re
         </div>
       )}
       {fazla.length > 0 && (
-        <details style={{ marginTop: 10, fontSize: 12.5 }}>
+        <details style={{ fontSize: 13, padding: "0 4px" }}>
           <summary style={{ cursor: "pointer", color: T.mut }}>
             Defterde olup dökümde olmayan {fazla.length} kayıt — yanlış ya da çift giriş olabilir (silinmez)
           </summary>
-          <div style={{ marginTop: 6, border: `1px solid ${T.line}`, borderRadius: 10, maxHeight: "30vh", overflowY: "auto" }}>
+          <div style={{ ...css.card, padding: 0, marginTop: 8, maxHeight: "30vh", overflowY: "auto" }}>
             {fazla.slice(0, 100).map((k, i) => (
-              <div key={k.kimlik} style={{ display: "flex", gap: 8, padding: "6px 10px", borderTop: i === 0 ? "none" : `1px solid ${T.line}` }}>
-                <span style={{ ...css.mono, fontSize: 11.5, color: T.mut3, flexShrink: 0 }}>{kisaTarih(k.date)}</span>
+              <div key={k.kimlik} style={{ display: "flex", gap: 10, padding: "8px 14px", borderTop: i === 0 ? "none" : `1px solid ${T.line2}` }}>
+                <span style={{ ...css.mono, fontSize: 12, color: T.mut, flexShrink: 0 }}>{kisaTarih(k.date)}</span>
                 <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{k.name}</span>
                 <span style={{ ...css.mono, color: k.amount < 0 ? T.neg : T.pos }}>{fmtMoney(k.amount, "TRY", true)}</span>
               </div>
             ))}
-            {fazla.length > 100 && <div style={{ padding: "6px 10px", color: T.mut3 }}>… ve {fazla.length - 100} kayıt daha</div>}
+            {fazla.length > 100 && <div style={{ padding: "8px 14px", color: T.mut }}>… ve {fazla.length - 100} kayıt daha</div>}
           </div>
         </details>
       )}
-
       {skipped.length > 0 && (
-        <Hint>{skipped.length} satır atlandı (tarih veya tutar bulunamadı): <span style={css.mono}>{skipped.slice(0, 2).join(" / ").slice(0, 90)}…</span></Hint>
+        <div style={{ ...satirMetni, padding: "0 4px" }}>{skipped.length} satır atlandı (tarih veya tutar bulunamadı): <span style={css.mono}>{skipped.slice(0, 2).join(" / ").slice(0, 90)}…</span></div>
       )}
-      {drafts.some(kartaGiren) && filtre === "odeme" && (
-        <Hint>Karta para giren satırlar (ekstre ödemesi ya da iade) aktarılmaz: ekstre ödemesi Kart sekmesinde "Ödedim" ile kaydedilir.</Hint>
-      )}
-      <div style={{ fontSize: 12, color: T.mut, marginTop: 10, background: T.panel2, borderRadius: 8, padding: "8px 12px" }}>
+      {/* Ne yazılacağı BİR KEZ, listenin dibinde (taksit açıklaması eskiden her taksitli satırda tekrarlanıyordu) */}
+      <div style={{ ...satirMetni, padding: "0 4px" }}>
         {kart
-          ? <>Seçili satırlar <b>{kart.name}</b> kartına harcama olarak yazılır ve tarihlerine göre ilgili ekstreye düşer. Taksitli satırlar alışverişin kendisi olarak (toplam tutar, taksit sayısı, alış günü) yazılır. Defterde karşılığı olan satırlar ("Defterde") seçili gelmez.</>
+          ? <>Seçili satırlar <b style={{ color: T.text }}>{kart.name}</b> kartına harcama olarak yazılır ve tarihlerine göre ilgili ekstreye düşer. Taksitli satırlar alışverişin kendisi olarak (toplam tutar, taksit sayısı, alış günü) yazılır; kalan taksitler sonraki ekstrelere düşer. Defterde karşılığı olan satırlar seçili gelmez.</>
           : accountId
-          ? <>Seçili satırlar gerçekleşen kayıt olarak yazılır ve <b>{data.accounts.find((a) => a.id === +accountId)?.name}</b> bakiyesine toplam <span style={{ ...css.mono, color: sum < 0 ? T.neg : T.pos }}>{fmtMoney(sum, "TRY", true)}</span> işler.
+          ? <>Seçili satırlar gerçekleşen kayıt olarak yazılır ve <b style={{ color: T.text }}>{data.accounts.find((a) => a.id === +accountId)?.name}</b> bakiyesine toplam <span style={{ ...css.mono, color: sum < 0 ? T.neg : T.pos }}>{fmtMoney(sum, "TRY", true)}</span> işler.
             {chosen.some((d) => d.virman) && <> Bunlardan {chosen.filter((d) => d.virman).length} tanesi virman: gelir/gider sayılmaz, karşı hesaba da yazılır.</>}</>
           : "Hesap seçilmedi — kayıtlar yalnız gelir/gider defterine girer, bakiyeye dokunmaz."}
       </div>
-      {err && <div style={{ color: T.neg, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
-      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-        <button type="button" style={{ ...css.btn, opacity: chosen.length && !busy ? 1 : 0.4 }} disabled={!chosen.length || busy} onClick={save}>
-          {busy ? "Kaydediliyor…" : `${chosen.length} kaydı içe aktar`}
-        </button>
-        <button type="button" style={css.ghost} onClick={() => setDrafts(null)}>Geri</button>
-        <button type="button" style={{ ...css.ghost, marginLeft: "auto" }} onClick={() => (chosen.length ? setCikisSor(true) : onClose())}>Vazgeç</button>
-      </div>
-      {cikisSor && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 10, padding: "8px 12px", borderRadius: 8, border: `1px solid ${T.neg}`, fontSize: 12.5 }}>
-          <span style={{ flex: "1 1 220px" }}>Seçtiğin {chosen.length} satır henüz aktarılmadı. Çıkarsan okunan belge ve seçimlerin silinir.</span>
-          <button type="button" style={{ ...css.ghost, fontSize: 12.5, color: T.neg }} onClick={onClose}>Çık, sil</button>
-          <button type="button" style={{ ...css.ghost, fontSize: 12.5 }} onClick={() => setCikisSor(false)}>Devam et</button>
+
+      {/* Yapışkan eylem çubuğu: seçimi değiştirirken toplam ve "içe aktar" hep görünür (eskiden
+          listenin en dibindeydi — 60 satırlık dökümde seçili toplamı görmek için başa dönülüyordu). */}
+      <div className="ice-eylem" style={{
+        ...css.card, padding: "10px 12px", display: "grid", gap: 8, zIndex: 5,
+        boxShadow: "var(--shadow)",
+      }}>
+        {err && <div style={{ color: T.neg, fontSize: 13 }}>{err}</div>}
+        {cikisSor && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 13 }}>
+            <span style={{ flex: "1 1 200px" }}>Seçtiğin {chosen.length} satır henüz aktarılmadı. Çıkarsan okunan belge ve seçimlerin silinir.</span>
+            <button type="button" style={{ ...css.ghost, fontSize: 13, color: T.neg }} onClick={onClose}>Çık, sil</button>
+            <button type="button" style={{ ...css.ghost, fontSize: 13 }} onClick={() => setCikisSor(false)}>Devam et</button>
+          </div>
+        )}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button type="button" style={{ ...css.btn, flex: 1, maxWidth: 420, display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap", opacity: chosen.length && !busy ? 1 : 0.4 }}
+            disabled={!chosen.length || busy} onClick={save}>
+            <span>{busy ? "Kaydediliyor…" : `${chosen.length} kaydı içe aktar`}</span>
+            {chosen.length > 0 && !busy && <span style={{ ...css.mono, fontWeight: 500, opacity: 0.85 }}>{fmtMoney(sum, "TRY", true)}</span>}
+          </button>
+          <button type="button" style={css.ghost} onClick={() => setDrafts(null)}>Geri</button>
+          <button type="button" style={css.ghost} onClick={() => (chosen.length ? setCikisSor(true) : onClose())}>Vazgeç</button>
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -631,7 +670,7 @@ export function ImportForm({ data, reload, onClose: kapat }: { data: AllData; re
     olmasın diye önizlemenin en üstünde durur; katlanmaz (rakamın güvenilirliğini söyler). */
 function DogrulamaSatiri({ d }: { d: Dogrulama }) {
   const kutu = (renk: string, metin: React.ReactNode) => (
-    <div style={{ fontSize: 12.5, color: renk, background: T.panel2, borderRadius: 8, padding: "7px 12px", marginBottom: 8 }}>{metin}</div>
+    <div style={{ fontSize: 13, lineHeight: 1.45, color: renk }}>{metin}</div>
   );
   if (d.tur === "yok") return kutu(T.mut, "Bu belgede kendi toplamıyla karşılaştırılacak bir dayanak bulunamadı — satırları gözden geçir.");
   if (d.tamam) return kutu(T.pos, d.tur === "bakiye"

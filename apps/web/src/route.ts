@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { NAV, PROFIL_META, TANIMLAR_META, KURULUM_META, ICE_AKTAR_META, type TabKey } from "./nav";
+import { NAV, PROFIL_META, TANIMLAR_META, KURULUM_META, ICE_AKTAR_META, MENU_META, type TabKey } from "./nav";
 
 /* ————— sekme adresleri —————
    Aktif sekme eskiden yalnız `useState`'te yaşıyordu (App.tsx) ve bunun üç ayrı bedeli
@@ -22,7 +22,7 @@ import { NAV, PROFIL_META, TANIMLAR_META, KURULUM_META, ICE_AKTAR_META, type Tab
    Yasal sayfalar (/gizlilik, /kosullar) buranın dışındadır — onlar SPA değil, sunucunun
    ayrı rotaları (Faz 28). Bir sekme anahtarı asla o adlarla çakışmamalı. */
 
-const KEYS: string[] = [...NAV.map((n) => n.key), TANIMLAR_META.key, PROFIL_META.key, KURULUM_META.key, ICE_AKTAR_META.key];
+const KEYS: string[] = [...NAV.map((n) => n.key), TANIMLAR_META.key, PROFIL_META.key, KURULUM_META.key, ICE_AKTAR_META.key, MENU_META.key];
 
 export const tabPath = (t: TabKey) => (t === "ozet" ? "/" : `/${t}`);
 
