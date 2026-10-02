@@ -402,6 +402,13 @@ export default function App() {
         .ozet-kutu{transition:border-color .15s}
         .ozet-kutu:hover{border-color:${T.mut3}!important}
         .kur-toggle{display:none!important}
+        /* Form alt çubuğu (forms/parcalar.tsx FormAlt): modal kutusunun dibine yapışık. Kutu
+           padding'i 22px — çubuk kenara kadar uzansın diye negatif kenar boşluğu. */
+        .form-alt{position:sticky;bottom:-22px;margin:18px -22px -22px;padding:12px 22px 18px;background:${T.panel};border-top:1px solid ${T.line2};display:grid;gap:10px;z-index:2}
+        .modal-tutamak{display:none}
+        .ekle-cipler{flex-wrap:wrap}
+        .tutar-girdisi::placeholder{color:${T.mut3}}
+        @keyframes sayfaYukari{from{transform:translateY(40px);opacity:.6}to{transform:none;opacity:1}}
         /* İçe aktarma önizlemesinin eylem çubuğu: liste kayarken altta yapışık durur */
         .ice-eylem{position:sticky;bottom:12px}
         @media (max-width:900px){
@@ -417,6 +424,13 @@ export default function App() {
           .kur-liste[data-acik="false"]{display:none}
           .ozet-secici{padding:7px 10px!important}
           .ice-eylem{bottom:calc(70px + env(safe-area-inset-bottom))}
+          /* Modal → alttan açılan sayfa */
+          .modal-zemin{place-items:end center!important;padding:0!important}
+          .modal-kutu{max-width:none!important;border-radius:22px 22px 0 0!important;max-height:94dvh!important;padding:6px 20px 20px!important;border-bottom:none!important;animation:sayfaYukari .2s ease-out}
+          .ekle-cipler{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
+          .ekle-cipler::-webkit-scrollbar{display:none}
+          .modal-tutamak{display:block;width:40px;height:5px;border-radius:3px;background:${T.line};margin:2px auto 10px}
+          .form-alt{bottom:-20px;margin:18px -20px -20px;padding:12px 20px calc(16px + env(safe-area-inset-bottom))}
         }
         .bottom-nav{display:none}
         .mobile-only{display:none!important}
@@ -600,7 +614,7 @@ export default function App() {
       </main>
 
       {add !== null && <AddSheet data={data} state={add} setState={setAdd} onClose={() => setAdd(null)} reload={reload}
-        onImport={() => { setAdd(null); iceAktaraGit(); }} />}
+        onImport={() => { setAdd(null); iceAktaraGit(); }} onAsistan={() => { setAdd(null); setTab("asistan"); }} />}
 
       {/* Telefon alt çubuğu (yeniden tasarım, Ekim 2026): sekiz sekme 390px'e sığmıyordu (10px etiket,
           kırpılmış adlar). Çubukta kullanıcının en sık kullandıkları — Özet, Asistan (harcamalar oradan

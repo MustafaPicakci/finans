@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  todayStr, num, fmtD, qtyFromAmount, amountFromQty, cashDelta, positions,
+  todayStr, num, fmtD, parseD, firstCutoff, dueOf, qtyFromAmount, amountFromQty, cashDelta, positions,
   depositMaturity, depositGrossInterest, depositNetInterest, depositMaturityValue,
   type AllData, type AssetType, type CardTx, type Currency, type Deposit, type OneOff, type Recurring,
   type Trade, type Transaction, type Transfer, type Loan,
@@ -9,7 +9,11 @@ import {
 import { api } from "../../api";
 import { KategoriAlani } from "./KategoriAlani";
 import { T, css, fmtMoney, TYPE_HINT } from "../../theme";
-import { Field, AmountField, Hint, SuggestInput, Empty } from "../../ui";
+import { SuggestInput, Empty } from "../../ui";
+import {
+  girdi, girdiMono, Bolum, Etiketli, Segment, TutarGirdisi, Satirlar, SatirSec, SatirTarih, SatirMetin, Anahtar, Sayac,
+  Cipler, Doldur, FormAlt, kisaGun, Vurgu,
+} from "./parcalar";
 import {
   kalemSuggestions, cardTxSuggestions, symbolSuggestions, priceOf, priceCcyOf, heldQty, lastUsedPortfolio,
   type KalemSuggestion, type CardTxSuggestion, type SymbolSuggestion,
@@ -52,24 +56,13 @@ export type EditTarget =
   | { kind: "loan"; row: Loan }
   | { kind: "deposit"; row: Deposit };
 
-/** Kaydet (kapat) + Kaydet-yeni-ekle buton çifti; düzenlemede tek "Kaydet" kalır */
-/* `onSaveNew` opsiyoneldir: "Kaydet, yeni ekle" yalnız ARKA ARKAYA girilen kayıtlarda
-   anlamlı. Bedelli sermaye artışı tek seferlik bir olaydır (aynı hisseye üst üste bedelli
-   girilmez), o yüzden `editing` ile gizlenir ve geri çağrı hiç verilmez. */
-function SaveButtons({ ok, reason, onSaveNew, editing }: { ok: boolean; reason: string | null; onSaveNew?: () => void; editing?: boolean }) {
-  return (<>
-    <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-      <button type="submit" style={{ ...css.btn, opacity: ok ? 1 : 0.4 }} disabled={!ok}>Kaydet</button>
-      {!editing && onSaveNew && <button type="button" style={{ ...css.ghost, opacity: ok ? 1 : 0.4 }} disabled={!ok} onClick={onSaveNew}>Kaydet, yeni ekle</button>}
-    </div>
-    {reason && <Hint>{reason}</Hint>}
-  </>);
-}
+/** Düzenlemede formun dibine (FormAlt) EditSheet'ten gelen "Sil" düğmesi */
+type DuzenleProps = { sil?: React.ReactNode };
 
 /** Gelir/gider kalemi — tarihe göre otomatik yönlendirilir:
     bugün/geçmiş → gerçekleşen kayıt (transactions; hesaba bağlıysa bakiyeye işler, gelir/gider defterine girer),
     ileri tarih → plan kalemi (oneoffs; nakit projeksiyonuna girer). */
-export function KalemForm({ data, reload, onClose, prefill, edit }: FormProps & {
+export function KalemForm({ data, reload, onClose, prefill, edit, sil }: FormProps & DuzenleProps & {
   prefill?: KalemPrefill; edit?: Extract<EditTarget, { kind: "transaction" | "oneoff" }>;
 }) {
   const [tx, setTx] = useState(() => {
@@ -104,7 +97,7 @@ export function KalemForm({ data, reload, onClose, prefill, edit }: FormProps & 
      tarihi ileri almak onu plana çevirmez, yalnız tarihi değişir. */
   const future = edit ? edit.kind === "oneoff" : tx.date > todayStr(); // ISO tarihte string karşılaştırması güvenli
   const ok = !!tx.name && num(tx.amount) > 0 && !!tx.date;
-  const reason = !tx.name ? "Ad gerekli" : !(num(tx.amount) > 0) ? "Tutar 0'dan büyük olmalı" : !tx.date ? "Tarih gerekli" : null;
+  const reason = !(num(tx.amount) > 0) ? "Tutarı gir." : !tx.name ? "Ne için olduğunu yaz." : !tx.date ? "Tarih seç." : null;
   const save = async (andNew: boolean) => {
     if (!ok) return;
     const amount = (tx.type === "gider" ? -1 : 1) * num(tx.amount);
@@ -136,53 +129,54 @@ export function KalemForm({ data, reload, onClose, prefill, edit }: FormProps & 
     // tarih/tür/kategori/hesap korunur — aynı günün fişlerini art arda girerken tekrar seçmek gerekmez
     if (andNew) { setTx({ ...tx, name: "", amount: "" }); nameRef.current?.focus(); } else onClose();
   };
+  const gider = tx.type === "gider";
+  const acc = tx.account_id ? data.accounts.find((a) => a.id === +tx.account_id) : null;
+  const cat = tx.category_id ? data.categories.find((c) => c.id === +tx.category_id) : null;
+  /* Eskiden formun dibinde genel kuralı anlatan bir bilgi kutusu vardı; şimdi SOMUT sonuç: hangi
+     hesaptan ne kadar, hangi kategoriye. Kural aynı (KalemForm'un yönlendirmesi değişmedi). */
+  const sonuc = edit
+    ? edit.kind === "oneoff"
+      ? "Plan kalemi: değişiklik Nakit Akışı projeksiyonuna yansır. (Deftere geçirmek için Plan'daki “Gerçekleşti”.)"
+      : "Kaydedince eski tutar ilgili hesaptan geri alınır, yenisi işlenir (hesabı değiştirsen bile)."
+    : future
+      ? "İleri tarih: plan kalemi olur, Nakit Akışı'na girer. Günü gelince Plan'dan “Gerçekleşti” ile deftere geçirirsin."
+      : acc
+        ? <><b>{acc.name}</b> {gider ? "bakiyesinden" : "bakiyesine"} <Vurgu v={num(tx.amount)} isaret={gider ? "−" : "+"} /> {gider ? "düşer" : "eklenir"}{cat ? <>, <b>{cat.name}</b> {gider ? "giderine" : "gelirine"} yazılır</> : null}.</>
+        : "Hesap seçilmedi: yalnız gelir/gider kaydı olur, bakiyeye dokunmaz.";
   return (
     <form onSubmit={(e) => { e.preventDefault(); save(false); }}>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <Field label="Ad" flex={2}>
+      <Bolum>
+        <Segment ad="Tür" deger={tx.type} sec={(v) => setTx({ ...tx, type: v, category_id: "" })}
+          secenek={[{ v: "gider", l: "Gider", renk: T.neg }, { v: "gelir", l: "Gelir", renk: T.pos }]} />
+        <TutarGirdisi value={tx.amount} onChange={(v) => setTx({ ...tx, amount: v })} renk={gider ? T.neg : T.pos} />
+        <Etiketli etiket="Ne için?">
           <SuggestInput autoFocus inputRef={nameRef} value={tx.name} onChange={(v) => setTx({ ...tx, name: v })}
-            onPick={pick} options={sugs} labelOf={(s) => s.name}
+            onPick={pick} options={sugs} labelOf={(s) => s.name} style={girdi}
             subOf={(s) => `${fmtMoney(s.amount, "TRY", true)} · ${s.count}×`} placeholder="örn. Migros" />
-        </Field>
-        <AmountField label="Tutar (TL)" value={tx.amount} onChange={(v) => setTx({ ...tx, amount: v })} />
-        <Field label="Tarih"><input type="date" style={css.input} value={tx.date} onChange={(e) => setTx({ ...tx, date: e.target.value })} /></Field>
-        <Field label="Tür">
-          <select style={css.input} value={tx.type} onChange={(e) => setTx({ ...tx, type: e.target.value as "gider" | "gelir" })}>
-            <option value="gider">Gider (−)</option><option value="gelir">Gelir (+)</option>
-          </select>
-        </Field>
-      </div>
-      {!future && (
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-          <Field label="Hesap" flex={2}>
-            <select style={css.input} value={tx.account_id} onChange={(e) => setTx({ ...tx, account_id: e.target.value })}>
-              <option value="">— (bakiyeye işleme)</option>
+        </Etiketli>
+        <Satirlar>
+          <SatirTarih value={tx.date} onChange={(v) => setTx({ ...tx, date: v })} />
+          {!future && (
+            <SatirSec etiket="Hesap" goruntu={acc ? acc.name : "Bakiyeye işleme"} soluk={!acc} value={tx.account_id}
+              onChange={(v) => setTx({ ...tx, account_id: v })}>
+              <option value="">— Bakiyeye işleme</option>
               {data.accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-            </select>
-          </Field>
-          <KategoriAlani data={data} reload={reload} value={tx.category_id}
-            onChange={(v) => setTx({ ...tx, category_id: v })}
-            kind={tx.type === "gelir" ? "income" : "expense"} />
-        </div>
-      )}
-      <div style={{ fontSize: 12, color: T.mut, marginTop: 10, background: T.panel2, borderRadius: 8, padding: "8px 12px" }}>
-        {edit
-          ? edit.kind === "oneoff"
-            ? "Plan kalemi düzenleniyor: değişiklik Nakit Akışı projeksiyonuna yansır. (Deftere geçirmek için Plan'daki “Gerçekleşti” düğmesini kullan.)"
-            : "Gerçekleşen kayıt düzenleniyor: bakiye etkisi otomatik düzeltilir — eski tutar ilgili hesaptan geri alınır, yenisi işlenir (hesabı değiştirsen bile)."
-          : future
-            ? "İleri tarihli → plan kalemi olarak kaydedilir: Nakit Akışı projeksiyonuna girer, günü gelince Plan'dan \"Gerçekleşti\" ile deftere geçirebilirsin."
-            : tx.account_id
-              ? "Gerçekleşen kayıt: seçili hesabın bakiyesine hemen işler ve gelir/gider kaydı olur."
-              : "Gerçekleşen kayıt: hesap seçilmedi — sadece gelir/gider kaydı olur, bakiyeye dokunmaz."}
-      </div>
-      <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} editing={!!edit} />
+            </SatirSec>
+          )}
+          {!future && (
+            <KategoriAlani satir data={data} reload={reload} value={tx.category_id}
+              onChange={(v) => setTx({ ...tx, category_id: v })} kind={gider ? "expense" : "income"} />
+          )}
+        </Satirlar>
+      </Bolum>
+      <FormAlt sonuc={sonuc} ok={ok} reason={reason} onSaveNew={() => save(true)} editing={!!edit} sil={sil}
+        etiket={edit ? "Değişikliği kaydet" : future ? "Plana ekle" : gider ? "Gideri kaydet" : "Geliri kaydet"} />
     </form>
   );
 }
 
 /** Kart harcaması → ekstreye işlenir, son ödeme günü nakit akışına düşer */
-export function CardTxForm({ data, reload, onClose, prefill, edit }: FormProps & { prefill?: CardTxPrefill; edit?: CardTx }) {
+export function CardTxForm({ data, reload, onClose, prefill, edit, sil }: FormProps & DuzenleProps & { prefill?: CardTxPrefill; edit?: CardTx }) {
   const [tf, setTf] = useState(() => edit
     ? {
       card_id: edit.card_id, date: edit.date, name: edit.name, amount: String(edit.amount),
@@ -203,7 +197,7 @@ export function CardTxForm({ data, reload, onClose, prefill, edit }: FormProps &
     }));
   useEffect(() => { if (!edit && data.cards.length === 1 && tf.card_id === 0) setTf((s) => ({ ...s, card_id: data.cards[0].id })); }, [data.cards]);
   const ok = tf.card_id > 0 && !!tf.name && num(tf.amount) > 0 && !!tf.date && +tf.installments >= 1;
-  const reason = tf.card_id === 0 ? "Kart seçilmeli" : !tf.name ? "Açıklama gerekli" : !(num(tf.amount) > 0) ? "Tutar 0'dan büyük olmalı" : null;
+  const reason = tf.card_id === 0 ? "Kartı seç." : !(num(tf.amount) > 0) ? "Tutarı gir." : !tf.name ? "Ne aldığını yaz." : null;
   const save = async (andNew: boolean) => {
     if (!ok) return;
     const body = {
@@ -215,50 +209,55 @@ export function CardTxForm({ data, reload, onClose, prefill, edit }: FormProps &
     reload();
     if (andNew) { setTf({ ...tf, name: "", amount: "", installments: "1" }); nameRef.current?.focus(); } else onClose();
   };
+  const kart = data.cards.find((c) => c.id === tf.card_id);
+  const taksit = Math.max(1, +tf.installments || 1);
+  /* Hangi ekstreye düşer: motorun ekstre matematiğiyle (firstCutoff/dueOf — txShares'in kullandığı
+     aynı fonksiyonlar). Eski formda bu yazmıyordu; kullanıcı ekstreyi Kartlar'da görünce öğreniyordu. */
+  const kesim = kart && tf.date ? firstCutoff(parseD(tf.date), kart.statement_day) : null;
+  const vade = kesim && kart ? dueOf(kesim, kart.due_day) : null;
+  const sonuc = <>
+    {kesim && vade && <>{kisaGun(kesim)} kesimli ekstreye düşer; {taksit > 1 ? "ilk taksit" : "son ödeme"} {kisaGun(vade)}.</>}
+    {edit && " Tarih ya da taksit değişirse harcama yeniden doğru ekstrelere dağıtılır."}
+  </>;
   return (
     <form onSubmit={(e) => { e.preventDefault(); save(false); }}>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <Field label="Kart">
-          <select style={css.input} value={tf.card_id} onChange={(e) => setTf({ ...tf, card_id: +e.target.value })}>
-            <option value={0}>Seç…</option>
-            {data.cards.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-        </Field>
-        <Field label="Tarih"><input type="date" style={css.input} value={tf.date} onChange={(e) => setTf({ ...tf, date: e.target.value })} /></Field>
-        <Field label="Açıklama" flex={2}>
+      <Bolum>
+        {data.cards.length <= 4
+          ? <Cipler ad="Kart" deger={tf.card_id} sec={(v) => setTf({ ...tf, card_id: v })} secenek={data.cards.map((c) => ({ v: c.id, l: c.name }))} />
+          : (
+            <Satirlar>
+              <SatirSec etiket="Kart" goruntu={kart?.name ?? "Seç…"} soluk={!kart} value={tf.card_id} onChange={(v) => setTf({ ...tf, card_id: +v })}>
+                <option value={0}>Seç…</option>
+                {data.cards.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </SatirSec>
+            </Satirlar>
+          )}
+        <TutarGirdisi etiket="Toplam tutar" value={tf.amount} onChange={(v) => setTf({ ...tf, amount: v })} renk={T.neg} />
+        <Etiketli etiket="Ne aldın?">
           <SuggestInput autoFocus inputRef={nameRef} value={tf.name} onChange={(v) => setTf({ ...tf, name: v })}
-            onPick={pick} options={sugs} labelOf={(s) => s.name}
+            onPick={pick} options={sugs} labelOf={(s) => s.name} style={girdi}
             subOf={(s) => `${fmtMoney(s.amount, "TRY", true)} · ${s.count}×`} placeholder="örn. Telefon" />
-        </Field>
-        <AmountField label="Toplam tutar (TL)" value={tf.amount} onChange={(v) => setTf({ ...tf, amount: v })} />
-        <Field label="Taksit"><input style={css.input} inputMode="numeric" placeholder="1" value={tf.installments} onChange={(e) => setTf({ ...tf, installments: e.target.value })} /></Field>
-      </div>
-      {/* Faz 39 — kart harcamasının kategorisi. Kendi satırında, çünkü üstteki satır 390px'te
-          zaten beş alan taşıyor. Kategori girilmezse kayıt geçerlidir, yalnız harcama özetinde
-          "kategorisi girilmemiş" kovasında durur. */}
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-        <KategoriAlani label="Kategori (ops.)" data={data} reload={reload} value={tf.category_id}
-          onChange={(v) => setTf({ ...tf, category_id: v })} kind="expense" />
-      </div>
-      {ok && +tf.installments > 1 && (
-        <div style={{ fontSize: 12, color: T.mut, marginTop: 8 }}>
-          aylık pay: <span style={{ ...css.mono, color: T.text }}>{fmtMoney(num(tf.amount) / +tf.installments, "TRY", true)}</span> × {tf.installments}
-        </div>
-      )}
-      {edit && (
-        <div style={{ fontSize: 12, color: T.mut, marginTop: 10, background: T.panel2, borderRadius: 8, padding: "8px 12px" }}>
-          Harcama düzenleniyor: tarih veya taksit değişirse harcama yeniden hesaplanıp doğru ekstrelere dağıtılır.
-        </div>
-      )}
-      <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} editing={!!edit} />
+        </Etiketli>
+        <Sayac etiket="Taksit" value={tf.installments} onChange={(v) => setTf({ ...tf, installments: v })}
+          alt={taksit > 1 && num(tf.amount) > 0 ? <>aylık <span style={{ fontFamily: T.mono, color: T.text }}>{fmtMoney(num(tf.amount) / taksit, "TRY", true)}</span> × {taksit}</> : null} />
+        <Satirlar>
+          <SatirTarih value={tf.date} onChange={(v) => setTf({ ...tf, date: v })} />
+          {/* Faz 39 — kart harcamasının kategorisi (isteğe bağlı): girilmezse harcama özetinde
+              "kategorisi girilmemiş" kovasında durur */}
+          <KategoriAlani satir bos="seç (isteğe bağlı)" data={data} reload={reload} value={tf.category_id}
+            onChange={(v) => setTf({ ...tf, category_id: v })} kind="expense" />
+        </Satirlar>
+      </Bolum>
+      <FormAlt sonuc={sonuc} ok={ok} reason={reason} onSaveNew={() => save(true)} editing={!!edit} sil={sil}
+        etiket={edit ? "Değişikliği kaydet" : "Harcamayı kaydet"} />
     </form>
   );
 }
 
 /** Düzenli gelir/gider → her ay tekrarlar, nakit projeksiyonuna girer.
     Opsiyonel hedef (hesap veya kart) bağlanırsa günü gelince Plan'dan "Gerçekleşti" ile (veya "otomatik"
-    açıksa cron ile) gerçek kayda dönüşür: hesap → transactions (bakiye + gelir/gider defteri), kart → o ayki ekstreye. */
-export function RecurringForm({ data, reload, onClose, edit }: FormProps & { edit?: Recurring }) {
+    açıksa kendiliğinden) gerçek kayda dönüşür: hesap → transactions (bakiye + gelir/gider defteri), kart → o ayki ekstreye. */
+export function RecurringForm({ data, reload, onClose, edit, sil }: FormProps & DuzenleProps & { edit?: Recurring }) {
   /* Faz 18 — düzenlemede TUTAR yoktur: kimlik (`recurring`) ile tutar (`recurring_amounts` zaman
      çizelgesi) Faz 9'da bilinçli olarak ayrıldı. Tutarı buradan değiştirmek geçmiş projeksiyonu
      geriye dönük bozardı; doğru yol Plan'daki "Değiştir" (seçilen aydan itibaren yeni tutar satırı). */
@@ -275,11 +274,10 @@ export function RecurringForm({ data, reload, onClose, edit }: FormProps & { edi
     });
   const nameRef = useRef<HTMLInputElement>(null);
   const ok = !!rec.name && (edit ? true : num(rec.amount) > 0) && +rec.day >= 1 && +rec.day <= 31;
-  const reason = !rec.name ? "Ad gerekli"
-    : !edit && !(num(rec.amount) > 0) ? "Tutar 0'dan büyük olmalı"
-      : !(+rec.day >= 1 && +rec.day <= 31) ? "Gün 1-31 arası olmalı" : null;
+  const reason = !edit && !(num(rec.amount) > 0) ? "Tutarı gir."
+    : !rec.name ? "Ne olduğunu yaz (örn. Maaş, Kira)."
+      : !(+rec.day >= 1 && +rec.day <= 31) ? "Ayın hangi günü? (1-31)" : null;
   const isAcc = rec.target.startsWith("acc:");
-  const cats = data.categories.filter((c) => c.kind === rec.kind);
   const save = async (andNew: boolean) => {
     if (!ok) return;
     const account_id = rec.target.startsWith("acc:") ? +rec.target.slice(4) : null;
@@ -294,70 +292,75 @@ export function RecurringForm({ data, reload, onClose, edit }: FormProps & { edi
     reload();
     if (andNew) { setRec({ ...rec, name: "", amount: "", day: "" }); nameRef.current?.focus(); } else onClose();
   };
+  const gelir = rec.kind === "income";
+  const hedefAcc = isAcc ? data.accounts.find((a) => a.id === +rec.target.slice(4)) : null;
+  const hedefKart = rec.target.startsWith("card:") ? data.cards.find((c) => c.id === +rec.target.slice(5)) : null;
+  const tutar = num(rec.amount);
+  const sonuc = <>
+    {!rec.target
+      ? "Hedef yok: yalnız Nakit Akışı tahminine girer, bakiyeye ve gelir/gider defterine dokunmaz."
+      : hedefKart
+        ? <>Her ayın {rec.day}. günü <b>{hedefKart.name}</b> kartına yazılır, o ayın ekstresiyle ödenir.</>
+        : <>Her ayın {rec.day}. günü <b>{hedefAcc?.name}</b> {gelir ? "hesabına" : "hesabından"} {tutar > 0 ? <Vurgu v={tutar} isaret={gelir ? "+" : "−"} /> : null}; Nakit Akışı'na girer.</>}
+    {rec.target && (rec.auto ? " Günü gelince kendiliğinden işlenir." : " Günü gelince Plan'dan “Gerçekleşti” ile işlenir.")}
+  </>;
   return (
     <form onSubmit={(e) => { e.preventDefault(); save(false); }}>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <Field label="Tür">
-          <select style={css.input} value={rec.kind}
-            onChange={(e) => { const kind = e.target.value as Recurring["kind"]; setRec({ ...rec, kind, category_id: "", ...(kind === "income" && rec.target.startsWith("card:") ? { target: "" } : {}) }); }}>
-            <option value="income">Gelir</option><option value="expense">Gider</option>
-          </select>
-        </Field>
-        <Field label="Ad" flex={2}><input ref={nameRef} autoFocus style={css.input} value={rec.name} placeholder="örn. Maaş" onChange={(e) => setRec({ ...rec, name: e.target.value })} /></Field>
-        {!edit && <AmountField label="Tutar (TL)" value={rec.amount} onChange={(v) => setRec({ ...rec, amount: v })} />}
-        <Field label="Gün (1-31)"><input style={css.input} inputMode="numeric" placeholder="1" value={rec.day} onChange={(e) => setRec({ ...rec, day: e.target.value })} /></Field>
-      </div>
-      <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-        <Field label="Hedef (ops.)" flex={2}>
-          <select style={css.input} value={rec.target} onChange={(e) => setRec({ ...rec, target: e.target.value, category_id: "" })}>
+      <Bolum>
+        <Segment ad="Tür" deger={rec.kind}
+          sec={(kind) => setRec({ ...rec, kind, category_id: "", ...(kind === "income" && rec.target.startsWith("card:") ? { target: "" } : {}) })}
+          secenek={[{ v: "income", l: "Gelir", renk: T.pos }, { v: "expense", l: "Gider", renk: T.neg }]} />
+        {!edit && <TutarGirdisi value={rec.amount} onChange={(v) => setRec({ ...rec, amount: v })} renk={gelir ? T.pos : T.neg} />}
+        <Etiketli etiket="Ne?">
+          <input ref={nameRef} autoFocus style={girdi} value={rec.name} placeholder={gelir ? "örn. Maaş" : "örn. Kira"} onChange={(e) => setRec({ ...rec, name: e.target.value })} />
+        </Etiketli>
+        <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 15 }}>
+          <span>Her ayın</span>
+          <input inputMode="numeric" aria-label="Ayın günü (1-31)" placeholder="1" value={rec.day}
+            onChange={(e) => setRec({ ...rec, day: e.target.value.replace(/\D/g, "").slice(0, 2) })}
+            style={{ ...girdiMono, width: 64, textAlign: "center", fontWeight: 600, padding: 0 }} />
+          <span>. günü</span>
+        </label>
+        <Satirlar>
+          <SatirSec etiket={gelir ? "Nereye" : "Nereden"} soluk={!rec.target}
+            goruntu={hedefAcc ? hedefAcc.name : hedefKart ? `${hedefKart.name} (kart)` : "Hedef yok — yalnız tahmin"}
+            value={rec.target} onChange={(v) => setRec({ ...rec, target: v, category_id: "" })}>
             <option value="">Hedef yok (yalnız tahmin)</option>
             {data.accounts.map((a) => <option key={`a${a.id}`} value={`acc:${a.id}`}>Hesap: {a.name}</option>)}
-            {rec.kind === "expense" && data.cards.map((c) => <option key={`c${c.id}`} value={`card:${c.id}`}>Kart: {c.name}</option>)}
-          </select>
-        </Field>
-        {isAcc && (
-          <KategoriAlani label="Kategori (ops.)" data={data} reload={reload} value={rec.category_id}
-            onChange={(v) => setRec({ ...rec, category_id: v })} kind={rec.kind} />
+            {!gelir && data.cards.map((c) => <option key={`c${c.id}`} value={`card:${c.id}`}>Kart: {c.name}</option>)}
+          </SatirSec>
+          {isAcc && (
+            <KategoriAlani satir bos="seç (isteğe bağlı)" data={data} reload={reload} value={rec.category_id}
+              onChange={(v) => setRec({ ...rec, category_id: v })} kind={rec.kind} />
+          )}
+          <SatirTarih tur="month" etiket="Başlangıç" bos="baştan" temizle value={rec.from_month} onChange={(v) => setRec({ ...rec, from_month: v })} />
+          <SatirTarih tur="month" etiket="Bitiş" bos="süresiz" temizle value={rec.to_month} onChange={(v) => setRec({ ...rec, to_month: v })} />
+        </Satirlar>
+        {rec.target && (
+          <Anahtar etiket="Kendiliğinden işlensin" acik={rec.auto} onChange={(v) => setRec({ ...rec, auto: v })}
+            alt={`günü gelince ${rec.target.startsWith("card:") ? "ekstreye" : "hesaba"} yazılır (açıldığı günden itibaren)`} />
         )}
-      </div>
-      <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-        <Field label="Başlangıç ayı (ops.)"><input type="month" style={css.input} value={rec.from_month} onChange={(e) => setRec({ ...rec, from_month: e.target.value })} /></Field>
-        <Field label="Bitiş ayı (ops.)"><input type="month" style={css.input} value={rec.to_month} onChange={(e) => setRec({ ...rec, to_month: e.target.value })} /></Field>
-      </div>
-      {rec.target && (
-        <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, fontSize: 13, color: T.text, cursor: "pointer" }}>
-          <input type="checkbox" checked={rec.auto} onChange={(e) => setRec({ ...rec, auto: e.target.checked })} />
-          Otomatik gerçekleştir — günü gelince kendiliğinden {rec.target.startsWith("card:") ? "ekstreye" : "hesaba"} işlensin (işaretlendiği günden itibaren)
-        </label>
-      )}
-      <div style={{ fontSize: 12, color: T.mut, marginTop: 8, background: T.panel2, borderRadius: 8, padding: "8px 12px" }}>
-        {!rec.target
-          ? "Hedef yok: yalnız Nakit Akışı tahminine girer, bakiyeye/gelir/gider defterine dokunmaz."
-          : rec.target.startsWith("card:")
-            ? "Kart hedefi: gerçekleşince o ayki kart ekstresine düşer; son ödeme günü nakit akışına gider olarak girer."
-            : "Hesap hedefi: gerçekleşince seçili hesabın bakiyesine işler ve gelir/gider defterine girer."}
-        {rec.target && " Günü gelince Plan'dan “Gerçekleşti” ile, otomatik açıksa kendiliğinden işlenir."}
-      </div>
-      {edit && (
-        <div style={{ fontSize: 12, color: T.mut, marginTop: 8, background: T.panel2, borderRadius: 8, padding: "8px 12px" }}>
-          <b>Tutar burada değişmez.</b> Tutar bir zaman çizelgesinde yaşar; buradan değiştirmek geçmiş
-          projeksiyonu da geriye dönük bozardı. Plan'daki <b>“Değiştir”</b> ile seçtiğin aydan itibaren
-          yeni tutar geçerli olur, öncesi eski tutarla korunur.
-        </div>
-      )}
-      <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} editing={!!edit} />
+        {edit && (
+          <div style={{ fontSize: 13, color: T.mut, lineHeight: 1.5 }}>
+            <b style={{ color: T.text }}>Tutar burada değişmez.</b> Tutar bir zaman çizelgesinde yaşar; buradan değiştirmek
+            geçmiş projeksiyonu da bozardı. Plan'daki <b style={{ color: T.text }}>“Değiştir”</b> ile seçtiğin aydan itibaren yeni tutar geçerli olur.
+          </div>
+        )}
+      </Bolum>
+      <FormAlt sonuc={sonuc} ok={ok} reason={reason} onSaveNew={() => save(true)} editing={!!edit} sil={sil}
+        etiket={edit ? "Değişikliği kaydet" : gelir ? "Düzenli geliri kaydet" : "Düzenli gideri kaydet"} />
     </form>
   );
 }
 
 /** Kredi/taksit → kalan taksitler nakit projeksiyonuna girer */
-export function LoanForm({ reload, onClose, edit }: FormProps & { edit?: Loan }) {
+export function LoanForm({ reload, onClose, edit, sil }: FormProps & DuzenleProps & { edit?: Loan }) {
   const [f, setF] = useState(() => edit
     ? { name: edit.name, amount: String(edit.amount), first_date: edit.first_date, total: String(edit.total) }
     : { name: "", amount: "", first_date: todayStr(), total: "" });
   const nameRef = useRef<HTMLInputElement>(null);
   const ok = !!f.name && num(f.amount) > 0 && !!f.first_date && +f.total >= 1;
-  const reason = !f.name ? "Ad gerekli" : !(num(f.amount) > 0) ? "Aylık taksit 0'dan büyük olmalı" : !(+f.total >= 1) ? "Toplam taksit en az 1 olmalı" : null;
+  const reason = !f.name ? "Krediye bir ad ver." : !(num(f.amount) > 0) ? "Aylık taksiti gir." : !(+f.total >= 1) ? "Toplam taksit sayısını gir." : null;
   const save = async (andNew: boolean) => {
     if (!ok) return;
     const body = { name: f.name, amount: num(f.amount), first_date: f.first_date, total: +f.total };
@@ -366,27 +369,33 @@ export function LoanForm({ reload, onClose, edit }: FormProps & { edit?: Loan })
     reload();
     if (andNew) { setF({ name: "", amount: "", first_date: f.first_date, total: "" }); nameRef.current?.focus(); } else onClose();
   };
+  /* Son taksit = ilk taksit + (toplam − 1) ay — loanRemaining'in tarihten saydığı aynı takvim */
+  const son = ok ? (() => { const d = parseD(f.first_date); return new Date(d.getFullYear(), d.getMonth() + +f.total - 1, 1); })() : null;
+  const sonuc = <>
+    {son && <>Son taksit {fmtD(son, { month: "long", year: "numeric" })} · toplam <Vurgu v={num(f.amount) * +f.total} /> geri ödenir.</>}
+    {/* kalan taksit sayısı ilk taksit tarihi + toplamdan hesaplanır (elle tutulmaz) */}
+    {edit && " Kalan taksit tarihten hesaplanır; kalan borç ve projeksiyon anında düzelir."}
+  </>;
   return (
     <form onSubmit={(e) => { e.preventDefault(); save(false); }}>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <Field label="Ad" flex={2}><input ref={nameRef} autoFocus style={css.input} value={f.name} placeholder="örn. İhtiyaç kredisi" onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
-        <AmountField label="Aylık taksit (TL)" value={f.amount} onChange={(v) => setF({ ...f, amount: v })} />
-        <Field label="İlk taksit tarihi"><input type="date" style={css.input} value={f.first_date} onChange={(e) => setF({ ...f, first_date: e.target.value })} /></Field>
-        <Field label="Toplam taksit"><input style={css.input} inputMode="numeric" placeholder="12" value={f.total} onChange={(e) => setF({ ...f, total: e.target.value })} /></Field>
-      </div>
-      {edit && (
-        <div style={{ fontSize: 12, color: T.mut, marginTop: 8, background: T.panel2, borderRadius: 8, padding: "8px 12px" }}>
-          Kalan taksit sayısı ilk taksit tarihi + toplamdan hesaplanır (elle tutulmaz), bu yüzden
-          düzenleme kalan borcu ve projeksiyonu anında düzeltir.
-        </div>
-      )}
-      <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} editing={!!edit} />
+      <Bolum>
+        <Etiketli etiket="Ne?">
+          <input ref={nameRef} autoFocus style={girdi} value={f.name} placeholder="örn. İhtiyaç kredisi" onChange={(e) => setF({ ...f, name: e.target.value })} />
+        </Etiketli>
+        <TutarGirdisi etiket="Aylık taksit" value={f.amount} onChange={(v) => setF({ ...f, amount: v })} />
+        <Satirlar>
+          <SatirTarih etiket="İlk taksit" value={f.first_date} onChange={(v) => setF({ ...f, first_date: v })} />
+          <SatirMetin etiket="Toplam taksit" sayi placeholder="12" value={f.total} onChange={(v) => setF({ ...f, total: v.replace(/\D/g, "") })} />
+        </Satirlar>
+      </Bolum>
+      <FormAlt sonuc={sonuc} ok={ok} reason={reason} onSaveNew={() => save(true)} editing={!!edit} sil={sil}
+        etiket={edit ? "Değişikliği kaydet" : "Krediyi kaydet"} />
     </form>
   );
 }
 
-/** Vadeli mevduat → net varlığa "kilitli varlık" olarak accrue eder; opsiyonel hesaptan anapara düşer */
-export function DepositForm({ data, reload, onClose, edit }: FormProps & { edit?: Deposit }) {
+/** Vadeli mevduat → net varlığa "kilitli varlık" olarak faiz işleyerek girer; opsiyonel hesaptan anapara düşer */
+export function DepositForm({ data, reload, onClose, edit, sil }: FormProps & DuzenleProps & { edit?: Deposit }) {
   const [f, setF] = useState(() => edit
     ? {
       name: edit.name, principal: String(edit.principal), rate: String(edit.rate),
@@ -396,8 +405,8 @@ export function DepositForm({ data, reload, onClose, edit }: FormProps & { edit?
     : { name: "", principal: "", rate: "", term_days: "", withholding: "", open_date: todayStr(), account_id: "" });
   const nameRef = useRef<HTMLInputElement>(null);
   const ok = !!f.name && num(f.principal) > 0 && num(f.rate) >= 0 && +f.term_days >= 1 && !!f.open_date;
-  const reason = !f.name ? "Ad gerekli" : !(num(f.principal) > 0) ? "Anapara 0'dan büyük olmalı"
-    : !(+f.term_days >= 1) ? "Gün sayısı en az 1 olmalı" : !(num(f.rate) >= 0) ? "Faiz oranı geçersiz" : null;
+  const reason = !f.name ? "Mevduata bir ad ver." : !(num(f.principal) > 0) ? "Anaparayı gir."
+    : !(+f.term_days >= 1) ? "Vadeyi gün olarak gir." : !(num(f.rate) >= 0) ? "Faiz oranı geçersiz." : null;
   /* canlı önizleme için geçici mevduat nesnesi */
   const preview: Deposit | null = ok ? {
     id: 0, name: f.name, principal: num(f.principal), rate: num(f.rate),
@@ -418,42 +427,32 @@ export function DepositForm({ data, reload, onClose, edit }: FormProps & { edit?
     if (andNew) { setF({ ...f, name: "", principal: "", rate: "", term_days: "" }); nameRef.current?.focus(); } else onClose();
   };
   const acc = f.account_id ? data.accounts.find((a) => a.id === +f.account_id) : null;
+  const sonuc = preview && <>
+    {fmtD(depositMaturity(preview), { day: "numeric", month: "long", year: "numeric" })} vadesinde <Vurgu v={depositMaturityValue(preview)} isaret="+" />
+    {" "}({num(f.withholding) > 0 ? <>net faiz <Vurgu v={depositNetInterest(preview)} />, brüt {fmtMoney(depositGrossInterest(preview), "TRY", true)}</> : <>faiz <Vurgu v={depositGrossInterest(preview)} /></>}).
+    {acc && <> <b>{acc.name}</b> bakiyesinden <Vurgu v={num(f.principal)} isaret="−" /> düşer (silinirse geri döner).</>}
+    {edit && " Hesaba olan anapara etkisi otomatik düzeltilir (eskisi geri alınır, yenisi işlenir)."}
+  </>;
   return (
     <form onSubmit={(e) => { e.preventDefault(); save(false); }}>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <Field label="Ad" flex={2}><input ref={nameRef} autoFocus style={css.input} value={f.name} placeholder="örn. Vakıfbank 32 gün" onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
-        <AmountField label="Anapara (TL)" value={f.principal} onChange={(v) => setF({ ...f, principal: v })} />
-      </div>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-        <Field label="Faiz oranı (yıllık %)"><input style={css.input} inputMode="decimal" placeholder="örn. 45" value={f.rate} onChange={(e) => setF({ ...f, rate: e.target.value })} /></Field>
-        <Field label="Vade (gün)"><input style={css.input} inputMode="numeric" placeholder="örn. 32" value={f.term_days} onChange={(e) => setF({ ...f, term_days: e.target.value })} /></Field>
-        <Field label="Stopaj (%, ops.)"><input style={css.input} inputMode="decimal" placeholder="0" value={f.withholding} onChange={(e) => setF({ ...f, withholding: e.target.value })} /></Field>
-        <Field label="Açılış tarihi"><input type="date" style={css.input} value={f.open_date} onChange={(e) => setF({ ...f, open_date: e.target.value })} /></Field>
-      </div>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-        <Field label="Nakit hesap (opsiyonel)" flex={2}>
-          <select style={css.input} value={f.account_id} onChange={(e) => setF({ ...f, account_id: e.target.value })}>
-            <option value="">— (bakiyeye işleme)</option>
+      <Bolum>
+        <Etiketli etiket="Ne?">
+          <input ref={nameRef} autoFocus style={girdi} value={f.name} placeholder="örn. Vakıfbank 32 gün" onChange={(e) => setF({ ...f, name: e.target.value })} />
+        </Etiketli>
+        <TutarGirdisi etiket="Anapara" value={f.principal} onChange={(v) => setF({ ...f, principal: v })} />
+        <Satirlar>
+          <SatirMetin etiket="Yıllık faiz" sayi placeholder="örn. 45" sonEk="%" value={f.rate} onChange={(v) => setF({ ...f, rate: v })} />
+          <SatirMetin etiket="Vade" sayi placeholder="örn. 32" sonEk="gün" value={f.term_days} onChange={(v) => setF({ ...f, term_days: v.replace(/\D/g, "") })} />
+          <SatirMetin etiket="Stopaj (isteğe bağlı)" sayi placeholder="0" sonEk="%" value={f.withholding} onChange={(v) => setF({ ...f, withholding: v })} />
+          <SatirTarih etiket="Açılış" value={f.open_date} onChange={(v) => setF({ ...f, open_date: v })} />
+          <SatirSec etiket="Hesap" goruntu={acc ? acc.name : "Bakiyeye işleme"} soluk={!acc} value={f.account_id} onChange={(v) => setF({ ...f, account_id: v })}>
+            <option value="">— Bakiyeye işleme</option>
             {data.accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
-        </Field>
-      </div>
-      {preview && (
-        <div style={{ fontSize: 12, color: T.mut, marginTop: 10, background: T.panel2, borderRadius: 8, padding: "10px 12px", display: "grid", gap: 4 }}>
-          <div>Vade tarihi: <span style={{ ...css.mono, color: T.text }}>{fmtD(depositMaturity(preview), { day: "numeric", month: "long", year: "numeric" })}</span></div>
-          <div>Brüt faiz: <span style={{ ...css.mono, color: T.text }}>{fmtMoney(depositGrossInterest(preview), "TRY", true)}</span>
-            {num(f.withholding) > 0 && <> · net: <span style={{ ...css.mono, color: T.pos }}>{fmtMoney(depositNetInterest(preview), "TRY", true)}</span></>}</div>
-          <div>Vade sonunda: <span style={{ ...css.mono, color: T.pos, fontWeight: 700 }}>{fmtMoney(depositMaturityValue(preview), "TRY", true)}</span></div>
-          {acc && <div><b>{acc.name}</b> bakiyesinden <span style={{ color: T.neg }}>−{fmtMoney(num(f.principal), "TRY", true)}</span> düşülür (silinirse geri döner)</div>}
-        </div>
-      )}
-      {edit && (
-        <div style={{ fontSize: 12, color: T.mut, marginTop: 8, background: T.panel2, borderRadius: 8, padding: "8px 12px" }}>
-          Mevduat düzenleniyor: hesaba olan anapara etkisi otomatik düzeltilir (eskisi geri alınır,
-          yenisi işlenir) — hesabı değiştirsen bile doğru. Faiz ve vade değeri yeni değerlerden hesaplanır.
-        </div>
-      )}
-      <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} editing={!!edit} />
+          </SatirSec>
+        </Satirlar>
+      </Bolum>
+      <FormAlt sonuc={sonuc} ok={ok} reason={reason} onSaveNew={() => save(true)} editing={!!edit} sil={sil}
+        etiket={edit ? "Değişikliği kaydet" : "Mevduatı kaydet"} />
     </form>
   );
 }
@@ -486,10 +485,10 @@ export function BedelliForm({ data, reload, onClose }: FormProps) {
   const plan = pos ? bedelliPlan(pos.qty, num(f.oran) / 100, num(f.bedel)) : null;
 
   const ok = !!pos && !!plan && !!f.date;
-  const reason = !pos ? "Önce bir hisse seç"
-    : !(num(f.oran) > 0) ? "Bedelli oranı gerekli (örn. 150)"
-      : !(num(f.bedel) > 0) ? "Hisse başına bedel gerekli (genelde 1 TL nominal)"
-        : !plan ? "Bu oranda tam lot çıkmıyor" : null;
+  const reason = !pos ? "Önce bir hisse seç."
+    : !(num(f.oran) > 0) ? "Bedelli oranını gir (örn. 150)."
+      : !(num(f.bedel) > 0) ? "Hisse başına bedeli gir (genelde 1 TL nominal)."
+        : !plan ? "Bu oranda tam lot çıkmıyor." : null;
 
   const save = async () => {
     if (!ok || !pos || !plan) return;
@@ -507,54 +506,53 @@ export function BedelliForm({ data, reload, onClose }: FormProps) {
   if (!tutulan.length) {
     return <Empty>Bedelli için önce elinde bir BIST hissesi olmalı — rüçhan hakkı yalnız mevcut ortağa doğar.</Empty>;
   }
-
+  const acc = f.account_id ? data.accounts.find((a) => a.id === +f.account_id) : null;
+  const pf = f.portfolio_id ? data.portfolios.find((p) => p.id === +f.portfolio_id) : null;
+  const sonuc = plan && pos && <>
+    <b style={{ fontFamily: T.mono }}>{plan.qty}</b> yeni adet <span style={{ color: T.mut }}>({pos.qty} adedin %{num(f.oran)}'i, küsurat kırpıldı)</span>,
+    ödenecek <Vurgu v={plan.cost} ccy={pos.currency} isaret="−" />. Sonra <span style={{ fontFamily: T.mono }}>{plan.qtyAfter}</span> adet,
+    ort. maliyet <span style={{ fontFamily: T.mono }}>{fmtMoney(pos.avg, pos.currency, true)} → {fmtMoney((pos.qty * pos.avg + plan.cost) / plan.qtyAfter, pos.currency, true)}</span>.
+    {" "}Defterine normal bir <b>ALIŞ</b> olarak yazılır.
+  </>;
   return (
     <form onSubmit={(e) => { e.preventDefault(); save(); }}>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <Field label="Hisse" flex={2}>
-          <select autoFocus style={css.input} value={f.key} onChange={(e) => setF({ ...f, key: e.target.value })}>
-            {tutulan.map((p) => (
-              <option key={`${p.type}:${p.sym}`} value={`${p.type}:${p.sym}`}>{p.sym} — {p.qty} adet</option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Bedelli oranı (%)">
-          <input style={css.input} inputMode="decimal" placeholder="örn. 150" value={f.oran}
-            onChange={(e) => setF({ ...f, oran: e.target.value })} />
-        </Field>
-        <AmountField label="Hisse başına bedel (TL)" value={f.bedel} onChange={(v) => setF({ ...f, bedel: v })} />
-      </div>
-      <Hint>Duyuruda yazan oranı aynen gir. Bedel neredeyse her zaman <b>nominal 1 TL</b>'dir — piyasa fiyatı DEĞİL.</Hint>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-        <Field label="Tarih"><input type="date" style={css.input} value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field>
-        <Field label="Ödeyen hesap (ops.)" flex={2}>
-          <select style={css.input} value={f.account_id} onChange={(e) => setF({ ...f, account_id: e.target.value })}>
-            <option value="">— (bakiyeye işleme)</option>
+      <Bolum>
+        <Etiketli etiket="Hisse">
+          {tutulan.length <= 4
+            ? <Cipler ad="Hisse" deger={f.key} sec={(v) => setF({ ...f, key: v })}
+              secenek={tutulan.map((p) => ({ v: `${p.type}:${p.sym}`, l: <>{p.sym} · <span style={{ fontFamily: T.mono }}>{p.qty}</span> adet</> }))} />
+            : (
+              <select autoFocus style={girdi} value={f.key} onChange={(e) => setF({ ...f, key: e.target.value })}>
+                {tutulan.map((p) => <option key={`${p.type}:${p.sym}`} value={`${p.type}:${p.sym}`}>{p.sym} — {p.qty} adet</option>)}
+              </select>
+            )}
+        </Etiketli>
+        <div style={{ display: "flex", gap: 10 }}>
+          <Etiketli etiket="Bedelli oranı (%)">
+            <input style={girdiMono} inputMode="decimal" placeholder="örn. 150" value={f.oran} onChange={(e) => setF({ ...f, oran: e.target.value })} />
+          </Etiketli>
+          <Etiketli etiket="Hisse başına bedel">
+            <input style={girdiMono} inputMode="decimal" placeholder="1" value={f.bedel} onChange={(e) => setF({ ...f, bedel: e.target.value })} />
+          </Etiketli>
+        </div>
+        <div style={{ fontSize: 12.5, color: T.mut, lineHeight: 1.45, marginTop: -6 }}>
+          Duyuruda yazan oranı aynen gir. Bedel neredeyse her zaman <b style={{ color: T.text }}>nominal 1 TL</b>'dir — piyasa fiyatı değil.
+        </div>
+        <Satirlar>
+          <SatirTarih value={f.date} onChange={(v) => setF({ ...f, date: v })} />
+          <SatirSec etiket="Ödeyen hesap" goruntu={acc ? acc.name : "Bakiyeye işleme"} soluk={!acc} value={f.account_id} onChange={(v) => setF({ ...f, account_id: v })}>
+            <option value="">— Bakiyeye işleme</option>
             {data.accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
-        </Field>
-        {data.portfolios.length > 0 && (
-          <Field label="Portföy (ops.)">
-            <select style={css.input} value={f.portfolio_id} onChange={(e) => setF({ ...f, portfolio_id: e.target.value })}>
+          </SatirSec>
+          {data.portfolios.length > 0 && (
+            <SatirSec etiket="Portföy" goruntu={pf ? pf.name : "Gruplanmamış"} soluk={!pf} value={f.portfolio_id} onChange={(v) => setF({ ...f, portfolio_id: v })}>
               <option value="">— Gruplanmamış</option>
               {data.portfolios.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-          </Field>
-        )}
-      </div>
-      {plan && pos && (
-        <div style={{ fontSize: 12, color: T.mut, marginTop: 10, background: T.panel2, borderRadius: 8, padding: "10px 12px", display: "grid", gap: 4 }}>
-          <div>Alınacak yeni adet: <span style={{ ...css.mono, color: T.text, fontWeight: 700 }}>{plan.qty}</span>
-            {" "}<span style={{ color: T.mut3 }}>({pos.qty} adedin %{num(f.oran)}'i, küsurat kırpıldı)</span></div>
-          <div>Ödenecek: <span style={{ ...css.mono, color: T.neg, fontWeight: 700 }}>{fmtMoney(plan.cost, pos.currency, true)}</span></div>
-          <div>İşlem sonrası toplam: <span style={{ ...css.mono, color: T.text }}>{plan.qtyAfter} adet</span>
-            {" · "}ort. maliyet <span style={{ ...css.mono, color: T.text }}>
-              {fmtMoney((pos.qty * pos.avg + plan.cost) / plan.qtyAfter, pos.currency, true)}
-            </span> <span style={{ color: T.mut3 }}>(şimdi {fmtMoney(pos.avg, pos.currency, true)})</span></div>
-          <div style={{ color: T.mut3 }}>Defterine normal bir <b>ALIŞ</b> olarak yazılır — sonradan Kayıtlar'dan düzenlenebilir.</div>
-        </div>
-      )}
-      <SaveButtons ok={ok} reason={reason} editing />
+            </SatirSec>
+          )}
+        </Satirlar>
+      </Bolum>
+      <FormAlt sonuc={sonuc} ok={ok} reason={reason} editing etiket="Bedelliyi kaydet" />
     </form>
   );
 }
@@ -563,7 +561,7 @@ export function BedelliForm({ data, reload, onClose }: FormProps) {
     kaynaktan düşer, hedefe ekler. gelir/gider defterine girmez, net varlığı değiştirmez.
     Bu form olmadan kullanıcı iki sahte gelir/gider kaydı girmek zorundaydı — biri unutulunca
     bakiye kayar, defterde olmayan bir gelir/gider görünürdü. */
-export function TransferForm({ data, reload, onClose, edit }: FormProps & { edit?: Transfer }) {
+export function TransferForm({ data, reload, onClose, edit, sil }: FormProps & DuzenleProps & { edit?: Transfer }) {
   const [f, setF] = useState(() => edit
     ? {
       date: edit.date, from_account_id: String(edit.from_account_id),
@@ -579,8 +577,8 @@ export function TransferForm({ data, reload, onClose, edit }: FormProps & { edit
   const amount = num(f.amount);
   const same = !!from && !!to && from.id === to.id;
   const ok = !!from && !!to && !same && amount > 0 && !!f.date;
-  const reason = !from ? "Kaynak hesap seçilmeli" : !to ? "Hedef hesap seçilmeli"
-    : same ? "Kaynak ve hedef hesap aynı olamaz" : !(amount > 0) ? "Tutar 0'dan büyük olmalı" : null;
+  const reason = !(amount > 0) ? "Tutarı gir." : !from ? "Paranın çıktığı hesabı seç." : !to ? "Paranın gittiği hesabı seç."
+    : same ? "İki hesap aynı olamaz." : null;
   const save = async (andNew: boolean) => {
     if (!ok) return;
     const body = {
@@ -593,43 +591,55 @@ export function TransferForm({ data, reload, onClose, edit }: FormProps & { edit
     if (andNew) { setF({ ...f, amount: "", note: "" }); amountRef.current?.focus(); } else onClose();
   };
   const swap = () => setF({ ...f, from_account_id: f.to_account_id, to_account_id: f.from_account_id });
+  /* Hesap seçici = bakiye önizlemesi: eskiden seçicinin altında ayrı bir kutuda yazan "önce → sonra"
+     artık seçicinin kendisinde */
+  const HesapSec = ({ yon, deger, sec, isaret }: { yon: string; deger: string; sec: (v: string) => void; isaret: 1 | -1 }) => {
+    const a = deger ? data.accounts.find((x) => x.id === +deger) : null;
+    const sonra = a ? bakiye(a.id) + isaret * amount : 0;
+    return (
+      <label style={{ position: "relative", display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", border: `1px solid ${T.line}`, borderRadius: 14, cursor: "pointer" }}>
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <span style={{ display: "block", fontSize: 12.5, color: T.mut }}>{yon}</span>
+          <span style={{ display: "block", fontSize: 15.5, fontWeight: 600, color: a ? T.text : T.mut, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a ? a.name : "Hesap seç"}</span>
+        </span>
+        {a && (
+          <span style={{ textAlign: "right", fontFamily: T.mono, flexShrink: 0 }}>
+            <span style={{ display: "block", fontSize: 12.5, color: T.mut }}>{fmtMoney(bakiye(a.id), "TRY", true)}</span>
+            {amount > 0 && <span style={{ display: "block", fontSize: 14, color: sonra < 0 ? T.neg : isaret < 0 ? T.text : T.pos }}>→ {fmtMoney(sonra, "TRY", true)}</span>}
+          </span>
+        )}
+        <select aria-label={yon} value={deger} onChange={(e) => sec(e.target.value)}
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer", minHeight: 0 }}>
+          <option value="">— seç —</option>
+          {data.accounts.map((x) => <option key={x.id} value={x.id}>{x.name} · {fmtMoney(bakiye(x.id), "TRY", true)}</option>)}
+        </select>
+      </label>
+    );
+  };
   return (
     <form onSubmit={(e) => { e.preventDefault(); save(false); }}>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <Field label="Tarih"><input type="date" style={css.input} value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field>
-        <AmountField label="Tutar (TL)" value={f.amount} onChange={(v) => setF({ ...f, amount: v })} inputRef={amountRef} />
-      </div>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8, alignItems: "flex-end" }}>
-        <Field label="Nereden" flex={2}>
-          <select autoFocus style={css.input} value={f.from_account_id} onChange={(e) => setF({ ...f, from_account_id: e.target.value })}>
-            <option value="">— seç —</option>
-            {data.accounts.map((a) => <option key={a.id} value={a.id}>{a.name} · {fmtMoney(bakiye(a.id), "TRY", true)}</option>)}
-          </select>
-        </Field>
-        <button type="button" onClick={swap} title="Yönü değiştir"
-          style={{ ...css.ghost, padding: "9px 12px", flexShrink: 0 }}>⇄</button>
-        <Field label="Nereye" flex={2}>
-          <select style={css.input} value={f.to_account_id} onChange={(e) => setF({ ...f, to_account_id: e.target.value })}>
-            <option value="">— seç —</option>
-            {data.accounts.map((a) => <option key={a.id} value={a.id}>{a.name} · {fmtMoney(bakiye(a.id), "TRY", true)}</option>)}
-          </select>
-        </Field>
-      </div>
-      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-        <Field label="Not (opsiyonel)" flex={2}>
-          <input style={css.input} value={f.note} placeholder="örn. ATM çekimi, Midas'a aktarım"
-            onChange={(e) => setF({ ...f, note: e.target.value })} />
-        </Field>
-      </div>
-      {ok && from && to && (
-        <div style={{ fontSize: 12, color: T.mut, marginTop: 10, background: T.panel2, borderRadius: 8, padding: "10px 12px", display: "grid", gap: 4 }}>
-          <div><b>{from.name}</b> <span style={{ color: T.neg }}>−{fmtMoney(amount, "TRY", true)}</span> → <span style={{ ...css.mono }}>{fmtMoney(bakiye(from.id) - amount, "TRY", true)}</span></div>
-          <div><b>{to.name}</b> <span style={{ color: T.pos }}>+{fmtMoney(amount, "TRY", true)}</span> → <span style={{ ...css.mono }}>{fmtMoney(bakiye(to.id) + amount, "TRY", true)}</span></div>
-          <div style={{ color: T.mut3 }}>Net varlığın değişmez; gelir/gider defterine gelir/gider olarak girmez.</div>
-          {bakiye(from.id) - amount < 0 && <div style={{ color: T.neg }}>Uyarı: {from.name} bakiyesi eksiye düşüyor.</div>}
+      <Bolum>
+        <TutarGirdisi value={f.amount} onChange={(v) => setF({ ...f, amount: v })} inputRef={amountRef} autoFocus />
+        <div style={{ position: "relative", display: "flex", flexDirection: "column", gap: 6 }}>
+          {HesapSec({ yon: "Nereden", deger: f.from_account_id, sec: (v) => setF({ ...f, from_account_id: v }), isaret: -1 })}
+          <button type="button" onClick={swap} title="Yönü değiştir" aria-label="Yönü değiştir" style={{
+            position: "absolute", left: "50%", top: "50%", transform: "translate(-50%, -50%)", zIndex: 1,
+            width: 34, height: 34, minHeight: 0, borderRadius: 999, background: T.panel, border: `1px solid ${T.line}`, color: T.acc,
+            display: "grid", placeItems: "center", cursor: "pointer",
+          }}>
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M4.5 2v10M2 9.5l2.5 2.5L7 9.5M9.5 12V2M7 4.5L9.5 2 12 4.5" /></svg>
+          </button>
+          {HesapSec({ yon: "Nereye", deger: f.to_account_id, sec: (v) => setF({ ...f, to_account_id: v }), isaret: 1 })}
         </div>
-      )}
-      <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} editing={!!edit} />
+        <Satirlar>
+          <SatirTarih value={f.date} onChange={(v) => setF({ ...f, date: v })} />
+          <SatirMetin etiket="Not" placeholder="isteğe bağlı" value={f.note} onChange={(v) => setF({ ...f, note: v })} />
+        </Satirlar>
+      </Bolum>
+      <FormAlt ok={ok} reason={reason} onSaveNew={() => save(true)} editing={!!edit} sil={sil}
+        etiket={edit ? "Değişikliği kaydet" : "Virmanı kaydet"}
+        sonuc={<>Net varlığın değişmez; gelir ya da gider sayılmaz.
+          {from && bakiye(from.id) - amount < 0 && <span style={{ color: T.neg }}> {from.name} bakiyesi eksiye düşüyor.</span>}</>} />
     </form>
   );
 }
@@ -666,7 +676,7 @@ export type TradePrefill = {
 };
 
 /** Portföy işlemi (alış/satış) → pozisyonlara ve net varlığa yansır */
-export function TradeForm({ data, reload, onClose, edit, prefill }: FormProps & { edit?: Trade; prefill?: TradePrefill }) {
+export function TradeForm({ data, reload, onClose, edit, prefill, sil }: FormProps & DuzenleProps & { edit?: Trade; prefill?: TradePrefill }) {
   const [f, setF] = useState(() => edit
     ? {
       date: edit.date, asset_type: edit.asset_type, symbol: edit.symbol, side: edit.side,
@@ -767,231 +777,152 @@ export function TradeForm({ data, reload, onClose, edit, prefill }: FormProps & 
     reload();
     if (andNew) { setF({ ...f, symbol: "", qty: "", amount: "", price: "", fee: "" }); symbolRef.current?.focus(); } else onClose();
   };
+  const ccySym = f.currency === "USD" ? "$" : "TL";
+  const acc = f.currency === "TRY" && f.account_id ? data.accounts.find((a) => a.id === +f.account_id) : null;
+  const pf = f.portfolio_id ? data.portfolios.find((p) => p.id === +f.portfolio_id) : null;
+  const SIDE_AD: Record<Trade["side"], string> = { "ALIŞ": "Alış", "SATIŞ": "Satış", "TEMETTÜ": "Temettü", "BEDELSİZ": "Bedelsiz" };
+  /* Sonuç cümlesi: eski formun alt kısmındaki önizlemeler (işlem tutarı, temettü neti, bedelsiz
+     sonrası adet/maliyet, hesap etkisi) tek yerde. */
+  const sonuc = ok && (isBonus ? (() => {
+    /* Bedelsizde asıl merak edilen: adet ne olur, ortalama maliyet kaça düşer. Toplam maliyet sabit
+       kaldığından pozisyonun DEĞERİ değişmez — bunu açıkça söylüyoruz, çünkü "ortalamam düştü,
+       kâra geçtim" en yaygın yanlış okumadır. */
+    const p = positions(data.trades.filter((t) => t.symbol.toUpperCase() === f.symbol.trim().toUpperCase() && t.asset_type === f.asset_type), []);
+    const cur = p[0];
+    if (!cur || cur.qty <= 0) return <>Bedelsiz kaydedilecek: <b style={{ fontFamily: T.mono }}>{qty.toLocaleString("tr-TR")} adet</b>.</>;
+    const newQty = cur.qty + qty, newAvg = (cur.avg * cur.qty) / newQty;
+    return <>Adet <span style={{ fontFamily: T.mono }}>{cur.qty.toLocaleString("tr-TR")} → {newQty.toLocaleString("tr-TR")}</span>, ort. maliyet <span style={{ fontFamily: T.mono }}>{fmtMoney(cur.avg, f.currency, true)} → {fmtMoney(newAvg, f.currency, true)}</span>. Toplam maliyet ve pozisyon değeri değişmez.</>;
+  })() : (() => {
+    const delta = cashDelta({ side: f.side, qty, price, fee });
+    return <>
+      {isDividend ? "Brüt temettü " : "İşlem tutarı "}<Vurgu v={qty * price} ccy={f.currency} />
+      {isDividend && fee > 0 && <>, stopaj sonrası net <Vurgu v={delta} ccy={f.currency} /></>}
+      {acc && <> · <b>{acc.name}</b> {delta >= 0 ? "bakiyesine" : "bakiyesinden"} <Vurgu v={Math.abs(delta)} isaret={delta >= 0 ? "+" : "−"} /> {delta >= 0 ? "işlenir" : "düşer"}</>}.
+      {isDividend && " Adedin ve ortalama maliyetin değişmez; tutar gerçekleşen getiriye yazılır."}
+    </>;
+  })());
   return (
     <form onSubmit={(e) => { e.preventDefault(); save(false); }}>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <Field label="Tarih"><input type="date" style={css.input} value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field>
-        <Field label="Varlık türü">
-          <select style={css.input} value={f.asset_type}
-            onChange={(e) => {
-              const at = e.target.value as AssetType;
+      <Bolum>
+        {/* Dört pozisyon olayı (Faz 21). Temettü/bedelsiz de bu deftere yazılır: ikisi de
+            pozisyonun geçmişinin parçasıdır, ayrı bir yerde tutmak hikâyeyi bölerdi. */}
+        <div>
+          <Segment ad="İşlem" deger={f.side} sec={(s) => { setF({ ...f, side: s }); if (s === "BEDELSİZ") setMode("adet"); }}
+            secenek={(["ALIŞ", "SATIŞ", "TEMETTÜ", "BEDELSİZ"] as const).map((s) => ({ v: s, l: SIDE_AD[s], renk: SIDE_COLOR[s], title: SIDE_HINT[s] }))} />
+          <div style={{ fontSize: 12.5, color: T.mut, marginTop: 6 }}>{SIDE_HINT[f.side]}</div>
+        </div>
+        <Etiketli etiket="Sembol">
+          <SuggestInput autoFocus inputRef={symbolRef} style={{ ...girdi, textTransform: "uppercase", fontWeight: 600 }} placeholder={TYPE_HINT[f.asset_type]}
+            value={f.symbol} onChange={(v) => setF({ ...f, symbol: v.toUpperCase() })}
+            onPick={pickSymbol} options={sugs} labelOf={(s) => s.symbol}
+            subOf={(s) => s.price != null ? `${s.asset_type} · ${fmtMoney(s.price, s.currency, true)}` : s.asset_type} />
+        </Etiketli>
+        {/* Giriş modu: fonda tutar ("50 bin lira attım"), hissede adet ("50 lot aldım").
+            Bedelsizde para hareketi olmadığından mod seçimi anlamsız — gizlenir. */}
+        {!isBonus && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 13, color: T.mut, flex: 1 }}>Ne kadar?</span>
+            <Segment kucuk ad="Giriş" deger={mode} sec={switchMode}
+              secenek={[{ v: "adet", l: isDividend ? "Hisse başına" : "Adet" }, { v: "tutar", l: isDividend ? "Toplam" : "Tutar" }]} />
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 10, marginTop: isBonus ? 0 : -6 }}>
+          {/* Temettü ve bedelsizde adet HER ZAMAN elle girilir (elindeki hisse sayısı) */}
+          {(isDividend || isBonus || mode === "adet") && (
+            <Etiketli etiket={isDividend ? "Temettü ödenen adet" : isBonus ? "Gelen bedelsiz adet" : "Adet / miktar"}>
+              <input style={girdiMono} inputMode="decimal" placeholder="0" value={f.qty} onChange={(e) => setF({ ...f, qty: e.target.value })} />
+            </Etiketli>
+          )}
+          {mode === "tutar" && !isBonus && (
+            <Etiketli etiket={isDividend ? `Hesaba giren toplam (${ccySym})` : f.side === "SATIŞ" ? `Hesaba girecek (${ccySym})` : `Hesaptan çıkacak (${ccySym})`}>
+              <input style={girdiMono} inputMode="decimal" placeholder="0" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} />
+            </Etiketli>
+          )}
+          {!isBonus && !(isDividend && mode === "tutar") && (
+            /* Temettüde bu alan BRÜTTÜR: nakit = adet × bu − stopaj (`cashDelta`). Etiket eskiden
+               "net" diyordu — ona güvenip net tutarı yazan ve stopajı da giren kullanıcının
+               stopajı iki kez düşülürdü; kurumsal öneri de buraya brüt tutarı dolduruyor. */
+            <Etiketli etiket={isDividend ? `Hisse başına brüt (${ccySym})` : `Birim fiyat (${ccySym})`}>
+              <input style={girdiMono} inputMode="decimal" placeholder="0" value={f.price} onChange={(e) => setF({ ...f, price: e.target.value })} />
+            </Etiketli>
+          )}
+        </div>
+        {/* Türetilen değer görünür olmalı: kaydedilen sayı bu */}
+        {mode === "tutar" && !isBonus && qty > 0 && price > 0 && (
+          <div style={{ fontSize: 12.5, color: T.mut, marginTop: -6 }}>
+            {isDividend
+              ? <>Hisse başına: <span style={{ fontFamily: T.mono, color: T.text }}>{fmtMoney(price, f.currency, true)}</span> ({fmtMoney(num(f.amount) + fee, f.currency, true)} ÷ {qty.toLocaleString("tr-TR")} adet)</>
+              : <>Kaydedilecek adet: <span style={{ fontFamily: T.mono, color: T.text }}>{qty.toLocaleString("tr-TR", { maximumFractionDigits: 6 })}</span> ({fmtMoney(num(f.amount), f.currency, true)} ÷ {fmtMoney(price, f.currency, true)})</>}
+          </div>
+        )}
+        {/* tek tık doldurmalar: güncel piyasa fiyatı, elde tutulan miktar (satış/temettü/bedelsizde) */}
+        {((livePrice != null && !isBonus && !isDividend && String(livePrice) !== f.price) || (held > 0 && (f.side === "SATIŞ" || isDividend || isBonus))) && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: -4 }}>
+            {livePrice != null && !isBonus && !isDividend && String(livePrice) !== f.price && (
+              <Doldur onClick={() => setF({ ...f, price: String(livePrice) })}>Güncel fiyat: {fmtMoney(livePrice, f.currency, true)}</Doldur>
+            )}
+            {f.side === "SATIŞ" && held > 0 && (
+              <Doldur onClick={() => mode === "tutar"
+                ? setF({ ...f, amount: String(+amountFromQty("SATIŞ", held, price, fee).toFixed(2)) })
+                : setF({ ...f, qty: String(held) })}>
+                Tümünü sat: {mode === "tutar" && price > 0 ? fmtMoney(amountFromQty("SATIŞ", held, price, fee), f.currency, true) : held}
+              </Doldur>
+            )}
+            {/* Temettü neredeyse her zaman elindeki TÜM hisselere ödenir; bedelsizde oran hesabı için lazım */}
+            {(isDividend || isBonus) && held > 0 && String(held) !== f.qty && (
+              <Doldur onClick={() => setF({ ...f, qty: String(held) })}>Elimdeki adet: {held.toLocaleString("tr-TR")}</Doldur>
+            )}
+            {isBonus && held > 0 && [50, 100, 200].map((pct) => (
+              <Doldur key={pct} onClick={() => setF({ ...f, qty: String(+(held * pct / 100).toFixed(6)) })}>%{pct} bedelsiz</Doldur>
+            ))}
+          </div>
+        )}
+        <Satirlar>
+          <SatirTarih value={f.date} onChange={(v) => setF({ ...f, date: v })} />
+          <SatirSec etiket="Varlık türü" goruntu={f.asset_type} value={f.asset_type}
+            onChange={(v) => {
+              const at = v as AssetType;
               setF({ ...f, asset_type: at, symbol: "", currency: defaultCcy(at) });
               if (!edit) setMode(defaultMode(at)); // tür değişince o türün doğal giriş modu
             }}>
             {(["BIST", "FON", "ALTIN", "DOVIZ", "KRIPTO", "ETF"] as AssetType[]).map((t) => <option key={t}>{t}</option>)}
-          </select>
-        </Field>
-        <Field label="Para birimi">
-          <select style={css.input} value={f.currency} onChange={(e) => setF({ ...f, currency: e.target.value as Currency })}>
+          </SatirSec>
+          <SatirSec etiket="Para birimi" goruntu={f.currency === "USD" ? "$ USD" : "₺ TRY"} value={f.currency} onChange={(v) => setF({ ...f, currency: v as Currency })}>
             <option value="TRY">₺ TRY</option><option value="USD">$ USD</option>
-          </select>
-        </Field>
-        <Field label="Sembol">
-          <SuggestInput autoFocus inputRef={symbolRef} style={{ textTransform: "uppercase" }} placeholder={TYPE_HINT[f.asset_type]}
-            value={f.symbol} onChange={(v) => setF({ ...f, symbol: v.toUpperCase() })}
-            onPick={pickSymbol} options={sugs} labelOf={(s) => s.symbol}
-            subOf={(s) => s.price != null ? `${s.asset_type} · ${fmtMoney(s.price, s.currency, true)}` : s.asset_type} />
-        </Field>
-        {/* Dört pozisyon olayı (Faz 21). Temettü/bedelsiz de bu deftere yazılır: ikisi de
-            pozisyonun geçmişinin parçasıdır, ayrı bir yerde tutmak hikâyeyi bölerdi. */}
-        <Field label="İşlem" flex={2}>
-          <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: `1px solid ${T.line}` }}>
-            {(["ALIŞ", "SATIŞ", "TEMETTÜ", "BEDELSİZ"] as const).map((s) => (
-              <button key={s} type="button" title={SIDE_HINT[s]}
-                onClick={() => { setF({ ...f, side: s }); if (s === "BEDELSİZ") setMode("adet"); }} style={{
-                  flex: 1, padding: "9px 2px", border: "none", cursor: "pointer", fontWeight: 700,
-                  fontSize: 10.5, fontFamily: T.disp, letterSpacing: "-0.01em",
-                  background: f.side === s ? SIDE_COLOR[s] : T.panel2,
-                  color: f.side === s ? T.accInk : T.mut,
-                }}>{s}</button>
-            ))}
-          </div>
-        </Field>
-      </div>
-      <div style={{ fontSize: 11.5, color: T.mut, marginTop: 6 }}>{SIDE_HINT[f.side]}</div>
-      {/* Faz 36 — temettü geri yatırımı (DRIP). ALIŞ anında sorulur çünkü karar tam da orada
-          verilir ("bunu uzun vadeli tutuyorum, temettüsü tekrar girsin"); ama işaret İŞLEME
-          değil POZİSYONA aittir — aynı hisseyi ikinci kez alınca hangi işlemin kazanacağı
-          sorusu doğardı. Bu yüzden `user_settings.drip_symbols`'e YAZILIR ve pozisyon
-          ayrıntısındaki aynı düğmeyle de dönebilir. Anahtar ANINDA kaydedilir (formu
-          kaydetmeden de geçerli): bir tercih, bir işlem değil. */}
-      {f.side === "ALIŞ" && !!f.symbol && (f.asset_type === "BIST" || f.asset_type === "ETF") && (
-        <button type="button"
-          onClick={async () => {
-            await api.put("settings", { drip_symbols: dripToggle(data.settings, f.asset_type, f.symbol) });
-            reload();
-          }}
-          title="Temettü geldiğinde aynı hisseden alım da önerilsin. Kayıt yine onayınla yazılır — otomatik işlem açılmaz."
-          style={{
-            display: "flex", alignItems: "center", gap: 9, marginTop: 10, width: "100%",
-            padding: "9px 11px", borderRadius: 10, cursor: "pointer", textAlign: "left",
-            border: `1px solid ${dripAcik ? T.acc : T.line}`,
-            background: dripAcik ? T.accSoft : T.panel2, fontFamily: T.disp,
-          }}>
-          {/* Gerçek bir anahtar görünümü: onay kutusu "form alanı", bu ise kalıcı bir tercih */}
-          <span style={{
-            width: 34, height: 20, borderRadius: 999, flexShrink: 0, position: "relative",
-            background: dripAcik ? T.acc : T.line, transition: "background .15s",
-          }}>
-            <span style={{
-              position: "absolute", top: 2, left: dripAcik ? 16 : 2, width: 16, height: 16,
-              borderRadius: "50%", background: "#fff", transition: "left .15s",
-            }} />
-          </span>
-          <span style={{ minWidth: 0 }}>
-            <span style={{ display: "block", fontSize: 12.5, fontWeight: 600, color: dripAcik ? T.acc : T.text }}>
-              Temettüyü geri yatır
-            </span>
-            <span style={{ display: "block", fontSize: 11, color: T.mut3 }}>
-              {dripAcik
-                ? `${f.symbol} temettüsü geldiğinde alım da önerilir`
-                : "Temettü geldiğinde yalnız gelir olarak yazılır"}
-            </span>
-          </span>
-        </button>
-      )}
-      {/* Giriş modu: fonda tutar ("50 bin lira attım"), hissede adet ("50 lot aldım").
-          Bedelsizde para hareketi olmadığından mod seçimi anlamsız — gizlenir. */}
-      {!isBonus && (
-        <div style={{ display: "flex", gap: 6, marginTop: 10, alignItems: "center" }}>
-          <span style={{ ...css.label, marginBottom: 0 }}>Giriş</span>
-          {(["adet", "tutar"] as TradeMode[]).map((m) => (
-            <button key={m} type="button" onClick={() => switchMode(m)} style={{
-              ...css.chip, fontWeight: 600,
-              ...(mode === m ? { background: T.acc, color: T.accInk, borderColor: T.acc } : {}),
-            }}>{m === "adet"
-              ? (isDividend ? "Hisse başına gir" : "Adet gir")
-              : (isDividend ? "Toplam tutar gir" : "Tutar gir")}</button>
-          ))}
-        </div>
-      )}
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
-        {/* Temettü ve bedelsizde adet HER ZAMAN elle girilir (elindeki hisse sayısı) */}
-        {(isDividend || isBonus || mode === "adet") && (
-          <Field label={isDividend ? "Temettü ödenen adet" : isBonus ? "Gelen bedelsiz adet" : "Adet / Miktar"}>
-            <input style={css.input} inputMode="decimal" placeholder="0" value={f.qty} onChange={(e) => setF({ ...f, qty: e.target.value })} />
-          </Field>
-        )}
-        {mode === "tutar" && !isBonus && (
-          <AmountField ccy={f.currency} value={f.amount} onChange={(v) => setF({ ...f, amount: v })}
-            label={isDividend ? `Hesaba giren toplam (${f.currency === "USD" ? "$" : "TL"})`
-              : f.side === "SATIŞ" ? `Hesaba girecek (${f.currency === "USD" ? "$" : "TL"})`
-                : `Hesaptan çıkacak (${f.currency === "USD" ? "$" : "TL"})`} />
-        )}
-        {!isBonus && !(isDividend && mode === "tutar") && (
-          /* Temettüde bu alan BRÜTTÜR: nakit = adet × bu − stopaj (`cashDelta`). Etiket eskiden
-             "net" diyordu — ona güvenip net tutarı yazan ve stopajı da giren kullanıcının
-             stopajı iki kez düşülürdü; kurumsal öneri de buraya brüt tutarı dolduruyor. */
-          <AmountField label={isDividend ? `Hisse başına brüt (${f.currency === "USD" ? "$" : "TL"})` : `Birim fiyat (${f.currency === "USD" ? "$" : "TL"})`}
-            value={f.price} onChange={(v) => setF({ ...f, price: v })} ccy={f.currency} />
-        )}
-        {!isBonus && (
-          <AmountField label={isDividend ? `Stopaj / kesinti (${f.currency === "USD" ? "$" : "TL"})` : `Komisyon (${f.currency === "USD" ? "$" : "TL"})`}
-            value={f.fee} onChange={(v) => setF({ ...f, fee: v })} ccy={f.currency} />
-        )}
-      </div>
-      {/* Türetilen değer görünür olmalı: kaydedilen sayı bu */}
-      {mode === "tutar" && !isBonus && qty > 0 && price > 0 && (
-        <div style={{ fontSize: 12, color: T.mut, marginTop: 6 }}>
-          {isDividend
-            ? <>Hisse başına: <span style={{ ...css.mono, color: T.text }}>{fmtMoney(price, f.currency, true)}</span>{" "}
-              <span style={{ color: T.mut3 }}>({fmtMoney(num(f.amount) + fee, f.currency, true)} ÷ {qty.toLocaleString("tr-TR")} adet)</span></>
-            : <>Kaydedilecek adet: <span style={{ ...css.mono, color: T.text }}>{qty.toLocaleString("tr-TR", { maximumFractionDigits: 6 })}</span>{" "}
-              <span style={{ color: T.mut3 }}>({fmtMoney(num(f.amount), f.currency, true)} ÷ {fmtMoney(price, f.currency, true)})</span></>}
-        </div>
-      )}
-      {/* tek tık doldurmalar: güncel piyasa fiyatı, elde tutulan miktar (satış/temettü/bedelsizde) */}
-      {((livePrice != null && !isBonus && !isDividend) || (held > 0 && (f.side === "SATIŞ" || isDividend || isBonus))) && (
-        <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-          {livePrice != null && !isBonus && !isDividend && String(livePrice) !== f.price && (
-            <button type="button" style={css.chip} onClick={() => setF({ ...f, price: String(livePrice) })}>
-              Güncel fiyat: {fmtMoney(livePrice, f.currency, true)}
-            </button>
-          )}
-          {f.side === "SATIŞ" && held > 0 && (
-            <button type="button" style={css.chip} onClick={() => mode === "tutar"
-              ? setF({ ...f, amount: String(+amountFromQty("SATIŞ", held, price, fee).toFixed(2)) })
-              : setF({ ...f, qty: String(held) })}>
-              Tümünü sat: {mode === "tutar" && price > 0 ? fmtMoney(amountFromQty("SATIŞ", held, price, fee), f.currency, true) : held}
-            </button>
-          )}
-          {/* Temettü neredeyse her zaman elindeki TÜM hisselere ödenir; bedelsizde oran hesabı için lazım */}
-          {(isDividend || isBonus) && held > 0 && String(held) !== f.qty && (
-            <button type="button" style={css.chip} onClick={() => setF({ ...f, qty: String(held) })}>
-              Elimdeki adet: {held.toLocaleString("tr-TR")}
-            </button>
-          )}
-          {isBonus && held > 0 && [50, 100, 200].map((pct) => (
-            <button key={pct} type="button" style={css.chip}
-              onClick={() => setF({ ...f, qty: String(+(held * pct / 100).toFixed(6)) })}>
-              %{pct} bedelsiz
-            </button>
-          ))}
-        </div>
-      )}
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-        {/* Bedelsizde para hareketi yok → hesap alanı gizlenir (seçilse de sunucu 0 uygular) */}
-        {f.currency === "TRY" && !isBonus && (
-          <Field label="Nakit hesap (opsiyonel)" flex={2}>
-            <select style={css.input} value={f.account_id} onChange={(e) => setF({ ...f, account_id: e.target.value })}>
-              <option value="">— (bakiyeye işleme)</option>
+          </SatirSec>
+          {/* Bedelsizde para hareketi yok → hesap alanı gizlenir; USD işlem TL hesaba bağlanmaz */}
+          {f.currency === "TRY" && !isBonus && (
+            <SatirSec etiket="Hesap" goruntu={acc ? acc.name : "Bakiyeye işleme"} soluk={!acc} value={f.account_id} onChange={(v) => setF({ ...f, account_id: v })}>
+              <option value="">— Bakiyeye işleme</option>
               {data.accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-            </select>
-          </Field>
-        )}
-        {/* Portföy grubu: yalnız raporlama/gruplama — pozisyon matematiğini veya net varlığı değiştirmez */}
-        <Field label="Portföy (opsiyonel)" flex={2}>
-          <select style={css.input} value={f.portfolio_id} onChange={(e) => setF({ ...f, portfolio_id: e.target.value })}>
+            </SatirSec>
+          )}
+          {/* Portföy grubu: yalnız raporlama/gruplama — pozisyon matematiğini veya net varlığı değiştirmez */}
+          <SatirSec etiket="Portföy" goruntu={pf ? pf.name : "Gruplanmamış"} soluk={!pf} value={f.portfolio_id} onChange={(v) => setF({ ...f, portfolio_id: v })}>
             <option value="">Gruplanmamış</option>
             {data.portfolios.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-        </Field>
-      </div>
-      {ok && (
-        <div style={{ fontSize: 12, color: T.mut, marginTop: 8 }}>
-          {isBonus ? (() => {
-            /* Bedelsizde asıl merak edilen: adet ne olur, ortalama maliyet kaça düşer.
-               Toplam maliyet sabit kaldığından pozisyonun DEĞERİ değişmez — bunu açıkça söylüyoruz,
-               çünkü "ortalamam düştü, kâra geçtim" en yaygın yanlış okumadır. */
-            const pos = positions(data.trades.filter((t) => t.symbol.toUpperCase() === f.symbol.trim().toUpperCase() && t.asset_type === f.asset_type), []);
-            const cur = pos[0];
-            if (!cur || cur.qty <= 0) return <>Bedelsiz kaydedilecek: <span style={{ ...css.mono, color: T.text }}>{qty.toLocaleString("tr-TR")} adet</span></>;
-            const newQty = cur.qty + qty, newAvg = (cur.avg * cur.qty) / newQty;
-            return (<>
-              Adet <span style={css.mono}>{cur.qty.toLocaleString("tr-TR")}</span> → <span style={{ ...css.mono, color: T.text }}>{newQty.toLocaleString("tr-TR")}</span>
-              {" · "}ort. maliyet <span style={css.mono}>{fmtMoney(cur.avg, f.currency, true)}</span> → <span style={{ ...css.mono, color: T.acc }}>{fmtMoney(newAvg, f.currency, true)}</span>
-              <div style={{ marginTop: 4, color: T.mut3 }}>Toplam maliyet ve pozisyon değeri değişmez — yalnız aynı para daha çok hisseye dağılır.</div>
-            </>);
-          })() : (<>
-            {isDividend ? "Brüt temettü: " : "İşlem tutarı: "}
-            <span style={{ ...css.mono, color: T.text }}>{fmtMoney(qty * price, f.currency, true)}</span>
-            {isDividend && fee > 0 && (<>
-              {" · stopaj sonrası net: "}
-              <span style={{ ...css.mono, color: T.text }}>{fmtMoney(cashDelta({ side: f.side, qty, price, fee }), f.currency, true)}</span>
-            </>)}
-            {isDividend && <div style={{ marginTop: 4, color: T.mut3 }}>Adedin ve ortalama maliyetin değişmez; tutar gerçekleşen getiriye yazılır.</div>}
-            {f.currency === "TRY" && f.account_id && (() => {
-              const acc = data.accounts.find((a) => a.id === +f.account_id);
-              if (!acc) return null;
-              const delta = cashDelta({ side: f.side, qty, price, fee });
-              return (
-                <div style={{ marginTop: 4 }}>
-                  {delta >= 0
-                    ? <><b>{acc.name}</b> bakiyesine <span style={{ color: T.pos }}>+{fmtMoney(delta, "TRY", true)}</span> işlenir</>
-                    : <><b>{acc.name}</b> bakiyesinden <span style={{ color: T.neg }}>−{fmtMoney(-delta, "TRY", true)}</span> düşülür</>}
-                </div>
-              );
-            })()}
-          </>)}
-        </div>
-      )}
-      {edit && (
-        <div style={{ fontSize: 12, color: T.mut, marginTop: 8, background: T.panel2, borderRadius: 8, padding: "8px 12px" }}>
-          İşlem düzenleniyor: pozisyon ve ortalama maliyet baştan hesaplanır. Hesaba bağlıysa bakiye etkisi de
-          otomatik düzeltilir (eskisi geri alınır, yenisi işlenir).
-        </div>
-      )}
-      <SaveButtons ok={ok} reason={reason} onSaveNew={() => save(true)} editing={!!edit} />
+          </SatirSec>
+          {!isBonus && (
+            <SatirMetin etiket={isDividend ? "Stopaj / kesinti" : "Komisyon"} sayi placeholder="0" sonEk={f.currency === "USD" ? "$" : "₺"}
+              value={f.fee} onChange={(v) => setF({ ...f, fee: v })} />
+          )}
+        </Satirlar>
+        {/* Faz 36 — temettü geri yatırımı (DRIP). ALIŞ anında sorulur çünkü karar tam da orada
+            verilir; ama işaret İŞLEME değil POZİSYONA aittir (`user_settings.drip_symbols`) ve
+            pozisyon ayrıntısındaki aynı düğmeyle de dönebilir. ANINDA kaydedilir: bir tercih, bir işlem değil. */}
+        {f.side === "ALIŞ" && !!f.symbol && (f.asset_type === "BIST" || f.asset_type === "ETF") && (
+          <Anahtar etiket="Temettüyü geri yatır" acik={dripAcik}
+            alt={dripAcik ? `${f.symbol} temettüsü geldiğinde alım da önerilir` : "Temettü geldiğinde yalnız gelir olarak yazılır"}
+            onChange={async () => { await api.put("settings", { drip_symbols: dripToggle(data.settings, f.asset_type, f.symbol) }); reload(); }} />
+        )}
+        {edit && (
+          <div style={{ fontSize: 13, color: T.mut, lineHeight: 1.5 }}>
+            İşlem düzenleniyor: pozisyon ve ortalama maliyet baştan hesaplanır; hesaba bağlıysa bakiye etkisi de düzeltilir (eskisi geri alınır, yenisi işlenir).
+          </div>
+        )}
+      </Bolum>
+      <FormAlt sonuc={sonuc} ok={ok} reason={reason} onSaveNew={() => save(true)} editing={!!edit} sil={sil}
+        etiket={edit ? "Değişikliği kaydet" : `${SIDE_AD[f.side]} kaydet`.replace("Alış kaydet", "Alışı kaydet").replace("Satış kaydet", "Satışı kaydet").replace("Temettü kaydet", "Temettüyü kaydet").replace("Bedelsiz kaydet", "Bedelsizi kaydet")} />
     </form>
   );
 }

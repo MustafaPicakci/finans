@@ -3,6 +3,7 @@ import type { AllData, Category } from "@finans/engine";
 import { api } from "../../api";
 import { T, css } from "../../theme";
 import { Field } from "../../ui";
+import { SatirSec } from "./parcalar";
 
 /* ————— KATEGORİ ALANI (Faz 26 — "C") —————
    Kategori seçerken YERİNDE oluşturmayı sağlar. Öncesinde kategori yalnız yönetim ekranından
@@ -15,7 +16,7 @@ import { Field } from "../../ui";
 
    Yönetim (ad değiştirme, silme) burada YOK, bilinçli: nadir işlerdir ve Tanımlar ekranındadır.
    Form, sık olanı ucuz yapar; nadir olanı başka yere bırakır. */
-export function KategoriAlani({ data, value, onChange, kind, reload, label = "Kategori", flex = 2 }: {
+export function KategoriAlani({ data, value, onChange, kind, reload, label = "Kategori", flex = 2, satir, bos = "Kategorisiz" }: {
   data: AllData;
   /** seçili kategori id'si, string ("" = Kategorisiz) — form state'i böyle tutuyor */
   value: string;
@@ -25,6 +26,10 @@ export function KategoriAlani({ data, value, onChange, kind, reload, label = "Ka
   reload: () => void;
   label?: string;
   flex?: number;
+  /** form satırı görünümü (yeniden tasarım: etiket solda, değer sağda — `Satirlar` içinde kullanılır) */
+  satir?: boolean;
+  /** satır görünümünde boş değerin yazısı ("seç (isteğe bağlı)") */
+  bos?: string;
 }) {
   const [yeni, setYeni] = useState<string | null>(null); // null = seçici, string = yeni ad girişi
   const [busy, setBusy] = useState(false);
@@ -47,6 +52,34 @@ export function KategoriAlani({ data, value, onChange, kind, reload, label = "Ka
       reload();
     } finally { setBusy(false); }
   };
+
+  if (yeni !== null && satir) {
+    return (
+      <div style={{ display: "flex", gap: 6, alignItems: "center", padding: "7px 8px 7px 14px", borderTop: `1px solid ${T.line2}` }}>
+        <input ref={ref} autoFocus aria-label="Yeni kategori adı" style={{ ...css.input, fontFamily: T.disp, fontSize: 15, flex: 1, minWidth: 0 }} value={yeni}
+          placeholder={kind === "income" ? "Yeni kategori, örn. Kira geliri" : "Yeni kategori, örn. Market"}
+          onChange={(e) => setYeni(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") { e.preventDefault(); olustur(); }
+            else if (e.key === "Escape") { e.preventDefault(); setYeni(null); }
+          }} />
+        <button type="button" style={{ ...css.btn, padding: "0 12px", height: 40, fontSize: 13, opacity: yeni.trim() && !busy ? 1 : 0.5 }}
+          disabled={!yeni.trim() || busy} onClick={olustur}>{busy ? "…" : "Ekle"}</button>
+        <button type="button" aria-label="Vazgeç" style={{ ...css.ghost, padding: "0 10px", height: 40, fontSize: 13 }} onClick={() => setYeni(null)}>✕</button>
+      </div>
+    );
+  }
+  if (satir) {
+    const secili = data.categories.find((c) => String(c.id) === value);
+    return (
+      <SatirSec etiket={label} goruntu={secili ? secili.name : bos} soluk={!secili} value={value}
+        onChange={(v) => (v === "__yeni" ? setYeni("") : onChange(v))}>
+        <option value="">{bos}</option>
+        {data.categories.filter((c) => c.kind === kind || String(c.id) === value).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        <option value="__yeni">+ Yeni kategori…</option>
+      </SatirSec>
+    );
+  }
 
   if (yeni !== null) {
     /* Yazma modunda alan TAM SATIR alır: metin kutusu + Ekle + Vazgeç üçlüsü, yanındaki

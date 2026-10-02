@@ -212,7 +212,8 @@ export const SilDugmesi = ({ ad, sonuc, onSil, title, ikon = "✕", className = 
     try { await onSil(); setAcik(false); } finally { setSiliniyor(false); }
   };
   return (<>
-    <button className={className} style={{ ...css.del, ...style }} title={title ?? "Sil"} aria-label="Sil"
+    {/* type="button": düzenleme formunun içinde de duruyor (EditSheet) — tipsiz düğme formu gönderirdi */}
+    <button type="button" className={className} style={{ ...css.del, ...style }} title={title ?? "Sil"} aria-label="Sil"
       onClick={() => setAcik(true)}>{ikon}</button>
     {acik && (
       <Modal title="Silinsin mi?" onClose={() => !siliniyor && setAcik(false)}>
@@ -246,7 +247,8 @@ export const Center = ({ children }: { children: React.ReactNode }) => (
  *  `position:fixed` için KAPSAYICI BLOK yapar. Sonuç: `inset:0` viewport'u değil binlerce
  *  piksellik sekme kutusunu kaplar, modal ekranın çok aşağısında ortalanır. Sekme içinden
  *  açılan her modal (EditSheet, SilDugmesi onayı) bundan etkileniyordu. */
-export const Modal = ({ title, onClose, children }: { title: React.ReactNode; onClose: () => void; children: React.ReactNode }) => {
+/** `onBack`: sol üstte geri düğmesi (çok adımlı akış — "+ Ekle" seçiminden açılan form seçime döner) */
+export const Modal = ({ title, onClose, children, onBack }: { title: React.ReactNode; onClose: () => void; children: React.ReactNode; onBack?: () => void }) => {
   React.useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", h);
@@ -259,14 +261,31 @@ export const Modal = ({ title, onClose, children }: { title: React.ReactNode; on
     return () => { document.body.style.overflow = prev; };
   }, []);
   return createPortal(
-    <div onClick={onClose} style={{
+    /* Telefonda ALTTAN AÇILAN SAYFA (yeniden tasarım, Ekim 2026; App.tsx .modal-*): başparmak altta,
+       kaydet düğmesi ekranın dibinde. Eskiden ekranın ortasında yüzen bir karttı. Masaüstünde ortada. */
+    <div onClick={onClose} className="modal-zemin" style={{
       position: "fixed", inset: 0, zIndex: 50, background: "rgba(10,8,18,.45)", backdropFilter: "blur(2px)",
       display: "grid", placeItems: "center", padding: 16,
     }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ ...css.card, width: "100%", maxWidth: 600, maxHeight: "88vh", overflowY: "auto", boxShadow: "var(--shadow)" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <div style={{ fontWeight: 700, fontSize: 16 }}>{title}</div>
-          <button style={css.del} aria-label="Kapat" onClick={onClose}>✕</button>
+      <div onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" className="modal-kutu"
+        style={{ ...css.card, width: "100%", maxWidth: 560, maxHeight: "88vh", overflowY: "auto", boxShadow: "var(--shadow)", padding: 22 }}>
+        <span className="modal-tutamak" aria-hidden="true" />
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 10 }}>
+          {onBack && (
+            <button type="button" aria-label="Geri" title="Geri" onClick={onBack} style={{
+              width: 36, height: 36, minHeight: 0, borderRadius: 10, border: "none", background: T.panel2, color: T.text,
+              display: "grid", placeItems: "center", cursor: "pointer", flexShrink: 0, marginRight: -2,
+            }}>
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M8.5 2.5L4 7l4.5 4.5" /></svg>
+            </button>
+          )}
+          <div style={{ fontWeight: 700, fontSize: 18, letterSpacing: "-0.01em", flex: 1, minWidth: 0 }}>{title}</div>
+          <button aria-label="Kapat" onClick={onClose} style={{
+            width: 36, height: 36, minHeight: 0, borderRadius: 10, border: "none", background: T.panel2, color: T.mut,
+            display: "grid", placeItems: "center", cursor: "pointer", flexShrink: 0,
+          }}>
+            <svg width="12" height="12" viewBox="0 0 12 12" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M3 3l6 6M9 3l-6 6" /></svg>
+          </button>
         </div>
         {children}
       </div>
