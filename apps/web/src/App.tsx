@@ -408,6 +408,11 @@ export default function App() {
         .port-ust{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,420px);gap:16px;align-items:start}
         .port-orta{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:16px;align-items:start}
         .port-ust > *, .port-orta > *{min-width:0}
+        /* Grup 5: Kayıtlar (arama+liste | özet), Nakit (takvim | gün), Plan (düzenli | tek seferlik + kredi) */
+        .kayit-izgara{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,420px);grid-template-areas:"ara ozet" "liste ozet";grid-template-rows:auto 1fr;gap:16px;align-items:start}
+        .nakit-izgara{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,420px);gap:16px;align-items:start}
+        .plan-izgara{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,440px);grid-template-areas:"duzenli tek" "duzenli kredi";grid-template-rows:auto 1fr;gap:16px;align-items:start}
+        .kayit-izgara > *, .nakit-izgara > *, .plan-izgara > *{min-width:0}
         /* Dokunulabilir liste satırı (grup 3 — satırda ✎ ✕ yok, satırın tamamı düzenlemeyi açar) */
         .liste-satir{transition:background .12s}
         .liste-satir:hover{background:${T.panel3}!important}
@@ -421,7 +426,9 @@ export default function App() {
         /* İçe aktarma önizlemesinin eylem çubuğu: liste kayarken altta yapışık durur */
         .ice-eylem{position:sticky;bottom:12px}
         @media (max-width:900px){
-          .grid2,.grid3,.ozet-ust,.ozet-alt,.ozet-bek,.hesap-ust,.port-ust,.port-orta{grid-template-columns:1fr}
+          .grid2,.grid3,.ozet-ust,.ozet-alt,.ozet-bek,.hesap-ust,.port-ust,.port-orta,.nakit-izgara{grid-template-columns:1fr}
+          .kayit-izgara{grid-template-columns:1fr;grid-template-areas:"ara" "ozet" "liste";grid-template-rows:auto}
+          .plan-izgara{grid-template-columns:1fr;grid-template-areas:"duzenli" "tek" "kredi";grid-template-rows:auto}
           .treemap-kutu{height:190px!important}
           /* Kutular mobilde 2×2 kalır: tam genişlikte dört kart ~600px yiyordu */
           .ozet-kpi{gap:10px}

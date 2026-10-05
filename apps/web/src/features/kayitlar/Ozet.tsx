@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from "react";
 import { harcamaOzeti, type AllData, type HarcamaGrup, type HarcamaTemeli } from "@finans/engine";
 import { T, css, fmtMoney } from "../../theme";
-import { FiltreSeridi, useSayfalama, DahaFazla } from "../../ui";
+import { useSayfalama, DahaFazla } from "../../ui";
+import { Segment } from "../forms/parcalar";
 import { KategorileModal, kategorisizGruplar } from "./Kategorile";
 
 /* ————— HARCAMA ÖZETİ (Faz 40) —————
@@ -41,8 +42,10 @@ const fmtKalemAdi = (ad: string, grup: HarcamaGrup): string => {
 };
 
 export function HarcamaOzetiKarti(
-  { data, reload, baslangic, sorgu, turSuzgeciAcik }:
-  { data: AllData; reload: () => void; baslangic: string; sorgu: string; turSuzgeciAcik: boolean },
+  { data, reload, baslangic, sorgu, turSuzgeciAcik, acik, onCevir, donemAdi }:
+  { data: AllData; reload: () => void; baslangic: string; sorgu: string; turSuzgeciAcik: boolean;
+    /** kapalıyken yalnız toplam satırı (yeniden tasarım, grup 5) */
+    acik: boolean; onCevir: () => void; donemAdi: string },
 ) {
   const [kategorile, setKategorile] = useState(false);
   const [temel, setTemel] = useState<HarcamaTemeli>("tuketim");
@@ -84,79 +87,94 @@ export function HarcamaOzetiKarti(
   const s = useSayfalama(kalemler, 8, `${temel}|${grup}|${baslangic}|${sorgu}`);
   const enBuyuk = kalemler.reduce((m, k) => Math.max(m, k.gider), 0);
 
+  const kategorisizToplam = kategorisiz.reduce((t, g) => t + g.toplam, 0);
+  const baglanti: React.CSSProperties = { background: "none", border: "none", padding: "4px 0", minHeight: 0, cursor: "pointer", fontFamily: T.disp, fontSize: 14, fontWeight: 600, color: T.acc, whiteSpace: "nowrap" };
+  const donemEtiket = donemAdi === "Tümü" ? "Tüm kayıtlar" : `Son ${donemAdi}`;
+
+  /* KAPALI: tek satır — rakam yine görünür, yalnız kırılım ve kontroller katlı. */
+  if (!acik) {
+    return (
+      <div style={{ ...css.card, padding: "14px 16px", display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 12.5, color: T.mut }}>{donemEtiket}{temel === "nakit" ? " · nakit temeli" : ""}</div>
+          <div style={{ fontSize: 14 }}>
+            gider <b style={{ ...css.mono, fontWeight: 600, color: T.neg, whiteSpace: "nowrap" }}>{fmtMoney(o.gider, "TRY")}</b>
+            {" · "}gelir <b style={{ ...css.mono, fontWeight: 600, color: T.pos, whiteSpace: "nowrap" }}>{fmtMoney(o.gelir, "TRY")}</b>
+          </div>
+        </div>
+        <button type="button" onClick={onCevir} style={baglanti} aria-expanded={false}>Kırılım ⌄</button>
+      </div>
+    );
+  }
+
   return (
-    <div style={css.card}>
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-        <div style={{ fontWeight: 700, fontSize: 15 }}>Harcama Özeti</div>
-        <div style={{ fontSize: 12, color: T.mut }}>{o.adet} kayıt</div>
+    <div style={{ ...css.card, padding: 16, display: "grid", gap: 12 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <div style={{ fontWeight: 700, fontSize: 16, flex: 1 }}>Harcama özeti</div>
+        <div style={{ fontSize: 13, color: T.mut }}>{donemEtiket.toLocaleLowerCase("tr")} · {o.adet} kayıt</div>
       </div>
 
-      <div style={{ display: "flex", gap: 18, flexWrap: "wrap", margin: "10px 0 2px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 }}>
         <Rakam etiket="Gider" deger={o.gider} renk={T.neg} />
         <Rakam etiket="Gelir" deger={o.gelir} renk={T.pos} />
         <Rakam etiket="Net" deger={o.net} renk={o.net >= 0 ? T.pos : T.neg} isaretli />
       </div>
 
-      <FiltreSeridi>
-        <select style={{ ...css.input, width: "auto", padding: "6px 8px", fontSize: 12.5 }}
-          value={temel} onChange={(e) => setTemel(e.target.value as HarcamaTemeli)}>
-          {(Object.keys(TEMEL_ETIKET) as HarcamaTemeli[]).map((k) => (
-            <option key={k} value={k}>{TEMEL_ETIKET[k]} temeli</option>
-          ))}
-        </select>
-        <select style={{ ...css.input, width: "auto", padding: "6px 8px", fontSize: 12.5 }}
-          value={grup} onChange={(e) => setGrup(e.target.value as Exclude<HarcamaGrup, "yok">)}>
-          {(Object.keys(GRUP_ETIKET) as Exclude<HarcamaGrup, "yok">[]).map((k) => (
-            <option key={k} value={k}>{GRUP_ETIKET[k]}</option>
-          ))}
-        </select>
-      </FiltreSeridi>
-
-      {kalemler.length === 0
-        ? <div style={{ fontSize: 13, color: T.mut, padding: "10px 0" }}>Bu süzgeçle harcama yok.</div>
-        : s.gorunen.map((k) => (
-          <div key={k.ad} style={{ padding: "7px 0", borderBottom: `1px solid ${T.line}` }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 13 }}>
-              <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fmtKalemAdi(k.ad, grup)}</span>
-              {/* Gelir de yazılır, yoksa gideri olmayan bir kova (maaş kategorisi, gelirli bir ay)
-                  "₺0,00" diye görünürdü — rakam doğru ama satır yanlış bir şey söylüyordu. */}
-              <span style={{ ...css.mono, flexShrink: 0, display: "flex", gap: 8 }}>
-                {k.gider > 0 && <span>{fmtMoney(k.gider, "TRY", true)}</span>}
-                {k.gelir > 0 && <span style={{ color: T.pos }}>+{fmtMoney(k.gelir, "TRY", true)}</span>}
-              </span>
-            </div>
-            {/* Çubuk yalnız ORAN gösterir (en büyük GİDERE göre); rakam zaten yanında yazıyor.
-                Gideri olmayan kalemde (gelir kovası) çubuk HİÇ çizilmez — "en az %2" tabanı orada
-                sıfırı küçük bir gider gibi gösteriyordu. */}
-            <div style={{ height: 4, background: T.line, borderRadius: 3, marginTop: 5 }}>
-              {k.gider > 0 && (
-                <div style={{
-                  height: "100%", borderRadius: 3, background: T.acc,
-                  width: `${enBuyuk > 0 ? Math.max(2, (k.gider / enBuyuk) * 100) : 0}%`,
-                }} />
-              )}
-            </div>
+      {/* Temel ve kırılım: görünümü değiştirir → çukur segment */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <Segment kucuk ad="Temel" deger={temel} sec={setTemel}
+          secenek={(Object.keys(TEMEL_ETIKET) as HarcamaTemeli[]).map((k) => ({ v: k, l: TEMEL_ETIKET[k] }))} />
+        <div style={{ flex: "1 1 200px", display: "flex" }}>
+          <div style={{ flex: 1, display: "flex" }}>
+            <Segment kucuk ad="Kırılım" deger={grup} sec={setGrup}
+              secenek={(Object.keys(GRUP_ETIKET) as Exclude<HarcamaGrup, "yok">[]).map((k) => ({ v: k, l: GRUP_ETIKET[k] }))} />
           </div>
-        ))}
-      {/* "ay" zamansal (yeniden eskiye) → "daha eski"; kategori/kart tutara göre → "daha fazla" */}
-      <DahaFazla s={s} ad="kalem" yon={grup === "ay" ? "eski" : "fazla"} />
+        </div>
+      </div>
 
       {/* `uyari` rakamın ANLAMINI değiştirir (hangi temel, ne elendi, ne eksik) — katlanmaz,
           asistanın cevabında da aynen aktarılıyor (Faz 35 kuralı). */}
-      <div style={{ fontSize: 11.5, color: T.mut, marginTop: 10, lineHeight: 1.55 }}>
+      <div style={{ fontSize: 12.5, color: T.mut, lineHeight: 1.5 }}>
         {o.uyari.map((u, i) => <div key={i}>{u}</div>)}
         {turSuzgeciAcik && <div>Tür süzgeci özete uygulanmaz: özet hesap işlemlerini ve kart harcamalarını kapsar (virman ve portföy kapsam dışı).</div>}
         {ekstreIdYok && <div>Ekstre ödemelerinin kaydı bu yanıtta yok (eski sürüm) — ödemeler toplamdan elenemedi.</div>}
       </div>
 
-      {/* Uyarı bir EYLEM istiyorsa eylemi de sunmalı: "kategorisiz kovada N TL var" deyip
-          düzeltmeyi kayıtları tek tek açmaya bırakmak, pratikte hiç yapılmayacak bir iş
-          bırakmaktı (Faz 41). Düğme yalnız kategorisiz kayıt varken çıkar. */}
+      <div>
+        {kalemler.length === 0
+          ? <div style={{ fontSize: 13.5, color: T.mut, padding: "6px 0" }}>Bu süzgeçle harcama yok.</div>
+          : s.gorunen.map((k) => (
+            <div key={k.ad} style={{ padding: "7px 0" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 14 }}>
+                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fmtKalemAdi(k.ad, grup)}</span>
+                {/* Gelir de yazılır, yoksa gideri olmayan bir kova (maaş kategorisi) "₺0,00" görünürdü */}
+                <span style={{ ...css.mono, flexShrink: 0, display: "flex", gap: 8 }}>
+                  {k.gider > 0 && <span>{fmtMoney(k.gider, "TRY", true)}</span>}
+                  {k.gelir > 0 && <span style={{ color: T.pos }}>+{fmtMoney(k.gelir, "TRY", true)}</span>}
+                </span>
+              </div>
+              {/* Çubuk yalnız ORAN (en büyük GİDERE göre); gideri olmayan kalemde hiç çizilmez */}
+              {k.gider > 0 && (
+                <div style={{ height: 4, background: T.line2, borderRadius: 2, marginTop: 5 }}>
+                  <div style={{ height: "100%", borderRadius: 2, background: T.acc, width: `${enBuyuk > 0 ? Math.max(2, (k.gider / enBuyuk) * 100) : 0}%` }} />
+                </div>
+              )}
+            </div>
+          ))}
+        {/* "ay" zamansal (yeniden eskiye) → "daha eski"; kategori/kart tutara göre → "daha fazla" */}
+        <DahaFazla s={s} ad="kalem" yon={grup === "ay" ? "eski" : "fazla"} />
+      </div>
+
+      {/* Uyarı bir EYLEM istiyorsa eylemi de sunmalı (Faz 41): kategorisiz tutar + düzeltme yan yana. */}
       {kategorisiz.length > 0 && (
-        <button style={{ ...css.btn, marginTop: 10 }} onClick={() => setKategorile(true)}>
-          Kategorile ({kategorisiz.length} ad)
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 11, background: "var(--warn-soft)" }}>
+          <span style={{ flex: 1, fontSize: 13.5, lineHeight: 1.4 }}>
+            <b style={{ ...css.mono, fontWeight: 600 }}>{fmtMoney(kategorisizToplam, "TRY")}</b> kategorisiz — {kategorisiz.length} farklı ad
+          </span>
+          <button type="button" onClick={() => setKategorile(true)} style={baglanti}>Kategorile ›</button>
+        </div>
       )}
+      <button type="button" onClick={onCevir} aria-expanded style={{ ...baglanti, color: T.mut, fontWeight: 500, justifySelf: "start" }}>Özeti daralt ⌃</button>
       {kategorile && (
         <KategorileModal data={data} reload={reload} onClose={() => setKategorile(false)}
           baslangic={baslangic} sorgu={sorgu} ekstreTxIds={ekstreTxIds} />
@@ -167,10 +185,10 @@ export function HarcamaOzetiKarti(
 
 function Rakam({ etiket, deger, renk, isaretli }: { etiket: string; deger: number; renk: string; isaretli?: boolean }) {
   return (
-    <div>
-      <div style={{ fontSize: 11, color: T.mut3, letterSpacing: "0.06em", textTransform: "uppercase" }}>{etiket}</div>
-      <div style={{ ...css.mono, fontSize: 19, fontWeight: 700, color: renk }}>
-        {isaretli && deger > 0 ? "+" : ""}{fmtMoney(deger, "TRY", true)}
+    <div style={{ background: T.panel2, borderRadius: 10, padding: "8px 10px", minWidth: 0 }}>
+      <div style={{ fontSize: 12, color: T.mut }}>{etiket}</div>
+      <div style={{ ...css.mono, fontSize: 15, fontWeight: 600, color: renk, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+        {isaretli && deger > 0 ? "+" : ""}{fmtMoney(deger, "TRY")}
       </div>
     </div>
   );

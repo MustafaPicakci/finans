@@ -2,7 +2,8 @@ import React, { useMemo, useState } from "react";
 import { metinEsler, type AllData, type Category } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, fmtMoney } from "../../theme";
-import { Modal, FiltreSeridi, Aciklama, useSayfalama, DahaFazla } from "../../ui";
+import { Modal, Aciklama, useSayfalama, DahaFazla } from "../../ui";
+import { Segment } from "../forms/parcalar";
 import { normName } from "../forms/recall";
 
 /* ————— TOPLU KATEGORİLEME (Faz 41) —————
@@ -174,7 +175,7 @@ export function KategorileModal(
       {/* Faz 24 kural 3: bir kez okunan uzun metin katlanır. Görünür kalan TEK cümle, eylemin
           ne yaptığını söyleyen cümledir (seçim tüm gruba yazılır) — gerisi kapsam açıklaması
           ve ⓘ arkasında duruyor; yedi satırlık paragraf listeyi ekranın yarısına itiyordu. */}
-      <div style={{ fontSize: 12.5, color: T.mut, lineHeight: 1.5 }}>
+      <div style={{ fontSize: 14, color: T.mut, lineHeight: 1.5 }}>
         Aynı adlı kayıtlar tek satırda toplandı — seçtiğin kategori o adın <b>tüm</b> kayıtlarına
         yazılır.
       </div>
@@ -186,17 +187,10 @@ export function KategorileModal(
         kapanışı). Yanlış seçersen kaydı Kayıtlar listesinden düzenleyebilirsin.
       </Aciklama>
 
-      <FiltreSeridi>
-        {([["hepsi", "Hepsi"], ["kart", "Kart harcaması"], ["hesap", "Hesap işlemi"]] as const).map(([k, etiket]) => (
-          <button key={k} type="button" onClick={() => setKaynak(k)} style={{
-            padding: "6px 10px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontFamily: T.disp,
-            fontWeight: kaynak === k ? 700 : 500,
-            background: kaynak === k ? T.panel : "transparent",
-            border: `1px solid ${kaynak === k ? T.line : "transparent"}`,
-            color: kaynak === k ? T.acc : T.mut,
-          }}>{etiket} ({sayi(k)})</button>
-        ))}
-      </FiltreSeridi>
+      <div style={{ margin: "12px 0 4px" }}>
+        <Segment kucuk ad="Kaynak" deger={kaynak} sec={setKaynak}
+          secenek={([["hepsi", "Hepsi"], ["kart", "Kart"], ["hesap", "Hesap"]] as const).map(([k, l]) => ({ v: k, l: `${l} (${sayi(k)})` }))} />
+      </div>
 
       {gruplar.length === 0
         ? <div style={{ fontSize: 13, color: T.mut }}>Bu süzgeçle kategorisiz kayıt yok.</div>
@@ -205,15 +199,15 @@ export function KategorileModal(
           return (
             <div key={g.anahtar} style={{
               display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap",
-              padding: "8px 0", borderBottom: `1px solid ${T.line}`, opacity: durum === "bitti" ? 0.45 : 1,
+              padding: "12px 0", borderTop: `1px solid ${T.line2}`, opacity: durum === "bitti" ? 0.45 : 1,
             }}>
               <div style={{ flex: "1 1 150px", minWidth: 0 }}>
-                <div style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.ad}</div>
-                <div style={{ fontSize: 11, color: T.mut }}>
+                <div style={{ fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.ad}</div>
+                <div style={{ fontSize: 12.5, color: T.mut }}>
                   {g.kaynakAdi} · {g.kayitlar.length} kayıt · {g.yon === "gelir" ? "gelir" : "gider"}
                 </div>
               </div>
-              <span style={{ ...css.mono, fontSize: 13, flexShrink: 0 }}>{fmtMoney(g.toplam, "TRY", true)}</span>
+              <span style={{ ...css.mono, fontSize: 15, flexShrink: 0 }}>{fmtMoney(g.toplam, "TRY", true)}</span>
               {/* Kontroller tek kapta: öneri düğmesi ile seçici birlikte sarmalı, yoksa dar
                   ekranda kısa adlı satırda düğme başlığın yanına, uzun adlıda alta düşüyor ve
                   liste dişli görünüyordu. */}
@@ -231,15 +225,15 @@ export function KategorileModal(
                       onClick={() => uygula(g, String(g.oneri))}
                       title="önerilen kategoriyi bu adın tüm kayıtlarına yaz"
                       style={{
-                        flexShrink: 0, padding: "6px 10px", borderRadius: 8, cursor: "pointer",
-                        background: "transparent", border: `1px solid ${T.acc}`, color: T.acc,
-                        fontSize: 12, fontFamily: T.disp, fontWeight: 700,
+                        flexShrink: 0, height: 36, minHeight: 0, padding: "0 12px", borderRadius: 10, cursor: "pointer",
+                        background: T.panel, border: `1px solid ${T.acc}`, color: T.acc,
+                        fontSize: 13.5, fontFamily: T.disp, fontWeight: 600,
                       }}>
                       {data.categories.find((c) => c.id === g.oneri)?.name ?? "öneri"} ✓
                     </button>
                   )}
                   <select
-                    style={{ ...css.input, width: "auto", flex: "0 1 150px", padding: "6px 8px", fontSize: 12.5 }}
+                    style={{ ...css.input, width: "auto", flex: "0 1 160px", height: 36, minHeight: 0, padding: "0 8px", fontSize: 13.5, fontFamily: T.disp }}
                     disabled={durum === "calisiyor"}
                     value={secim[g.anahtar] ?? ""}
                     onChange={(e) => uygula(g, e.target.value)}
@@ -257,9 +251,12 @@ export function KategorileModal(
       <DahaFazla s={s} ad="ad" />
 
       {hata && <div style={{ fontSize: 12.5, color: T.neg, marginTop: 10 }}>{hata}</div>}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginTop: 14 }}>
-        <span style={{ fontSize: 12, color: T.mut }}>{kalan > 0 ? `${kalan} ad kategorisiz` : "hepsi kategorilendi"}</span>
-        <button style={css.btn} onClick={onClose}>Bitti</button>
+      <div className="form-alt" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ fontSize: 13.5, color: T.mut, flex: 1 }}>{kalan > 0 ? `${kalan} ad kategorisiz` : "hepsi kategorilendi"}</span>
+        <button type="button" onClick={onClose} style={{
+          height: 48, padding: "0 32px", border: "none", borderRadius: 13, background: T.acc, color: T.accInk,
+          fontFamily: T.disp, fontSize: 15.5, fontWeight: 650, cursor: "pointer",
+        }}>Bitti</button>
       </div>
     </Modal>
   );
