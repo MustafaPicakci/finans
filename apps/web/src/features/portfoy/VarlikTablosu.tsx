@@ -2,12 +2,10 @@ import React, { useMemo, useState } from "react";
 import {
   convert, openPositions, symbolReturns,
   type AllData, type Currency, type Position, type PriceHistoryEntry, type Rates,
-  dripAcikMi, dripToggle,
 } from "@finans/engine";
-import { api } from "../../api";
 import { T, css, fmtMoney, fmtPct, fmtPay, TYPE_COLORS } from "../../theme";
 import { Empty, useSayfalama, DahaFazla } from "../../ui";
-import { PozisyonAyrinti } from "./PozisyonAyrinti";
+import { PozisyonSayfasi } from "./PozisyonAyrinti";
 
 /* ————— MEVCUT VARLIKLAR TABLOSU (Faz 32) —————
    Liste ekranındaki kart satırları "ne kadarım var, toplamda ne kazandım" diyor ama
@@ -56,21 +54,8 @@ export function VarlikTablosu({ data, pos, ccy, rates, reload, onSymbol }: {
   onSymbol?: (s: string) => void;
 }) {
   const [sirala, setSirala] = useState<{ k: Kolon; asc: boolean }>({ k: "agirlik", asc: false });
-  const [acikSym, setAcikSym] = useState<string | null>(null);
-
-  const cashFunds = new Set((data.settings.cash_funds || "").split(",").map((s) => s.trim()).filter(Boolean));
-  /* DRIP işareti `user_settings.drip_symbols`'te (cash_funds deseni) — ayrı tablo açmaya
-     değmeyecek kadar küçük bir opt-in. Ayrıştırma motorda tek kaynakta. */
-  const toggleDrip = async (type: string, sym: string) => {
-    await api.put("settings", { drip_symbols: dripToggle(data.settings, type, sym) });
-    reload();
-  };
-  const toggleCashFund = async (sym: string) => {
-    const next = new Set(cashFunds);
-    next.has(sym) ? next.delete(sym) : next.add(sym);
-    await api.put("settings", { cash_funds: [...next].join(",") });
-    reload();
-  };
+  /* Satıra tıklayınca pozisyon sayfası açılır (yeniden tasarım, grup 4 — eskiden satırın altında açılıyordu) */
+  const [acikAnahtar, setAcikPoz] = useState<string | null>(null);
 
   const satirlar = useMemo<Satir[]>(() => {
     const acik = openPositions(pos);
@@ -86,6 +71,9 @@ export function VarlikTablosu({ data, pos, ccy, rates, reload, onSymbol }: {
     });
   }, [pos, rates, data.price_history]);
 
+  /* Açık sayfa ANAHTARLA tutulur: fiyat kaydedilince reload yeni satırlar üretir, eski nesneyi
+     tutan sayfa bayat rakam gösterirdi. */
+  const acikPoz = acikAnahtar ? satirlar.find((x) => `${x.p.type}:${x.p.sym}` === acikAnahtar) ?? null : null;
   const sirali = useMemo(() => {
     const deger = (s: Satir): number | string => {
       switch (sirala.k) {
@@ -153,12 +141,11 @@ export function VarlikTablosu({ data, pos, ccy, rates, reload, onSymbol }: {
         <tbody>
           {sayfa.gorunen.map((s) => {
             const p = s.p;
-            const acik = acikSym === `${p.type}:${p.sym}`;
             const adet = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(4).replace(/0+$/, "").replace(/\.$/, "").replace(".", ","));
             return (
               <React.Fragment key={`${p.type}:${p.sym}`}>
-                <tr onClick={() => setAcikSym(acik ? null : `${p.type}:${p.sym}`)}
-                  title="Ayrıntı ve fiyat ayarı" style={{ cursor: "pointer", background: acik ? T.panel2 : undefined }}>
+                <tr onClick={() => setAcikPoz(`${s.p.type}:${s.p.sym}`)} className="liste-satir"
+                  title="Ayrıntı ve fiyat ayarı" style={{ cursor: "pointer" }}>
                   <td style={{ ...td, textAlign: "left" }}>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
                       <span style={{
@@ -198,17 +185,6 @@ export function VarlikTablosu({ data, pos, ccy, rates, reload, onSymbol }: {
                     }}>{s.toplam == null ? "—" : fmtPct(s.toplam, 2, true)}</span>
                   </td>
                 </tr>
-                {acik && (
-                  <tr>
-                    <td colSpan={BASLIK.length} style={{ padding: 0, background: T.panel2, borderBottom: `1px solid ${T.line}` }}>
-                      <PozisyonAyrinti
-                        p={p} now={data.now} reload={reload} nakitSayilir={cashFunds.has(p.sym)}
-                        onNakitSay={() => toggleCashFund(p.sym)} onSymbol={onSymbol} solBosluk={10}
-                        dripAcik={dripAcikMi(data.settings, p.type, p.sym)} onDrip={() => toggleDrip(p.type, p.sym)}
-                      />
-                    </td>
-                  </tr>
-                )}
               </React.Fragment>
             );
           })}
@@ -219,6 +195,8 @@ export function VarlikTablosu({ data, pos, ccy, rates, reload, onSymbol }: {
           genişliğine yayılır ve mobilde sağdaki düğmeyi görmek için yatay kaydırmak
           gerekirdi — oysa sayfalama denetimi her zaman elin altında olmalı. */}
       <DahaFazla s={sayfa} ad="varlık" yon="fazla" />
+      {acikPoz && <PozisyonSayfasi p={acikPoz.p} data={data} ccy={ccy} rates={rates} agirlik={acikPoz.agirlik}
+        reload={reload} onClose={() => setAcikPoz(null)} onSymbol={onSymbol} />}
     </>
   );
 }

@@ -7,7 +7,8 @@ import {
   type BenchmarkPoint, type Currency, type HistoryRange, type PriceHistoryEntry, type Rates, type Trade,
 } from "@finans/engine";
 import { T, css, fmtMoney, fmtPct, CATEGORY_PALETTE } from "../../theme";
-import { Empty, FiltreSeridi, Aciklama } from "../../ui";
+import { Empty, Aciklama, Modal } from "../../ui";
+import { Segment, Anahtar } from "../forms/parcalar";
 
 /* ————— PORTFÖY DEĞER GRAFİĞİ (Faz 13 → Faz 27) —————
    İKİ MOD, çünkü tek eksene ₺ değeri ile yüzde getiri sığmaz:
@@ -156,7 +157,6 @@ export function DegerGrafigi({ trades, priceHistory, benchmarks = [], rates, ccy
         gain: lastCov && lastCov.date === lastAll.date ? toCcy(lastCov.gain) : null,
       }
     : null;
-  const up = (d?.value ?? 0) >= 0;
   const gainUp = (d?.gain ?? 0) >= 0;
   const twrPct = twr.at(-1)?.value ?? null;
   /* Kuruş altı hareketi "para yatırdın" diye göstermemek için eşik: rakam zaten tam sayı yazılıyor.
@@ -173,129 +173,81 @@ export function DegerGrafigi({ trades, priceHistory, benchmarks = [], rates, ccy
     n === "value" ? "Değer" : n === "contributed" ? "Yatırdığın para" : n === "total" ? "Portföy (TWR)"
     : n.startsWith("b:") ? benchmarkLabel(n.slice(2)) : n.split(":")[1];
 
+  const [karsilastir, setKarsilastir] = useState(false);
+  const secimler = [
+    ...on.map((k) => ({ k, ad: k.split(":")[1], renk: colorOf(k), kesik: false, kaldir: () => toggle(k) })),
+    ...activeRefs.map((k) => ({ k: `b:${k}`, ad: benchmarkLabel(k), renk: refColorOf(k), kesik: true, kaldir: () => toggleRef(k) })),
+  ];
+
   return (
-    <div style={{ ...css.card, paddingBottom: 6 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+    <div style={{ ...css.card, paddingBottom: 10 }}>
+      {/* Yeniden tasarım (grup 4): başlık | mod; altında dönem kutuları; tek satırlık dönem özeti;
+          grafik; karşılaştırılanlar GRAFİĞİN ALTINDA çip olarak. Eskiden her varlık ve referans
+          grafiğin üstünde üstü çizili çip olarak duruyordu (20 sembolde 4 satır) — kapalı olan
+          seçenekler artık "+ Karşılaştır" sayfasında. */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 12 }}>
+        <div style={{ minWidth: 0 }}>
           <div>
-            <span style={{ fontWeight: 700, fontSize: 15 }}>{title}</span>
-            {scopeLabel && <span style={{ fontSize: 12, color: T.mut }}> — {scopeLabel}</span>}
-            {altBaslik && <div style={{ fontSize: 11.5, color: T.mut3, marginTop: 2 }}>{altBaslik}</div>}
+            <span style={{ fontWeight: 700, fontSize: 16 }}>{title}</span>
+            {scopeLabel && <span style={{ fontSize: 13, color: T.mut }}> — {scopeLabel}</span>}
           </div>
-          {d && <span style={{ ...css.mono, fontSize: 12.5, color: up ? T.pos : T.neg }}>{up ? "▲" : "▼"} {money(d.value)}</span>}
+          {altBaslik && <div style={{ fontSize: 12.5, color: T.mut, marginTop: 2 }}>{altBaslik}</div>}
         </div>
-        {/* Her çip KENDİ dönem getirisini de yazar. Çıplak "1H / 1A / 3A" etiketleri kullanıcıyı
-            tek tek tıklayıp karşılaştırmaya zorluyordu; rakamlar çipin üstündeyken "hangi
-            dönemde ne oldu" tek bakışta okunur. Rakam TWR'dır — para giriş-çıkışı arındırılmış,
-            grafiğin % moduyla birebir aynı hesap. */}
-        <div style={{ display: "flex", borderRadius: 10, overflow: "hidden", border: `1px solid ${T.line}` }}>
-          {RANGES.map((r) => {
-            const v = rangeTwr[r.v];
-            const secili = range === r.v;
-            return (
-              <button key={r.v} type="button" onClick={() => setRange(r.v)} style={{
-                padding: "5px 9px", border: "none", cursor: "pointer", fontFamily: T.disp, minHeight: 0,
-                display: "flex", flexDirection: "column", alignItems: "center", gap: 1, lineHeight: 1.15,
-                background: secili ? T.panel : T.panel2, color: secili ? T.acc : T.mut,
-              }}>
-                <span style={{ fontSize: 11.5, fontWeight: secili ? 700 : 500 }}>{r.label}</span>
-                <span style={{
-                  ...css.mono, fontSize: 9.5,
-                  color: v == null ? T.mut3 : v > 0 ? T.pos : v < 0 ? T.neg : T.mut3,
-                }}>{v == null ? "—" : pct(v)}</span>
-              </button>
-            );
-          })}
-        </div>
+        {/* Etiketlerde ₺ YOK: display fontu bu glifi taşımıyor, £ olarak çiziliyor. */}
+        <Segment kucuk ad="Grafik modu" deger={mode} sec={setMode}
+          secenek={[{ v: "PCT", l: "Getiri %" }, { v: "TRY", l: "Değer" }]} />
       </div>
 
-      {/* Görünümü değiştiren kontroller süzgeç şeridinde (Faz 24 kuralı: filtre ≠ eylem) */}
-      <FiltreSeridi sag={
-        <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: `1px solid ${T.line}` }}>
-          {/* Etiketlerde ₺ YOK: display fontu bu glifi taşımıyor, £ olarak çiziliyor (ekran
-              denetiminde görüldü). Para birimi zaten eksende ve tutarlarda yazıyor. */}
-          {([["TRY", "Değer"], ["PCT", "Getiri %"]] as [Mode, string][]).map(([m, lbl]) => (
-            <button key={m} type="button" onClick={() => setMode(m)} style={{
-              padding: "4px 9px", border: "none", cursor: "pointer", fontSize: 11.5, fontFamily: T.disp,
-              fontWeight: mode === m ? 700 : 500,
-              background: mode === m ? T.panel : "transparent", color: mode === m ? T.acc : T.mut,
-            }}>{lbl}</button>
-          ))}
-        </div>
-      }>
-        <span style={{ fontSize: 11.5, color: T.mut3 }}>varlıklar:</span>
-        {held.length === 0 && <span style={{ fontSize: 11.5, color: T.mut3 }}>elde varlık yok</span>}
-        {held.map((h) => {
-          const active = on.includes(h.key);
+      {/* Her kutu KENDİ dönem getirisini de yazar: çıplak "1H / 1A / 3A" etiketleri kullanıcıyı
+          tek tek tıklayıp karşılaştırmaya zorluyordu. Rakam TWR'dır — % moduyla aynı hesap.
+          Görünümü değiştiren kontrol → çukur şerit, seçili beyaz yüzey (Faz 24 kural 2). */}
+      <div role="radiogroup" aria-label="Dönem" style={{
+        display: "grid", gridTemplateColumns: `repeat(${RANGES.length}, minmax(0, 1fr))`, gap: 2,
+        padding: 3, background: T.panel2, borderRadius: 12, marginBottom: 12,
+      }}>
+        {RANGES.map((r) => {
+          const v = rangeTwr[r.v];
+          const secili = range === r.v;
           return (
-            <button key={h.key} type="button" onClick={() => toggle(h.key)} title={h.asset_type} style={{
-              padding: "3px 9px", borderRadius: 999, cursor: "pointer", fontSize: 11.5, fontFamily: T.mono,
-              border: `1px solid ${active ? colorOf(h.key) : T.line}`,
-              background: active ? T.panel : "transparent",
-              color: active ? colorOf(h.key) : T.mut,
-              fontWeight: active ? 700 : 500,
-              textDecoration: active ? "none" : "line-through",
-              opacity: active ? 1 : .75,
-            }}>{h.symbol}</button>
+            <button key={r.v} type="button" role="radio" aria-checked={secili} onClick={() => setRange(r.v)} style={{
+              padding: "6px 2px", border: "none", borderRadius: 9, cursor: "pointer", fontFamily: T.disp, minHeight: 0,
+              display: "flex", flexDirection: "column", alignItems: "center", gap: 1, lineHeight: 1.2, minWidth: 0,
+              background: secili ? T.panel : "transparent", boxShadow: secili ? "var(--shadow-sm)" : "none",
+              color: secili ? T.acc : T.mut,
+            }}>
+              <span style={{ fontSize: 13, fontWeight: secili ? 650 : 500 }}>{r.label}</span>
+              <span style={{
+                ...css.mono, fontSize: 11, whiteSpace: "nowrap",
+                color: v == null ? T.mut3 : v > 0 ? T.pos : v < 0 ? T.neg : T.mut3,
+              }}>{v == null ? "—" : pct(v)}</span>
+            </button>
           );
         })}
-        {mode === "PCT" && refKeys.length > 0 && <>
-          <span style={{ fontSize: 11.5, color: T.mut3, marginLeft: 6 }}>referans:</span>
-          {refKeys.map((k) => {
-            const active = ref.includes(k);
-            return (
-              <button key={k} type="button" onClick={() => toggleRef(k)} style={{
-                padding: "3px 9px", borderRadius: 999, cursor: "pointer", fontSize: 11.5, fontFamily: T.disp,
-                border: `1px dashed ${active ? refColorOf(k) : T.line}`,
-                background: active ? T.panel : "transparent",
-                color: active ? refColorOf(k) : T.mut,
-                fontWeight: active ? 700 : 500,
-                textDecoration: active ? "none" : "line-through",
-                opacity: active ? 1 : .75,
-              }}>{benchmarkLabel(k)}</button>
-            );
-          })}
-        </>}
-      </FiltreSeridi>
+      </div>
 
       {points.length < 2 || !d ? (
         <Empty>{emptyHint}</Empty>
       ) : (<>
-        {/* Bu iki rakam SEÇİLİ DÖNEMİN farkıdır, ömür boyu toplam değil. Bunu yazmak şart:
-            dönem içinde hiç alım-satım yoksa para hareketi sıfırdır ve etiketsiz bir
-            "YATIRDIĞIN PARA ₺0", "hiç yatırım yapmamışım" diye okunuyordu. */}
-        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "baseline", margin: "0 2px 10px" }}>
-          <span style={{ fontSize: 10.5, color: T.mut3, letterSpacing: .3 }}>SEÇİLİ DÖNEMDE</span>
-          <div>
-            <div style={{ fontSize: 10.5, color: T.mut3, letterSpacing: .3 }}>KÂR / ZARAR</div>
-            <div style={{ ...css.mono, fontSize: 14, fontWeight: 700, color: gainUp ? T.pos : T.neg }}>
-              {money(d.gain)}
-              {twrPct != null && <span style={{ color: T.mut, fontWeight: 500, fontSize: 11.5, marginLeft: 6 }}>({pct(twrPct)})</span>}
-            </div>
-          </div>
-          <div>
-            {/* Etiket işarete göre değişir: negatif bir "eklenen para" okunmuyordu */}
-            <div style={{ fontSize: 10.5, color: T.mut3, letterSpacing: .3 }}>
-              {noFlow ? "PARA GİRİŞ-ÇIKIŞI" : d.contributed > 0 ? "YATIRDIĞIN PARA" : "ÇEKTİĞİN PARA"}
-            </div>
-            <div style={{ ...css.mono, fontSize: 14, fontWeight: 700, color: T.mut }}>
-              {noFlow ? "yok" : fmtMoney(Math.abs(d.contributed), ccy)}
-            </div>
-          </div>
+        {/* SEÇİLİ DÖNEMİN farkı, ömür boyu toplam değil — "bu dönemde" yazmak şart: dönemde hiç
+            alım-satım yoksa para hareketi sıfırdır ve etiketsiz "yatırdığın ₺0" "hiç yatırım
+            yapmamışım" diye okunuyordu. Etiket işarete göre değişir (negatif "eklenen para" okunmaz). */}
+        <div style={{ fontSize: 13.5, color: T.mut, lineHeight: 1.5 }}>
+          Bu dönemde kâr/zarar{" "}
+          <b style={{ ...css.mono, fontWeight: 600, whiteSpace: "nowrap", color: gainUp ? T.pos : T.neg }}>{money(d.gain)}</b>
+          {twrPct != null && <span style={{ ...css.mono, whiteSpace: "nowrap" }}> ({pct(twrPct)})</span>}
+          {" · "}
+          {noFlow ? "para giriş-çıkışı yok"
+            : <>{d.contributed > 0 ? "yatırdığın" : "çektiğin"} <b style={{ ...css.mono, fontWeight: 600, color: T.text }}>{fmtMoney(Math.abs(d.contributed), ccy)}</b></>}
         </div>
-
         {life && (
-          <div style={{ fontSize: 11, color: T.mut3, margin: "-6px 2px 10px" }}>
-            {/* Tutarlar MONO fontta: display fontu ₺ glifini taşımıyor, £ çiziyor (ikinci kez
-                aynı tuzağa düşüldü — para yazan her yer mono olmalı). */}
-            başından beri:{" "}
-            <b style={{ ...css.mono, color: T.mut }}>
-              {Math.abs(life.contributed) < 0.5 ? "para girişi yok"
-                : `${fmtMoney(Math.abs(life.contributed), ccy)} ${life.contributed > 0 ? "yatırdın" : "net çektin"}`}
-            </b>
+          /* Tutarlar MONO fontta: display fontu ₺ glifini taşımıyor, £ çiziyor */
+          <div style={{ fontSize: 12.5, color: T.mut3, marginTop: 2, marginBottom: 8 }}>
+            başından beri{" "}
+            {Math.abs(life.contributed) < 0.5 ? "para girişi yok"
+              : <><span style={{ ...css.mono, whiteSpace: "nowrap" }}>{fmtMoney(Math.abs(life.contributed), ccy)}</span> {life.contributed > 0 ? "yatırdın" : "net çektin"}</>}
             {life.gain != null && <>
               {" · "}kâr/zarar{" "}
-              <b style={{ ...css.mono, color: life.gain >= 0 ? T.pos : T.neg }}>{money(life.gain)}</b>
+              <span style={{ ...css.mono, whiteSpace: "nowrap", color: life.gain >= 0 ? T.pos : T.neg }}>{money(life.gain)}</span>
             </>}
           </div>
         )}
@@ -340,7 +292,29 @@ export function DegerGrafigi({ trades, priceHistory, benchmarks = [], rates, ccy
           </ResponsiveContainer>
         </div>
 
-        <div style={{ fontSize: 11, color: T.mut3, padding: "6px 2px 4px" }}>
+        {/* Karşılaştırılanlar: grafikte AÇIK olanlar çip (renk = çizgi rengi, referans kesikli
+            kenarlı), ✕ ile kaldırılır; ekleme "+ Karşılaştır" sayfasından. */}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginTop: 8 }}>
+          {secimler.map((x) => (
+            <button key={x.k} type="button" onClick={x.kaldir} title={`${x.ad} — grafikten kaldır`} style={{
+              display: "inline-flex", alignItems: "center", gap: 6, height: 30, minHeight: 0, padding: "0 10px",
+              borderRadius: 15, border: `1px ${x.kesik ? "dashed" : "solid"} ${x.renk}`, background: T.panel,
+              color: T.text, fontSize: 13, fontFamily: x.kesik ? T.disp : T.mono, cursor: "pointer",
+            }}>
+              <span style={{ width: 8, height: 8, borderRadius: 4, background: x.renk }} />
+              {x.ad}
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={T.mut} strokeWidth="2.5" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+            </button>
+          ))}
+          {(held.length > 0 || refKeys.length > 0) && (
+            <button type="button" onClick={() => setKarsilastir(true)} style={{
+              height: 30, minHeight: 0, padding: "0 12px", borderRadius: 15, border: `1px solid ${T.line}`,
+              background: T.panel2, color: T.acc, fontSize: 13, fontWeight: 600, fontFamily: T.disp, cursor: "pointer",
+            }}>+ Karşılaştır</button>
+          )}
+        </div>
+
+        <div style={{ fontSize: 12, color: T.mut3, padding: "8px 2px 4px", lineHeight: 1.45 }}>
           {mode === "TRY"
             ? <><span style={{ color: T.mut }}>▬</span> değer · <span style={{ color: T.mut }}>┄</span> yatırdığın para — aradaki fark kârdır</>
             : <><span style={{ color: T.acc }}>▬</span> portföy (para giriş-çıkışı arındırılmış) · varlıklar saf fiyat getirisi · referanslar kesikli, TL cinsinden</>}
@@ -360,7 +334,7 @@ export function DegerGrafigi({ trades, priceHistory, benchmarks = [], rates, ccy
           <br /><br />
           <b>Getiri %</b> modunda portföy çizgisi <b>TWR</b>'dir: para ekleyip çekmenin etkisi arındırılır,
           geriye yalnız yatırım kararlarının getirisi kalır. Varlık çizgileri ise <b>saf fiyat getirisidir</b>
-          (üstüne alım yapman o çizgiyi yükseltmez). Yukarıdaki çiplerden istediğin varlığı açıp kapatabilirsin.
+          (üstüne alım yapman o çizgiyi yükseltmez). Grafiğin altındaki <b>+ Karşılaştır</b> ile istediğin varlığı ve referansı ekleyip çıkarabilirsin.
           <br /><br />
           <b>Referanslar</b> (BIST 100, S&amp;P 500, NASDAQ, gram altın, dolar) kesikli çizilir ve
           hepsi <b>TL cinsindendir</b> — dolar bazlı endeksler o günün kuruyla çevrilmiştir, yani
@@ -368,6 +342,45 @@ export function DegerGrafigi({ trades, priceHistory, benchmarks = [], rates, ccy
           için karşılaştırma ancak böyle dürüst olur.
         </Aciklama>
       </>)}
+
+      {karsilastir && (
+        <Modal title="Karşılaştır" onClose={() => setKarsilastir(false)}>
+          <div style={{ display: "grid", gap: 16 }}>
+            <div>
+              <div style={altBaslikStil}>Varlıklar</div>
+              <div style={{ fontSize: 13, color: T.mut, marginBottom: 8 }}>
+                {mode === "PCT" ? "saf fiyat getirisi — üstüne alım yapman çizgiyi yükseltmez" : "o varlıktaki pozisyonunun değeri"}
+              </div>
+              {held.length === 0
+                ? <div style={{ fontSize: 13.5, color: T.mut }}>Elde varlık yok.</div>
+                : <div style={{ display: "grid", gap: 8 }}>
+                  {held.map((h) => (
+                    <Anahtar key={h.key} etiket={h.symbol} alt={h.asset_type} acik={on.includes(h.key)} onChange={() => toggle(h.key)} />
+                  ))}
+                </div>}
+            </div>
+            {refKeys.length > 0 && (
+              <div>
+                <div style={altBaslikStil}>Referanslar</div>
+                <div style={{ fontSize: 13, color: T.mut, marginBottom: 8 }}>
+                  {mode === "PCT" ? "TL cinsinden, o günün kuruyla çevrilmiş — kesikli çizilir" : "yalnız Getiri % modunda çizilir (endeks seviyesi ile portföy değeri aynı eksende okunmaz)"}
+                </div>
+                <div style={{ display: "grid", gap: 8, opacity: mode === "PCT" ? 1 : 0.5 }}>
+                  {refKeys.map((k) => (
+                    <Anahtar key={k} etiket={benchmarkLabel(k)} acik={ref.includes(k)} onChange={() => toggleRef(k)} />
+                  ))}
+                </div>
+              </div>
+            )}
+            <button type="button" onClick={() => setKarsilastir(false)} style={{
+              height: 48, border: "none", borderRadius: 13, background: T.acc, color: T.accInk,
+              fontFamily: T.disp, fontSize: 15.5, fontWeight: 650, cursor: "pointer",
+            }}>Tamam</button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
+
+const altBaslikStil: React.CSSProperties = { fontWeight: 650, fontSize: 15 };

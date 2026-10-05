@@ -404,6 +404,10 @@ export default function App() {
         .kur-toggle{display:none!important}
         /* Hesaplar: masaüstünde iki sütun (hesaplar | virman + vadeli), telefonda tek */
         .hesap-ust{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,420px);gap:16px;align-items:start}
+        /* Portföy (grup 4): liste — üst kart | portföyler; detay — getiri grafiği | dağılım */
+        .port-ust{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,420px);gap:16px;align-items:start}
+        .port-orta{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:16px;align-items:start}
+        .port-ust > *, .port-orta > *{min-width:0}
         /* Dokunulabilir liste satırı (grup 3 — satırda ✎ ✕ yok, satırın tamamı düzenlemeyi açar) */
         .liste-satir{transition:background .12s}
         .liste-satir:hover{background:${T.panel3}!important}
@@ -417,7 +421,8 @@ export default function App() {
         /* İçe aktarma önizlemesinin eylem çubuğu: liste kayarken altta yapışık durur */
         .ice-eylem{position:sticky;bottom:12px}
         @media (max-width:900px){
-          .grid2,.grid3,.ozet-ust,.ozet-alt,.ozet-bek,.hesap-ust{grid-template-columns:1fr}
+          .grid2,.grid3,.ozet-ust,.ozet-alt,.ozet-bek,.hesap-ust,.port-ust,.port-orta{grid-template-columns:1fr}
+          .treemap-kutu{height:190px!important}
           /* Kutular mobilde 2×2 kalır: tam genişlikte dört kart ~600px yiyordu */
           .ozet-kpi{gap:10px}
           .ozet-kutu{padding:13px 14px!important;border-radius:14px!important}

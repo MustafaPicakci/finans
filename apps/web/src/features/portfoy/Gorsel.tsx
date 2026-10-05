@@ -6,6 +6,7 @@ import {
 } from "@finans/engine";
 import { parseD, fmtD } from "@finans/engine";
 import { T, css, fmtMoney, fmtPct, fmtPay, TYPE_COLORS } from "../../theme";
+import { Segment } from "../forms/parcalar";
 
 /* ————— PORTFÖY EKRANININ GÖRSEL PARÇALARI (Faz 31) —————
    Ekran eskiden baştan sona düz metindi: aynı puntoda satırlar, her pozisyonun içinde bir
@@ -103,13 +104,15 @@ export function AlokasyonSeridi({ pos, rates, ccy }: { pos: Position[]; rates: R
 
 /* ————— HERO ————— */
 
-export function PortfoyHero({ trades, priceHistory, rates, ccy, deger, unreal, unrealPct, realized, etiket, buyuk = true, range, onRange }: {
+export function PortfoyHero({ trades, priceHistory, rates, ccy, deger, unreal, unrealPct, realized, etiket, buyuk = true, range, onRange, sag }: {
   trades: Trade[]; priceHistory: PriceHistoryEntry[]; rates: Rates; ccy: Currency;
   /** TRY cinsinden; gösterimde `ccy`'ye çevrilir */
   deger: number; unreal: number; unrealPct: number | null; realized: number;
   etiket: string;
   buyuk?: boolean;
   range: HistoryRange; onRange: (r: HistoryRange) => void;
+  /** sağ üst köşe (liste ekranında "Ayrıntı ›" — tüm portföyün detayına giriş) */
+  sag?: React.ReactNode;
 }) {
   const seri = useMemo(() => portfolioValueDecomposition(trades, priceHistory, rates), [trades, priceHistory, rates]);
 
@@ -136,11 +139,14 @@ export function PortfoyHero({ trades, priceHistory, rates, ccy, deger, unreal, u
   const cv = (v: number) => Math.round(convert(v, "TRY", ccy, rates));
 
   return (<>
-    <div style={{ fontSize: 11.5, color: T.mut, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600 }}>
-      {etiket}
-    </div>
-    <div style={{ ...css.mono, fontSize: buyuk ? 30 : 24, fontWeight: 700, lineHeight: 1.1, marginTop: 2 }}>
-      {fmtMoney(cv(deger), ccy)}
+    <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, color: T.mut }}>{etiket}</div>
+        <div style={{ ...css.mono, fontSize: buyuk ? 30 : 24, fontWeight: 600, lineHeight: 1.1, marginTop: 2 }}>
+          {fmtMoney(cv(deger), ccy)}
+        </div>
+      </div>
+      {sag}
     </div>
 
     {/* Dönem kârı — hero'nun ikinci cümlesi */}
@@ -164,20 +170,12 @@ export function PortfoyHero({ trades, priceHistory, rates, ccy, deger, unreal, u
 
     {/* Dönem seçici — görünümü değiştirir, veri değiştirmez (Faz 24 kural 2'nin ruhu);
         hero'nun içinde kaldığı için ayrı bir FiltreSeridi şeridi açılmadı. */}
-    <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 8 }}>
-      {RANGES.map((r) => (
-        <button key={r.v} type="button" onClick={() => onRange(r.v)} style={{
-          padding: "4px 10px", borderRadius: 999, cursor: "pointer", fontSize: 11.5, fontFamily: T.disp,
-          fontWeight: range === r.v ? 700 : 500, minHeight: 0,
-          border: `1px solid ${range === r.v ? T.acc : T.line}`,
-          background: range === r.v ? T.accSoft : "transparent",
-          color: range === r.v ? T.acc : T.mut,
-        }}>{r.label}</button>
-      ))}
+    <div style={{ marginTop: 8 }}>
+      <Segment kucuk ad="Dönem" deger={range} sec={onRange} secenek={RANGES.map((r) => ({ v: r.v, l: r.label }))} />
     </div>
 
     {/* Pozisyon düzeyindeki DEĞİŞMEZ doğrular: bunlar pencereye bağlı değildir. */}
-    <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 12, fontSize: 12, color: T.mut }}>
+    <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 12, fontSize: 13, color: T.mut }}>
       <span>açık K/Z{" "}
         <span style={{ ...css.mono, color: unreal > 0 ? T.pos : unreal < 0 ? T.neg : T.mut }}>
           {unreal > 0 ? "+" : ""}{fmtMoney(cv(unreal), ccy)}
@@ -199,7 +197,6 @@ export function PortfoyHero({ trades, priceHistory, rates, ccy, deger, unreal, u
    asıl ritim aylıktır. Rakamlar TWR'dır (`monthlyTwr`): ayın ortasında para eklemek
    getiriyi şişirmez, yoksa "para yatırdım" ile "kazandım" aynı görünürdü. */
 
-const AY_FMT: Intl.DateTimeFormatOptions = { month: "long", year: "2-digit" };
 
 export function SonAylar({ trades, priceHistory, rates, adet = 3 }: {
   trades: Trade[]; priceHistory: PriceHistoryEntry[]; rates: Rates; adet?: number;
@@ -214,36 +211,22 @@ export function SonAylar({ trades, priceHistory, rates, adet = 3 }: {
 
   if (aylar.length === 0 && toplam == null) return null;
 
+  /* Yeniden tasarım (grup 4): ayrı çerçeveli bir panel yerine aynı sırada küçük kutular — en eski ay
+     solda, en sağda "Toplam" (marka tonunda; ayların toplamı değil, seri başından beri TWR). */
+  const kutu: React.CSSProperties = { background: T.panel3, borderRadius: 10, padding: "8px 10px", minWidth: 0 };
   return (
-    <div style={{
-      display: "flex", gap: 18, flexWrap: "wrap", alignItems: "flex-start", justifyContent: "space-between",
-      background: T.panel2, border: `1px solid ${T.line}`, borderRadius: 14, padding: "12px 14px",
-    }}>
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 10, color: T.mut3, textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 700, marginBottom: 6 }}>
-          Son aylar
+    <div style={{ display: "grid", gridTemplateColumns: `repeat(${aylar.length + (toplam != null ? 1 : 0)}, minmax(0, 1fr))`, gap: 8 }}
+      title="Aylık getiri — para akışı arındırılmış (TWR)">
+      {[...aylar].reverse().map((a) => (
+        <div key={a.ym} style={kutu}>
+          <div style={{ fontSize: 11.5, color: T.mut, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{fmtD(parseD(`${a.ym}-01`), { month: "long" })}</div>
+          <div style={{ ...css.mono, fontSize: 14, fontWeight: 600, color: a.pct >= 0 ? T.pos : T.neg }}>{fmtPct(a.pct, 1, true)}</div>
         </div>
-        {aylar.length === 0
-          ? <div style={{ fontSize: 11.5, color: T.mut3 }}>henüz tam bir ay yok</div>
-          : aylar.map((a) => (
-            <div key={a.ym} style={{ display: "flex", alignItems: "baseline", gap: 10, justifyContent: "space-between", marginBottom: 3 }}>
-              <span style={{ fontSize: 12, color: T.mut }}>{fmtD(parseD(`${a.ym}-01`), AY_FMT)}</span>
-              <span style={{
-                ...css.mono, fontSize: 11.5, fontWeight: 600, padding: "1px 7px", borderRadius: 6,
-                background: a.pct >= 0 ? T.posSoft : T.negSoft, color: a.pct >= 0 ? T.pos : T.neg,
-              }}>{fmtPct(a.pct, 2, true)}</span>
-            </div>
-          ))}
-      </div>
+      ))}
       {toplam != null && (
-        <div style={{ textAlign: "right", minWidth: 0 }}>
-          <div style={{ fontSize: 10, color: T.mut3, textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 700, marginBottom: 4 }}>
-            Toplam getiri
-          </div>
-          <div style={{ ...css.mono, fontSize: 22, fontWeight: 700, color: toplam >= 0 ? T.pos : T.neg, lineHeight: 1.1 }}>
-            {fmtPct(toplam, 2, true)}
-          </div>
-          <div style={{ fontSize: 10.5, color: T.mut3, marginTop: 2 }}>para akışı arındırılmış</div>
+        <div style={{ ...kutu, background: T.accSoft }}>
+          <div style={{ fontSize: 11.5, color: T.mut }}>Toplam</div>
+          <div style={{ ...css.mono, fontSize: 14, fontWeight: 700, color: toplam >= 0 ? T.pos : T.neg }}>{fmtPct(toplam, 1, true)}</div>
         </div>
       )}
     </div>
@@ -366,26 +349,18 @@ export function VarlikTreemap({ pos, priceHistory, rates, ccy, height = 260 }: {
     <div style={css.card}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
         <div>
-          <div style={{ fontWeight: 700, fontSize: 15 }}>Varlık Dağılımı</div>
-          <div style={{ fontSize: 11.5, color: T.mut3, marginTop: 2 }}>kutu boyutu ağırlık, rengi performans</div>
+          <div style={{ fontWeight: 700, fontSize: 16 }}>Dağılım</div>
+          <div style={{ fontSize: 12.5, color: T.mut, marginTop: 2 }}>kutu boyutu ağırlık, rengi performans</div>
         </div>
-        <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: `1px solid ${T.line}` }}>
-          {(Object.keys(METRIK_ETIKET) as Metrik[]).map((m) => (
-            <button key={m} type="button" onClick={() => setMetrik(m)} style={{
-              padding: "5px 10px", border: "none", cursor: "pointer", fontSize: 11.5, fontFamily: T.disp,
-              fontWeight: metrik === m ? 700 : 500, minHeight: 0,
-              background: metrik === m ? T.panel : T.panel2, color: metrik === m ? T.acc : T.mut,
-            }}>{METRIK_ETIKET[m]}</button>
-          ))}
-        </div>
+        <Segment kucuk ad="Metrik" deger={metrik} sec={setMetrik} secenek={(Object.keys(METRIK_ETIKET) as Metrik[]).map((m) => ({ v: m, l: METRIK_ETIKET[m] }))} />
       </div>
 
-      <div style={{ position: "relative", width: "100%", height, borderRadius: 10, overflow: "hidden" }}>
+      <div className="treemap-kutu" style={{ position: "relative", width: "100%", height, borderRadius: 10, overflow: "hidden" }}>
         {veri.map((v, i) => {
           const k = kutular[i];
           const { bg, yazi } = renkOf(v);
           if (!(k.w > 0) || !(k.h > 0)) return null;
-          const dar = k.w < 18 || k.h < 14; // küçük kutuda yalnız sembol sığar
+          const dar = k.w < 18 || k.h < 22; // küçük kutuda yalnız sembol sığar (telefonda kutu 190px — 22% ≈ 42px)
           return (
             <div key={`${v.p.type}:${v.p.sym}`}
               title={`${v.p.sym} · ağırlık ${fmtPay(v.agirlik)} · ${fmtMoney(Math.round(convert(v.tryDeger, "TRY", ccy, rates)), ccy)}`}

@@ -2,16 +2,16 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   convert, positions, openPositions, groupTradesByPortfolio, portfolioValueTry, pnlPct,
   type AllData, type HistoryRange, type Position, type Rates, type Currency, type PortfolioKey,
-  dripAcikMi, dripToggle,
 } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, fmtMoney, fmtPct, TYPE_COLORS } from "../../theme";
-import { Empty, Field, Aciklama, SilDugmesi, useSayfalama, DahaFazla } from "../../ui";
+import { Empty, Aciklama, SilDugmesi, Modal, useSayfalama, DahaFazla } from "../../ui";
+import { Bolum, Etiketli, FormAlt, Segment, girdi } from "../forms/parcalar";
 import { Hareketler } from "./Hareketler";
 import { DegerGrafigi } from "./DegerGrafigi";
 import { VarlikTakibi } from "./VarlikTakibi";
 import { VarlikTablosu } from "./VarlikTablosu";
-import { PozisyonAyrinti } from "./PozisyonAyrinti";
+import { PozisyonSayfasi } from "./PozisyonAyrinti";
 import { AlokasyonSeridi, PortfoyHero, SonAylar, VarlikTreemap } from "./Gorsel";
 
 /* ————— PORTFÖY SEKMESİ — İKİ SEVİYE (Faz 31) —————
@@ -48,7 +48,7 @@ const Signed = ({ v, ccy, size = 12, pct, bold }: { v: number; ccy: Currency; si
 
 /** Geri oku — tipografik "‹" yerine SVG (⏻/◐ gibi karakterler Android'de tofu ▯ çiziliyordu) */
 const OkSol = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d="M15 18l-6-6 6-6" />
   </svg>
 );
@@ -117,7 +117,10 @@ export function Portfoy({ data, pos: allPos, rates, ccy, reload }: {
   );
 }
 
-/* ————— SEVİYE 1: LİSTE ————— */
+/* ————— SEVİYE 1: LİSTE —————
+   Yeniden tasarım (Ekim 2026, grup 4): "Tüm portföy" artık Portföyler listesinin bir satırı DEĞİL —
+   üst kart zaten tüm portföyün kartıdır, detayına sağ üstteki "Ayrıntı ›" ile girilir (aynı rakam
+   iki kez, biri kartta biri satırda yazılıyordu). Masaüstünde üst kart | portföyler yan yana. */
 
 function PortfoyListe({ data, allPos, rates, ccy, reload, tradesOf, posOf, onOpen }: {
   data: AllData; allPos: Position[]; rates: Rates; ccy: Currency; reload: () => void;
@@ -126,6 +129,7 @@ function PortfoyListe({ data, allPos, rates, ccy, reload, tradesOf, posOf, onOpe
   onOpen: (s: Sel) => void;
 }) {
   const [range, setRange] = useState<HistoryRange>("1A");
+  const [yeniGrup, setYeniGrup] = useState(false);
   const toplam = useMemo(() => ozetle(allPos, rates), [allPos, rates]);
 
   /* "Gruplanmamış" satırı yalnız HEM gruplanmış HEM gruplanmamış işlem varken anlamlı:
@@ -135,214 +139,223 @@ function PortfoyListe({ data, allPos, rates, ccy, reload, tradesOf, posOf, onOpe
   const hasUngrouped = ungroupedCount > 0 && ungroupedCount < data.trades.length;
 
   const satirlar = useMemo(() => {
-    const out: { scope: Sel; ad: string; not: string | null; ozet: Ozet }[] = [
-      { scope: "all", ad: "Tüm portföy", not: null, ozet: toplam },
-    ];
+    const out: { scope: Sel; ad: string; not: string | null; ozet: Ozet }[] = [];
     for (const p of data.portfolios) out.push({ scope: p.id, ad: p.name, not: p.note, ozet: ozetle(posOf(p.id), rates) });
     if (hasUngrouped) out.push({ scope: null, ad: "Gruplanmamış", not: "henüz bir portföye atanmamış işlemler", ozet: ozetle(posOf(null), rates) });
     return out;
-  }, [data.portfolios, data.trades, data.prices, rates, toplam, hasUngrouped]);
+  }, [data.portfolios, data.trades, data.prices, rates, hasUngrouped]);
 
   return (<>
-    {/* HERO KARTI: değer + dönem kârı + seyir + dağılım, sonra gruplara giriş.
-        Fiyat yenileme düğmesi BİLEREK yok: App kabuğu zaten hem masaüstü üst çubuğunda hem
-        mobil ⋯ menüsünde "Fiyatları yenile" sunuyor; karttaki üçüncü kopya, ekranın ilk
-        bakışta cevaplaması gereken soruyla ("ne kadarım var, ne kazandırıyor") yarışıyordu. */}
-    <div style={css.card}>
-      <PortfoyHero
-        trades={data.trades} priceHistory={data.price_history} rates={rates} ccy={ccy}
-        deger={toplam.value} unreal={toplam.unreal} unrealPct={toplam.pct} realized={toplam.realized}
-        etiket="Portföy değeri" range={range} onRange={setRange}
-      />
-      <AlokasyonSeridi pos={allPos} rates={rates} ccy={ccy} />
-    </div>
+    <div className="port-ust">
+      {/* ÜST KART: değer + dönem kârı + seyir + dağılım.
+          Fiyat yenileme düğmesi BİLEREK yok: App kabuğu zaten hem masaüstü üst çubuğunda hem
+          Menü'de "Fiyatları yenile" sunuyor; karttaki üçüncü kopya, ekranın ilk bakışta
+          cevaplaması gereken soruyla ("ne kadarım var, ne kazandırıyor") yarışıyordu. */}
+      <div style={css.card}>
+        <PortfoyHero
+          trades={data.trades} priceHistory={data.price_history} rates={rates} ccy={ccy}
+          deger={toplam.value} unreal={toplam.unreal} unrealPct={toplam.pct} realized={toplam.realized}
+          etiket="Portföy değeri" range={range} onRange={setRange}
+          sag={data.trades.length > 0 && (
+            <button type="button" onClick={() => onOpen("all")} style={baglanti}>Ayrıntı <OkSag /></button>
+          )}
+        />
+        <AlokasyonSeridi pos={allPos} rates={rates} ccy={ccy} />
+      </div>
 
-    <div style={css.card}>
-      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 6 }}>Portföyler</div>
-      <Aciklama k="portfoy-gruplari" label="portföy grubu ne işe yarar?">
-        Varlıklarını mantıksal olarak ayır (ör. <b>Alfa Portföy</b>, <b>Emeklilik</b>, <b>Büyüme</b>).
-        Gruplama <b>işlem düzeyindedir</b>: aynı sembolü iki portföyde ayrı ortalama maliyetle tutabilirsin.
-        Net varlık ve alokasyon değişmez — bu yalnız takip/raporlama içindir.
-        Bir portföye <b>tıklayınca</b> değer grafiği, varlık takibi ve hareket geçmişi açılır.
-      </Aciklama>
-      {satirlar.map((r) => (
-        <PortfoySatiri key={String(r.scope)} ad={r.ad} not={r.not} ozet={r.ozet} ccy={ccy} rates={rates} onClick={() => onOpen(r.scope)} />
-      ))}
-      <YeniPortfoy reload={reload} />
+      <div style={css.card}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+          <div style={{ fontWeight: 700, fontSize: 16, flex: 1 }}>Portföyler</div>
+          <button type="button" onClick={() => setYeniGrup(true)} style={baglanti}>+ Portföy</button>
+        </div>
+        <Aciklama k="portfoy-gruplari" label="portföy grubu ne işe yarar?">
+          Varlıklarını mantıksal olarak ayır (ör. <b>Alfa Portföy</b>, <b>Emeklilik</b>, <b>Büyüme</b>).
+          Gruplama <b>işlem düzeyindedir</b>: aynı sembolü iki portföyde ayrı ortalama maliyetle tutabilirsin.
+          Net varlık ve alokasyon değişmez — bu yalnız takip/raporlama içindir.
+          Bir portföye <b>dokununca</b> getiri grafiği, varlık takibi ve işlem geçmişi açılır.
+        </Aciklama>
+        {satirlar.length === 0
+          ? <div style={{ fontSize: 13.5, color: T.mut, padding: "8px 0" }}>Henüz portföy grubun yok. Tüm portföyün ayrıntısı üstteki karttan açılır.</div>
+          : satirlar.map((r, i) => (
+            <PortfoySatiri key={String(r.scope)} ad={r.ad} not={r.not} ozet={r.ozet} ccy={ccy} rates={rates}
+              ilk={i === 0} onClick={() => onOpen(r.scope)} />
+          ))}
+      </div>
     </div>
 
     {/* ALT KART: "elimde ne var, ne kazandırıyor" — ekranın asıl sorusu */}
     <div style={css.card}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
-        <div style={{ fontWeight: 700, fontSize: 15 }}>Açık Pozisyonlar</div>
-        <div style={{ fontSize: 12, color: T.mut }}>{toplam.acik} varlık</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, marginBottom: 4 }}>
+        <div style={{ fontWeight: 700, fontSize: 16 }}>Açık pozisyonlar</div>
+        <div style={{ fontSize: 13, color: T.mut }}>{toplam.acik} varlık</div>
       </div>
       <PozisyonListesi data={data} pos={allPos} ccy={ccy} rates={rates} reload={reload} />
     </div>
+
+    {yeniGrup && <GrupSayfasi grup={null} islem={0} reload={reload} onClose={() => setYeniGrup(false)} />}
   </>);
 }
 
-/** Portföy grubu satırı — tıklanınca detayına girilir */
-function PortfoySatiri({ ad, not, ozet, ccy, rates, onClick }: {
-  ad: string; not: string | null; ozet: Ozet; ccy: Currency; rates: Rates; onClick: () => void;
+/** Kart başlığındaki metin bağlantısı ("Ayrıntı ›", "+ Portföy") — eylem ama birincil değil */
+const baglanti: React.CSSProperties = {
+  display: "inline-flex", alignItems: "center", gap: 2, background: "none", border: "none", padding: "4px 0",
+  color: T.acc, fontFamily: T.disp, fontSize: 14, fontWeight: 600, cursor: "pointer", minHeight: 0, whiteSpace: "nowrap",
+};
+
+/** Portföy grubu satırı — dokununca detayına girilir */
+function PortfoySatiri({ ad, not, ozet, ccy, rates, onClick, ilk }: {
+  ad: string; not: string | null; ozet: Ozet; ccy: Currency; rates: Rates; onClick: () => void; ilk: boolean;
 }) {
   return (
-    <button type="button" onClick={onClick} title={`${ad} detayını aç`}
-      className="ui-row"
+    <button type="button" onClick={onClick} title={`${ad} detayını aç`} className="liste-satir"
       style={{
         display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left",
-        padding: "11px 10px", marginBottom: 6, borderRadius: 10, cursor: "pointer",
-        background: T.panel2, border: `1px solid ${T.line}`, color: T.text, fontFamily: T.disp, flexWrap: "wrap",
+        padding: "12px 6px", margin: "0 -6px", boxSizing: "content-box", cursor: "pointer",
+        background: "transparent", border: "none", borderTop: ilk ? "none" : `1px solid ${T.line2}`, borderRadius: 8,
+        color: T.text, fontFamily: T.disp,
       }}>
-      <span className="row-title" style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, flex: 1 }}>
-        <span style={{ fontWeight: 700, fontSize: 13.5 }}>{ad}</span>
-        <span style={{ fontSize: 11, color: T.mut3 }}>
+      <span style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, flex: 1 }}>
+        <span style={{ fontWeight: 600, fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ad}</span>
+        <span style={{ fontSize: 12.5, color: T.mut, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {ozet.acik} açık pozisyon{not ? ` · ${not}` : ""}
         </span>
       </span>
-      <span className="row-amount" style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, marginLeft: "auto" }}>
-        <span style={{ ...css.mono, fontSize: 14, fontWeight: 600 }}>
+      <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, flexShrink: 0 }}>
+        <span style={{ ...css.mono, fontSize: 15, fontWeight: 600 }}>
           {fmtMoney(Math.round(convert(ozet.value, "TRY", ccy, rates)), ccy)}
         </span>
-        <Signed v={Math.round(convert(ozet.unreal, "TRY", ccy, rates))} ccy={ccy} size={11} pct={ozet.pct} />
+        <Signed v={Math.round(convert(ozet.unreal, "TRY", ccy, rates))} ccy={ccy} size={12.5} pct={ozet.pct} />
       </span>
-      <span className="row-end" style={{ color: T.mut3, display: "grid", placeItems: "center", flexShrink: 0 }}><OkSag /></span>
+      <span style={{ color: T.mut3, display: "grid", placeItems: "center", flexShrink: 0 }}><OkSag /></span>
     </button>
   );
 }
 
-/** Yeni portföy grubu ekleme — tanım formu, listenin altında (işlem girişi değil, o global "+ Ekle"de) */
-function YeniPortfoy({ reload }: { reload: () => void }) {
-  const [acik, setAcik] = useState(false);
-  const [f, setF] = useState({ name: "", note: "" });
-  const add = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!f.name.trim()) return;
-    await api.post("portfolios", { name: f.name.trim(), note: f.note.trim() || null });
-    setF({ name: "", note: "" });
-    setAcik(false);
-    reload();
+/** Portföy grubu ekle/düzenle sayfası. Grup bir TANIM kaydıdır: adı ve notu burada, silme de burada
+    (Kartlar/Hesaplar'daki desen — eskiden detay başlığında satır içi input + çıplak ✕ vardı). */
+function GrupSayfasi({ grup, islem, reload, onClose, onSilindi }: {
+  grup: AllData["portfolios"][number] | null; islem: number; reload: () => void; onClose: () => void; onSilindi?: () => void;
+}) {
+  const [f, setF] = useState({ name: grup?.name ?? "", note: grup?.note ?? "" });
+  const ok = !!f.name.trim();
+  const kaydet = async () => {
+    if (!ok) return;
+    const govde = { name: f.name.trim(), note: f.note.trim() || null };
+    if (grup) await api.put(`portfolios/${grup.id}`, govde);
+    else await api.post("portfolios", govde);
+    reload(); onClose();
   };
-  if (!acik) {
-    return (
-      <button type="button" onClick={() => setAcik(true)} style={{ ...css.ghost, fontSize: 12.5, padding: "7px 12px", marginTop: 2 }}>
-        + Yeni portföy
-      </button>
-    );
-  }
   return (
-    <form onSubmit={add} style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
-      <Field label="Ad" flex={2}>
-        <input style={css.input} value={f.name} autoFocus placeholder="örn. Alfa Portföy" onChange={(e) => setF({ ...f, name: e.target.value })} />
-      </Field>
-      <Field label="Not (ops.)" flex={2}>
-        <input style={css.input} value={f.note} placeholder="örn. büyüme hisseleri" onChange={(e) => setF({ ...f, note: e.target.value })} />
-      </Field>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 6 }}>
-        <button type="submit" style={{ ...css.btn, opacity: f.name.trim() ? 1 : 0.4 }} disabled={!f.name.trim()}>Ekle</button>
-        <button type="button" style={css.ghost} onClick={() => setAcik(false)}>Vazgeç</button>
-      </div>
-    </form>
+    <Modal title={grup ? "Portföyü düzenle" : "Portföy ekle"} onClose={onClose}>
+      <form onSubmit={(e) => { e.preventDefault(); kaydet(); }}>
+        <Bolum>
+          <Etiketli etiket="Ad">
+            <input autoFocus={!grup} style={girdi} value={f.name} placeholder="örn. Emeklilik" onChange={(e) => setF({ ...f, name: e.target.value })} />
+          </Etiketli>
+          <Etiketli etiket="Not (isteğe bağlı)">
+            <input style={girdi} value={f.note} placeholder="örn. uzun vadeli fonlar" onChange={(e) => setF({ ...f, note: e.target.value })} />
+          </Etiketli>
+          {!grup && (
+            <div style={{ fontSize: 13, color: T.mut, lineHeight: 1.45 }}>
+              İşlemleri gruba alış/satış formundaki <b>Portföy</b> satırından atarsın; var olan bir işlemi taşımak için işlemi düzenle.
+            </div>
+          )}
+        </Bolum>
+        <FormAlt ok={ok} reason="Portföyün adını yaz." editing etiket={grup ? "Değişikliği kaydet" : "Portföyü ekle"}
+          sonuc={grup ? <>Ad ve not değişir; işlemler ve rakamlar aynı kalır.</> : <>Yeni grup boş açılır — net varlık ve alokasyon değişmez.</>}
+          sil={grup ? (
+            <SilDugmesi ad={grup.name} title="Portföyü sil" ikon="Sil" className="form-sil"
+              style={{ color: T.neg, fontSize: 14.5, fontWeight: 600, padding: "8px 6px" }}
+              onSil={async () => { await api.del("portfolios", grup.id); onClose(); onSilindi?.(); reload(); }}
+              sonuc={<>İçindeki <b>{islem} işlem silinmez</b>, "Gruplanmamış"a döner. Net varlık ve alokasyon değişmez.</>} />
+          ) : undefined} />
+      </form>
+    </Modal>
   );
 }
 
-/* ————— SEVİYE 2: DETAY ————— */
+/* ————— SEVİYE 2: DETAY —————
+   Yeniden tasarım (grup 4): başlık ← + ad + "N varlık · N işlem · not" + Düzenle (yalnız gerçek
+   grupta); son ayların getirisi küçük kutular; masaüstünde getiri grafiği | dağılım yan yana;
+   altta üç sekme (Varlıklar — telefonda liste, masaüstünde tablo | Takip | İşlemler). */
 
 function PortfoyDetay({ data, scope, trades, pos, rates, ccy, reload, onBack }: {
   data: AllData; scope: Sel; trades: AllData["trades"]; pos: Position[];
   rates: Rates; ccy: Currency; reload: () => void; onBack: () => void;
 }) {
-  // hareket listesinin sembol filtresi — açılan pozisyon satırından da dolar
+  // hareket listesinin sembol filtresi — pozisyon sayfasındaki "Hareketlerini gör"den de dolar
   const [symFilter, setSymFilter] = useState<string | null>(null);
   const [sekme, setSekme] = useState<DetaySekme>("varliklar");
+  const [duzenle, setDuzenle] = useState(false);
   const grup = typeof scope === "number" ? data.portfolios.find((p) => p.id === scope) ?? null : null;
   const ad = scope === "all" ? "Tüm portföy" : scope === null ? "Gruplanmamış" : grup?.name ?? "Portföy";
   const ozet = useMemo(() => ozetle(pos, rates), [pos, rates]);
-  /* Grafik/hareketler başlığındaki kapsam etiketi: "Tüm portföy"de gereksiz (zaten hepsi). */
-  const scopeLabel = scope === "all" ? null : ad;
 
-  /* "Hareketlerini gör" düğmesi hem sembolü süzer hem İşlem Geçmişi sekmesine geçer —
-     yoksa düğmeye basınca görünürde hiçbir şey olmuyordu (liste başka sekmedeydi). */
+  /* "Hareketlerini gör" hem sembolü süzer hem İşlemler sekmesine geçer — yoksa düğmeye basınca
+     görünürde hiçbir şey olmuyordu (liste başka sekmedeydi). */
   const hareketlereGit = (s: string) => { setSymFilter(s); setSekme("hareketler"); };
 
   return (<>
-    {/* ——— BAŞLIK KARTI: kimlik + aylık ritim ——— */}
+    {/* ——— BAŞLIK KARTI ——— */}
     <div style={css.card}>
-      <button type="button" onClick={onBack}
-        style={{
-          ...css.ghost, display: "inline-flex", alignItems: "center", gap: 6,
-          fontSize: 12.5, padding: "6px 12px", marginBottom: 12,
-        }}>
-        <OkSol /> Tüm Portföyler
-      </button>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <button type="button" onClick={onBack} aria-label="Portföylere dön" title="Portföylere dön" style={{
+          width: 36, height: 36, minHeight: 0, borderRadius: 10, border: "none", background: T.panel2, color: T.text,
+          display: "grid", placeItems: "center", cursor: "pointer", flexShrink: 0, marginLeft: -4,
+        }}><OkSol /></button>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 19, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ad}</div>
+          <div style={{ fontSize: 13, color: T.mut, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {ozet.acik} varlık · {trades.length} işlem{grup?.note ? ` · ${grup.note}` : ""}
+          </div>
+        </div>
+        {/* "Tüm portföy" ve "Gruplanmamış" gerçek kayıt değildir — düzenlenemez */}
+        {grup && <button type="button" onClick={() => setDuzenle(true)} style={baglanti}>Düzenle</button>}
+      </div>
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
-        <div style={{ minWidth: 240, flex: "1 1 260px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
-            {/* Grubun ADI ve NOTU burada düzenlenir: bu ekran o grubun kendi ekranıdır.
-                "Tüm portföy" ve "Gruplanmamış" gerçek kayıt değildir — düzenlenemez. */}
-            {grup
-              ? <GrupBasligi grup={grup} reload={reload} />
-              : <div style={{ fontWeight: 700, fontSize: 19 }}>{ad}</div>}
-            {grup && (
-              <SilDugmesi ad={grup.name} title="Portföyü sil"
-                onSil={async () => { await api.del("portfolios", grup.id); onBack(); reload(); }}
-                sonuc={<>İçindeki <b>{trades.length} işlem silinmez</b>, "Gruplanmamış"a döner. Net varlık ve alokasyon değişmez.</>} />
-            )}
-          </div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
-            <Rozet>{ozet.acik} varlık</Rozet>
-            <Rozet>{trades.length} işlem</Rozet>
-          </div>
-          <div style={{ ...css.mono, fontSize: 26, fontWeight: 700, lineHeight: 1.1, marginTop: 12 }}>
-            {fmtMoney(Math.round(convert(ozet.value, "TRY", ccy, rates)), ccy)}
-          </div>
-          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 5, fontSize: 12, color: T.mut }}>
-            <span>açık K/Z <Signed v={Math.round(convert(ozet.unreal, "TRY", ccy, rates))} ccy={ccy} pct={ozet.pct} /></span>
-            <span>gerç. K/Z <Signed v={Math.round(convert(ozet.realized, "TRY", ccy, rates))} ccy={ccy} /></span>
-          </div>
-        </div>
-        <div style={{ flex: "1 1 260px", minWidth: 240 }}>
-          <SonAylar trades={trades} priceHistory={data.price_history} rates={rates} />
-        </div>
+      <div style={{ ...css.mono, fontSize: 28, fontWeight: 600, lineHeight: 1.1, marginTop: 14 }}>
+        {fmtMoney(Math.round(convert(ozet.value, "TRY", ccy, rates)), ccy)}
+      </div>
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 5, fontSize: 13, color: T.mut }}>
+        <span>açık K/Z <Signed v={Math.round(convert(ozet.unreal, "TRY", ccy, rates))} ccy={ccy} size={13} pct={ozet.pct} /></span>
+        <span>gerç. K/Z <Signed v={Math.round(convert(ozet.realized, "TRY", ccy, rates))} ccy={ccy} size={13} /></span>
+      </div>
+      <div style={{ marginTop: 14 }}>
+        <SonAylar trades={trades} priceHistory={data.price_history} rates={rates} />
       </div>
       <AlokasyonSeridi pos={pos} rates={rates} ccy={ccy} />
     </div>
 
-    {/* ——— PERFORMANS: yüzde modunda açılır (buradaki soru "nasıl gittim") ——— */}
-    <DegerGrafigi
-      trades={trades} priceHistory={data.price_history} benchmarks={data.benchmark_history}
-      rates={rates} ccy={ccy} height={210} scopeLabel={scopeLabel}
-      title="Performans Analizi" altBaslik="TL bazlı kümülatif getiri (para akışı arındırılmış)"
-      defaultMode="PCT"
-    />
-
-    {/* ——— DAĞILIM: boyut = ağırlık, renk = performans ——— */}
-    <VarlikTreemap pos={pos} priceHistory={data.price_history} rates={rates} ccy={ccy} />
+    <div className="port-orta">
+      {/* ——— PERFORMANS: yüzde modunda açılır (buradaki soru "nasıl gittim") ——— */}
+      <DegerGrafigi
+        trades={trades} priceHistory={data.price_history} benchmarks={data.benchmark_history}
+        rates={rates} ccy={ccy} height={210} scopeLabel={null /* ad zaten sayfa başlığında */}
+        title="Performans" altBaslik="TL bazlı, para giriş-çıkışı arındırılmış"
+        defaultMode="PCT"
+      />
+      {/* ——— DAĞILIM: boyut = ağırlık, renk = performans ——— */}
+      <VarlikTreemap pos={pos} priceHistory={data.price_history} rates={rates} ccy={ccy} />
+    </div>
 
     {/* ——— SEKMELER ———
         Kartları alt alta yığmak yerine tek kartta değiştiriyoruz: üç liste de uzun ve aynı
-        anda hiçbiri diğerinin yanında okunmuyor; yığılınca ekran yine kilometrelerce oluyordu. */}
+        anda hiçbiri diğerinin yanında okunmuyor; yığılınca ekran yine kilometrelerce oluyordu.
+        Segment (eski alt çizgili şerit 390px'e sığmıyor, yatay kayıyordu): etiketler kısaldı. */}
     <div style={css.card}>
-      {/* Şerit SARMAZ, yatay KAYAR: 390px'te üç etiket tek satıra sığmıyor ve sarmalandığında
-          alt çizgi ikiye bölünüp "sekme" hissi kayboluyordu. Kaydırma mobilde standart desen. */}
-      <div style={{
-        display: "flex", gap: 2, borderBottom: `1px solid ${T.line}`, marginBottom: 12,
-        flexWrap: "nowrap", overflowX: "auto", maxWidth: "100%",
-      }}>
-        {DETAY_SEKMELER.map(([k, label]) => (
-          <button key={k} type="button" onClick={() => setSekme(k)} style={{
-            padding: "9px 13px", border: "none", background: "none", cursor: "pointer",
-            fontFamily: T.disp, fontSize: 13, fontWeight: sekme === k ? 700 : 500,
-            color: sekme === k ? T.acc : T.mut, minHeight: 0, whiteSpace: "nowrap", flexShrink: 0,
-            borderBottom: `2px solid ${sekme === k ? T.acc : "transparent"}`, marginBottom: -1,
-          }}>{label}</button>
-        ))}
+      <div style={{ marginBottom: 14 }}>
+        <Segment ad="Görünüm" deger={sekme} sec={setSekme} secenek={DETAY_SEKMELER.map(([v, l]) => ({ v, l }))} />
       </div>
 
-      {sekme === "varliklar" && (
-        <VarlikTablosu data={data} pos={pos} ccy={ccy} rates={rates} reload={reload} onSymbol={hareketlereGit} />
-      )}
+      {sekme === "varliklar" && (<>
+        {/* Telefonda tablo 760px'lik yatay kaydırmaydı — orada liste satırı, masaüstünde sıralanabilir tablo */}
+        <div className="mobile-only">
+          <PozisyonListesi data={data} pos={pos} ccy={ccy} rates={rates} reload={reload} onSymbol={hareketlereGit} />
+        </div>
+        <div className="desktop-only">
+          <VarlikTablosu data={data} pos={pos} ccy={ccy} rates={rates} reload={reload} onSymbol={hareketlereGit} />
+        </div>
+      </>)}
       {sekme === "takip" && (
         <VarlikTakibi data={data} trades={trades} pos={pos} rates={rates} scopeLabel={null} govdesiz />
       )}
@@ -351,71 +364,33 @@ function PortfoyDetay({ data, scope, trades, pos, rates, ccy, reload, onBack }: 
           symbol={symFilter} onSymbol={setSymFilter} govdesiz />
       )}
     </div>
+
+    {duzenle && grup && (
+      <GrupSayfasi grup={grup} islem={trades.length} reload={reload} onClose={() => setDuzenle(false)} onSilindi={onBack} />
+    )}
   </>);
 }
 
-/** Detay sekmeleri — referans paneldeki "Mevcut Varlıklar | İşlem Geçmişi" düzeninin karşılığı;
-    aradaki "Varlık Takibi" bizim eklememiz (pozisyon ömürleri + dönem akışı, Faz 31). */
+/** Detay sekmeleri — "Takip" bizim eklememiz (pozisyon ömürleri + dönem akışı, Faz 31). */
 type DetaySekme = "varliklar" | "takip" | "hareketler";
 const DETAY_SEKMELER: [DetaySekme, string][] = [
-  ["varliklar", "Mevcut Varlıklar"],
-  ["takip", "Varlık Takibi"],
-  ["hareketler", "İşlem Geçmişi"],
+  ["varliklar", "Varlıklar"],
+  ["takip", "Takip"],
+  ["hareketler", "İşlemler"],
 ];
 
-/** Küçük nötr etiket (varlık sayısı, işlem sayısı) */
-const Rozet = ({ children }: { children: React.ReactNode }) => (
-  <span style={{
-    fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 999,
-    background: T.panel2, color: T.mut, border: `1px solid ${T.line}`,
-  }}>{children}</span>
-);
-
-/** Detay başlığında grup adı + notu satır içinde düzenlenir (sil+yeniden ekle işlemleri
-    "Gruplanmamış"a düşürürdü, yani grubu yeniden kurmak elle yeniden atama demek olurdu). */
-function GrupBasligi({ grup, reload }: { grup: AllData["portfolios"][number]; reload: () => void }) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-      <input
-        key={`n${grup.name}`} defaultValue={grup.name} title="Portföy adı (düzenlemek için tıkla)"
-        style={{ ...css.input, fontFamily: T.disp, fontWeight: 700, fontSize: 19, padding: "2px 6px", border: "1px solid transparent", background: "transparent", width: "100%", maxWidth: 260 }}
-        onFocus={(e) => { e.target.style.borderColor = T.line; e.target.style.background = T.panel2; }}
-        onBlur={async (e) => {
-          e.target.style.borderColor = "transparent"; e.target.style.background = "transparent";
-          const v = e.target.value.trim();
-          if (v && v !== grup.name) { await api.put(`portfolios/${grup.id}`, { name: v }); reload(); }
-          else e.target.value = grup.name;
-        }} />
-      <input
-        key={`t${grup.note ?? ""}`} defaultValue={grup.note ?? ""} placeholder="not ekle…" title="Not"
-        style={{ ...css.input, fontFamily: T.disp, color: T.mut, fontSize: 12, padding: "2px 6px", border: "1px solid transparent", background: "transparent", width: "100%", maxWidth: 260 }}
-        onFocus={(e) => { e.target.style.borderColor = T.line; e.target.style.background = T.panel2; }}
-        onBlur={async (e) => {
-          e.target.style.borderColor = "transparent"; e.target.style.background = "transparent";
-          const v = e.target.value.trim();
-          if (v !== (grup.note ?? "")) { await api.put(`portfolios/${grup.id}`, { note: v || null }); reload(); }
-        }} />
-    </div>
-  );
-}
-
 /* ————— PAYLAŞILAN: AÇIK POZİSYON LİSTESİ —————
-   Hem liste hem detay ekranı aynı bileşeni kullanır; iki kopya olsaydı fiyat girişi ya da
-   "nakit say" düğmesi yalnız birinde güncellenirdi.
+   Hem liste ekranı hem detayın telefon görünümü aynı bileşeni kullanır.
 
-   Faz 31'de iki şey değişti:
-   1) VARLIK SINIFI AKORDEONU KALKTI. Liste artık DÜZ ve DEĞERE göre sıralı — "en büyük
-      pozisyonum ne?" sorusu tek bakışta cevaplanıyor. Sınıf bilgisi satırdaki rozette kalır,
-      sınıf dağılımını da alokasyon şeridi çok daha iyi anlatıyor (akordeon kapalıyken
-      dağılımı hiç söylemiyordu, açıkken de kafada toplamak gerekiyordu).
-   2) FORM KUTULARI SATIRDAN ÇIKTI. Her satırda duran fiyat giriş kutusu + "oto" rozeti +
-      "sıfırla" düğmesi, varlık listesini bir ayar ekranına benzetiyordu. Artık satıra
-      dokununca AÇILIYOR. Tek istisna: fiyatı hiç bilinmeyen varlık — orada giriş kutusu
-      kendiliğinden açık gelir, çünkü o satır gerçekten eylem bekliyor. */
+   Faz 31: liste DÜZ ve DEĞERE göre sıralı (varlık sınıfı akordeonu kalktı; sınıf dağılımını
+   alokasyon şeridi anlatıyor). Form kutuları satırdan çıktı. Yeniden tasarım (grup 4): satıra
+   dokununca satırın İÇİNDE açılmak yerine pozisyon SAYFASI açılır (PozisyonAyrinti.tsx) — içeride
+   açılmak listeyi uzatıp kaydırıyordu. Fiyatı bilinmeyen varlık eskiden kendiliğinden açık
+   gelirdi; şimdi satırın kendisi kırmızı "fiyat yok · gir" der, yani eylem yine görünür. */
 
 function PozisyonListesi({ data, pos, ccy, rates, reload, onSymbol }: {
   data: AllData; pos: Position[]; ccy: Currency; rates: Rates; reload: () => void;
-  /** verilirse açılan satırda "hareketlerini gör" çıkar (detayda listeyi süzer) */
+  /** verilirse pozisyon sayfasında "Hareketlerini gör" çıkar (detayda listeyi süzer) */
   onSymbol?: (s: string) => void;
 }) {
   /* Listede YALNIZ elde tutulanlar görünür. `positions()` bilerek işlem görmüş her sembolü
@@ -430,115 +405,89 @@ function PozisyonListesi({ data, pos, ccy, rates, reload, onSymbol }: {
     () => acikPos.reduce((s, p) => s + convert(p.value ?? 0, p.currency, "TRY", rates), 0),
     [acikPos, rates],
   );
-
-  /* Para piyasası (nakit sayılan) fonlar — Nakit Akışı takviminde nakit gibi değerlenir */
+  const agirlikOf = (p: Position) => (toplamTry > 0 ? convert(p.value ?? 0, p.currency, "TRY", rates) / toplamTry : null);
   const cashFunds = new Set((data.settings.cash_funds || "").split(",").map((s) => s.trim()).filter(Boolean));
-  const toggleCashFund = async (sym: string) => {
-    const next = new Set(cashFunds);
-    next.has(sym) ? next.delete(sym) : next.add(sym);
-    await api.put("settings", { cash_funds: [...next].join(",") });
-    reload();
-  };
-  /* Temettü geri yatırımı (Faz 36) — "nakit say" ile aynı desen, ayrıştırma motorda. */
-  const toggleDrip = async (type: string, sym: string) => {
-    await api.put("settings", { drip_symbols: dripToggle(data.settings, type, sym) });
-    reload();
-  };
+  /* Açık sayfa ANAHTARLA tutulur, Position nesnesiyle değil: sayfada fiyat değişince reload yeni
+     nesneler üretir ve eski nesneyi tutan sayfa bayat rakam gösterirdi. */
+  const [acik, setAcik] = useState<string | null>(null);
+  const acikP = acik ? acikPos.find((p) => `${p.type}:${p.sym}` === acik) ?? null : null;
 
   /* Bu liste diğer sayfalananlardan CİNS OLARAK farklı: satır sayısı işlem sayısıyla değil
      KAÇ FARKLI VARLIK TUTTUĞUNLA sınırlı ve sattığında satır kaybolur — zamanla monoton
-     büyümüyor. Bu yüzden dilim cömert: 25 pozisyonun altında `DahaFazla` hiç render edilmez
-     (tek sayfaya sığıyor), yani normal kullanıcı hiçbir şey görmez. Çok sayıda fon tutan
-     uç durum için de sayfa şişmez. */
+     büyümüyor. Bu yüzden dilim cömert: 25 pozisyonun altında `DahaFazla` hiç render edilmez. */
   const s = useSayfalama(acikPos, 25);
 
   if (acikPos.length === 0) {
     return <Empty>{pos.length === 0
-      ? "Henüz işlem yok. İlk alışını global + Ekle ile kaydet."
+      ? "Henüz işlem yok. İlk alışını + Ekle ile kaydet."
       : "Açık pozisyon yok — tümü kapanmış."}</Empty>;
   }
 
   return (<>
     {s.gorunen.map((p, i) => (
-      <VarlikSatiri
-        key={`${p.type}:${p.sym}`} p={p} now={data.now} ccy={ccy} rates={rates} reload={reload}
-        agirlik={toplamTry > 0 ? convert(p.value ?? 0, p.currency, "TRY", rates) / toplamTry : null}
-        nakitSayilir={cashFunds.has(p.sym)} onNakitSay={() => toggleCashFund(p.sym)}
-        dripAcik={dripAcikMi(data.settings, p.type, p.sym)} onDrip={() => toggleDrip(p.type, p.sym)}
-        onSymbol={onSymbol} son={i === s.gorunen.length - 1 && s.toplam === s.gosterilen}
-      />
+      <VarlikSatiri key={`${p.type}:${p.sym}`} p={p} agirlik={agirlikOf(p)} nakitSayilir={cashFunds.has(p.sym)}
+        ilk={i === 0} onClick={() => setAcik(`${p.type}:${p.sym}`)} />
     ))}
     <DahaFazla s={s} ad="pozisyon" yon="fazla" />
+    {acikP && (
+      <PozisyonSayfasi p={acikP} data={data} ccy={ccy} rates={rates} agirlik={agirlikOf(acikP)}
+        reload={reload} onClose={() => setAcik(null)} onSymbol={onSymbol} />
+    )}
   </>);
 }
 
-/** Tek varlık satırı: üstte kimlik + değer, altta adet/ağırlık + K/Z. Dokununca ayrıntı açılır. */
-function VarlikSatiri({ p, now, ccy, rates, reload, agirlik, nakitSayilir, onNakitSay, dripAcik, onDrip, onSymbol, son }: {
-  p: Position; now?: string | null; ccy: Currency; rates: Rates; reload: () => void;
-  agirlik: number | null; nakitSayilir: boolean; onNakitSay: () => void;
-  dripAcik?: boolean; onDrip?: () => void;
-  onSymbol?: (s: string) => void; son: boolean;
+/** Tek varlık satırı: monogram + sembol (tür · adet · ağırlık) + değer (K/Z). Dokununca pozisyon sayfası. */
+function VarlikSatiri({ p, agirlik, nakitSayilir, ilk, onClick }: {
+  p: Position; agirlik: number | null; nakitSayilir: boolean; ilk: boolean; onClick: () => void;
 }) {
-  /* Fiyatı olmayan varlık ayrıntısı AÇIK gelir: o satır bir eylem bekliyor ("elle gir"),
-     kapalı gelseydi kullanıcı neden değersiz göründüğünü göremezdi. */
-  const [acik, setAcik] = useState(p.cur == null);
   /* Ondalık ayırıcı VİRGÜL — `toFixed` nokta üretiyor ve listede "0.05 adet" diye
      görünüyordu, oysa yanındaki her tutar "₺12.500" biçiminde (nokta = binlik). */
   const adet = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(4).replace(/0+$/, "").replace(/\.$/, "").replace(".", ","));
   const yukari = (p.unreal ?? 0) >= 0;
 
   return (
-    <div style={{ borderBottom: son && !acik ? "none" : `1px solid ${T.line}` }}>
-      <div className="ui-row" onClick={() => setAcik((v) => !v)}
-        title={acik ? "Ayrıntıyı kapat" : "Ayrıntı ve fiyat ayarı"}
-        style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "12px 2px", cursor: "pointer", userSelect: "none" }}>
-        {/* Monogram: SEMBOLÜN ilk iki harfi, varlık sınıfının rengiyle. Önce varlık TÜRÜNÜN
-            ilk üç harfi yazılıyordu ve "BIST" → "BIS" diye kesilip yazım hatası gibi
-            duruyordu; üstelik aynı sınıftaki iki hisse birbirinden ayırt edilemiyordu.
-            Renk alokasyon şeridindeki dilimle eşleşir — "şeritteki mor hangisiydi" cevabı. */}
-        <span className="row-lead" style={{
-          width: 34, height: 34, borderRadius: 10, flexShrink: 0, display: "grid", placeItems: "center",
-          background: T.panel2, color: TYPE_COLORS[p.type] || T.mut,
-          fontFamily: T.disp, fontSize: 12.5, fontWeight: 800, letterSpacing: "-0.03em",
-        }}>{p.sym.slice(0, 2).toLocaleUpperCase("tr")}</span>
+    <button type="button" onClick={onClick} title={`${p.sym} ayrıntısı`} className="liste-satir"
+      style={{
+        display: "flex", alignItems: "center", gap: 12, width: "100%", textAlign: "left",
+        padding: "12px 6px", margin: "0 -6px", boxSizing: "content-box", cursor: "pointer",
+        background: "transparent", border: "none", borderTop: ilk ? "none" : `1px solid ${T.line2}`, borderRadius: 8,
+        color: T.text, fontFamily: T.disp,
+      }}>
+      {/* Monogram: SEMBOLÜN ilk iki harfi, varlık sınıfının rengiyle (türün kısaltması "BIST" →
+          "BIS" yazım hatası gibi duruyordu). Renk alokasyon şeridindeki dilimle eşleşir. */}
+      <span style={{
+        width: 38, height: 38, borderRadius: 11, flexShrink: 0, display: "grid", placeItems: "center",
+        background: T.panel2, color: TYPE_COLORS[p.type] || T.mut,
+        fontFamily: T.disp, fontSize: 13, fontWeight: 800, letterSpacing: "-0.03em",
+      }}>{p.sym.slice(0, 2).toLocaleUpperCase("tr")}</span>
 
-        <span className="row-title" style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, flex: 1 }}>
-          <span style={{ display: "flex", alignItems: "baseline", gap: 5, flexWrap: "wrap" }}>
-            <span style={{ ...css.mono, fontWeight: 700, fontSize: 15 }}>{p.sym}</span>
-            {p.currency === "USD" && <span style={{ fontSize: 9.5, fontWeight: 700, color: T.mut3 }}>USD</span>}
-            {nakitSayilir && (
-              <span style={{ fontSize: 9.5, fontWeight: 700, padding: "1px 6px", borderRadius: 999, background: T.posSoft, color: T.pos }}>nakit</span>
-            )}
-          </span>
-          <span style={{ fontSize: 11.5, color: T.mut3 }}>
-            <span style={{ color: TYPE_COLORS[p.type] || T.mut3, fontWeight: 600 }}>{p.type}</span>
-            {" · "}{adet(p.qty)} adet
-            {/* Yalnız oran yazılır, "portföy" kelimesi değil: 390px'te alt satırı sarmalayıp
-                tek başına "portföy" kalan ikinci bir satır açıyordu. Neyin oranı olduğunu
-                hemen üstteki alokasyon şeridi zaten söylüyor. */}
-            {agirlik != null && agirlik > 0 && <> · %{(agirlik * 100).toFixed(agirlik < 0.1 ? 1 : 0).replace(".", ",")}</>}
-          </span>
+      <span style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, flex: 1 }}>
+        <span style={{ display: "flex", alignItems: "baseline", gap: 6, minWidth: 0 }}>
+          <span style={{ ...css.mono, fontWeight: 600, fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.sym}</span>
+          {p.currency === "USD" && <span style={{ fontSize: 10.5, fontWeight: 700, color: T.mut3 }}>USD</span>}
+          {nakitSayilir && (
+            <span style={{ fontSize: 10.5, fontWeight: 700, padding: "1px 6px", borderRadius: 999, background: T.posSoft, color: T.pos }}>nakit</span>
+          )}
         </span>
-
-        <span className="row-amount" style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, marginLeft: "auto" }}>
-          <span style={{ ...css.mono, fontSize: 14.5, fontWeight: 600 }}>
-            {p.value != null ? fmtMoney(Math.round(p.value), p.currency) : "—"}
-          </span>
-          {p.unreal != null
-            ? <span style={{ ...css.mono, fontSize: 11.5, color: yukari ? T.pos : T.neg }}>
-              {yukari ? "▲" : "▼"} {yukari ? "+" : ""}{fmtMoney(Math.round(p.unreal), p.currency)}
-              {p.unrealPct != null && <> ({fmtPct(p.unrealPct)})</>}
-            </span>
-            : <span style={{ fontSize: 11, color: T.neg }}>fiyat yok</span>}
+        <span style={{ fontSize: 12.5, color: T.mut, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          <span style={{ color: TYPE_COLORS[p.type] || T.mut, fontWeight: 600 }}>{p.type}</span>
+          {" · "}{adet(p.qty)} adet
+          {/* Yalnız oran yazılır, "portföy" kelimesi değil: 390px'te alt satırı sarmalıyordu. */}
+          {agirlik != null && agirlik > 0 && <> · %{(agirlik * 100).toFixed(agirlik < 0.1 ? 1 : 0).replace(".", ",")}</>}
         </span>
-      </div>
+      </span>
 
-      {acik && (
-        <PozisyonAyrinti
-          p={p} now={now} reload={reload} nakitSayilir={nakitSayilir} onNakitSay={onNakitSay}
-          dripAcik={dripAcik} onDrip={onDrip} onSymbol={onSymbol} solBosluk={46}
-        />
-      )}
-    </div>
+      <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, flexShrink: 0 }}>
+        <span style={{ ...css.mono, fontSize: 15, fontWeight: 600 }}>
+          {p.value != null ? fmtMoney(Math.round(p.value), p.currency) : "—"}
+        </span>
+        {p.unreal != null
+          ? <span style={{ ...css.mono, fontSize: 12.5, color: yukari ? T.pos : T.neg }}>
+            {yukari ? "+" : ""}{fmtMoney(Math.round(p.unreal), p.currency)}
+            {p.unrealPct != null && <> ({fmtPct(p.unrealPct)})</>}
+          </span>
+          : <span style={{ fontSize: 12.5, color: T.neg, fontWeight: 600 }}>fiyat yok · gir</span>}
+      </span>
+    </button>
   );
 }

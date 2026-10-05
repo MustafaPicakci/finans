@@ -1,110 +1,151 @@
-import React from "react";
-import { num, type Position } from "@finans/engine";
+import React, { useState } from "react";
+import { num, convert, dripAcikMi, dripToggle, type AllData, type Currency, type Position, type Rates } from "@finans/engine";
 import { api } from "../../api";
-import { T, css, fmtMoney, fiyatYasi, FIYAT_YASI_IPUCU } from "../../theme";
+import { T, css, fmtMoney, fmtPct, fiyatYasi, FIYAT_YASI_IPUCU, TYPE_COLORS } from "../../theme";
+import { Modal } from "../../ui";
+import { Satirlar, Anahtar } from "../forms/parcalar";
 
-/* ————— POZİSYON SATIRININ AÇILAN AYRINTISI —————
-   Faz 31'de fiyat giriş kutusu + "oto" rozeti + "sıfırla" varlık listesinin GÖRÜNEN
-   satırından çıkarıldı (liste bir ayar ekranına benziyordu) ve satıra dokununca açılan bu
-   alana taşındı. Faz 32'de detay ekranı tabloya dönünce aynı alan İKİ yerde gerekti —
-   liste kartında ve tabloda. Tek bileşen: iki kopya olsaydı biri (ör. "nakit say") yalnız
-   bir ekranda güncellenir, diğeri sessizce eskirdi. */
+/* ————— POZİSYON SAYFASI —————
+   Faz 31'de fiyat giriş kutusu + "oto" rozeti + "sıfırla" varlık listesinin GÖRÜNEN satırından
+   çıkarılıp satıra dokununca SATIRIN İÇİNDE açılan bir alana taşınmıştı; Faz 32'de aynı alan
+   tabloda da gerekti. Yeniden tasarım (Ekim 2026, grup 4): satırın içinde açılmak listeyi uzatıp
+   kaydırıyordu — artık alttan açılan SAYFA (Kartlar/Hesaplar'daki desen). Tek bileşen, iki çağıran
+   (liste satırı + tablo satırı): iki kopya olsaydı "nakit say" yalnız birinde güncellenirdi. */
 
-export function PozisyonAyrinti({ p, now, reload, nakitSayilir, onNakitSay, dripAcik, onDrip, onSymbol, solBosluk = 0 }: {
-  p: Position;
-  /** sunucunun "şimdi"si (`AllData.now`) — fiyat yaşı bununla ölçülür, tarayıcı saatiyle DEĞİL */
-  now?: string | null;
-  reload: () => void;
-  nakitSayilir: boolean;
-  onNakitSay: () => void;
-  /** Faz 36 — temettü geri yatırımı (DRIP) işaretli mi; yalnız hisse/ETF'de anlamlı */
-  dripAcik?: boolean;
-  onDrip?: () => void;
-  /** verilirse "hareketlerini gör" düğmesi çıkar (detay ekranında listeyi süzer) */
+const adetYaz = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(4).replace(/0+$/, "").replace(/\.$/, "").replace(".", ","));
+const satir: React.CSSProperties = { display: "flex", alignItems: "center", gap: 10, minHeight: 50, padding: "0 14px", borderTop: `1px solid ${T.line2}`, fontSize: 15 };
+
+export function PozisyonSayfasi({ p, data, ccy, rates, agirlik, reload, onClose, onSymbol }: {
+  p: Position; data: AllData; ccy: Currency; rates: Rates;
+  /** portföy içindeki pay (0-1), bilinmiyorsa null */
+  agirlik: number | null;
+  reload: () => void; onClose: () => void;
+  /** verilirse "Hareketlerini gör" çıkar (detayda işlem geçmişini bu sembole süzer) */
   onSymbol?: (s: string) => void;
-  solBosluk?: number;
 }) {
-  /* Fiyatın yanındaki yaş. Elle girilen fiyatta da anlamlı ("bu rakamı ne zaman yazmıştım"),
-     ama metni "çekildi" değil "girildi" olmalı — yoksa kullanıcının kendi yazdığı sayı
-     otomatik gelmiş gibi okunur. */
-  const yas = fiyatYasi(p.updated, now);
-  return (
-    <div style={{ padding: `2px 2px 14px ${solBosluk}px`, display: "flex", flexDirection: "column", gap: 10 }}>
-      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 11.5, color: T.mut3 }}>
-        <span>ort. maliyet <span style={{ ...css.mono, color: T.mut }}>{fmtMoney(p.avg, p.currency, true)}</span></span>
-        {p.cur != null && (
-          <span>güncel <span style={{ ...css.mono, color: T.mut }}>{fmtMoney(p.cur, p.currency, true)}</span>
-            {yas && (
-              /* Ham damga ("2026-09-21 14:30") buradaydı ve okunmuyordu: kullanıcının sorusu
-                 "hangi saniyede" değil "ne kadar eski". Kesin an tooltip'e indi. */
-              <span title={`${p.updated}${p.source === "manual" ? "" : ` — ${FIYAT_YASI_IPUCU}`}`}
-                style={{ opacity: 0.85 }}> · {yas} {p.source === "manual" ? "girildi" : "çekildi"}</span>
-            )}
-          </span>
-        )}
-        {p.realized !== 0 && (
-          <span>gerçekleşen{" "}
-            <span style={{ ...css.mono, color: p.realized > 0 ? T.pos : p.realized < 0 ? T.neg : T.mut }}>
-              {p.realized > 0 ? "+" : ""}{fmtMoney(Math.round(p.realized), p.currency)}
-            </span>
-          </span>
-        )}
-        {p.type === "FON" && (
-          /* Fon fiyatı NAV'dır: gün içinde değişmez, kapanıştan sonra hesaplanır. Yaşı tek
-             başına görünce "fiyatlarım bayat" sanılır — oysa daha tazesi YOK. */
-          <span style={{ opacity: 0.8 }}>fon fiyatı (NAV) günde bir hesaplanır</span>
-        )}
-      </div>
+  /* Fiyatın yaşı sunucunun "şimdi"siyle ölçülür (`AllData.now`), tarayıcı saatiyle DEĞİL. Elle girilen
+     fiyatta metin "girildi" olur — yoksa kullanıcının kendi yazdığı sayı otomatik gelmiş gibi okunur. */
+  const yas = fiyatYasi(p.updated, data.now);
+  const [fiyat, setFiyat] = useState(p.cur != null ? String(p.cur).replace(".", ",") : "");
+  const [busy, setBusy] = useState(false);
+  const fiyatDegisti = num(fiyat) > 0 && num(fiyat) !== p.cur;
+  const fiyatKaydet = async () => {
+    if (!fiyatDegisti || busy) return;
+    setBusy(true);
+    try { await api.put("prices", { symbol: p.sym, asset_type: p.type, price: num(fiyat), currency: p.currency }); reload(); }
+    finally { setBusy(false); }
+  };
+  /* Para piyasası (nakit sayılan) fonlar — Nakit Akışı takviminde nakit gibi değerlenir */
+  const cashFunds = new Set((data.settings.cash_funds || "").split(",").map((s) => s.trim()).filter(Boolean));
+  const nakitSayilir = cashFunds.has(p.sym);
+  const nakitSay = async () => {
+    const next = new Set(cashFunds);
+    next.has(p.sym) ? next.delete(p.sym) : next.add(p.sym);
+    await api.put("settings", { cash_funds: [...next].join(",") });
+    reload();
+  };
+  /* Temettü geri yatırımı (Faz 36) — işaret POZİSYONA aittir, anında kaydedilir */
+  const dripAcik = dripAcikMi(data.settings, p.type, p.sym);
+  const drip = async () => { await api.put("settings", { drip_symbols: dripToggle(data.settings, p.type, p.sym) }); reload(); };
+  const yukari = (p.unreal ?? 0) >= 0;
+  const renk = TYPE_COLORS[p.type] || T.mut;
 
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <input key={`${p.sym}-${p.cur}`} style={{ ...css.input, width: 130, padding: "6px 8px", fontSize: 13 }} inputMode="decimal"
-          placeholder={`fiyat ${p.currency === "USD" ? "$" : "TL"}`} defaultValue={p.cur ?? ""}
-          onClick={(e) => e.stopPropagation()}
-          onBlur={async (e) => {
-            const v = num(e.target.value);
-            if (v > 0 && v !== p.cur) { await api.put("prices", { symbol: p.sym, asset_type: p.type, price: v, currency: p.currency }); reload(); }
-          }} />
-        <span style={{
-          fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 999, background: T.panel2,
-          color: p.source === "manual" ? T.acc : T.mut,
-        }}>{p.source === "manual" ? "elle" : "oto"}</span>
-        {p.cur != null && p.source === "manual" && (
-          <button style={{ ...css.ghost, fontSize: 11.5, padding: "5px 10px" }} title="Elle girdiğin fiyatı sil, otomatiğe dön"
-            onClick={async () => { await api.delPrice(p.type, p.sym); reload(); }}>otomatiğe dön</button>
+  return (
+    <Modal title={p.sym} onClose={onClose}>
+      <div style={{ display: "grid", gap: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ width: 44, height: 44, borderRadius: 12, background: T.panel2, color: renk, fontWeight: 800, fontSize: 15, display: "grid", placeItems: "center", flexShrink: 0 }}>
+            {p.sym.slice(0, 2).toLocaleUpperCase("tr")}
+          </span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, color: T.mut }}>
+              <span style={{ color: renk, fontWeight: 600 }}>{p.type}</span> · {adetYaz(p.qty)} adet
+              {agirlik != null && agirlik > 0 && <> · portföyün %{(agirlik * 100).toFixed(1).replace(".", ",")}'i</>}
+            </div>
+            <div style={{ ...css.mono, fontSize: 28, fontWeight: 600 }}>
+              {p.value != null ? fmtMoney(Math.round(p.value), p.currency) : "—"}
+              {p.currency === "USD" && p.value != null && ccy === "TRY" && (
+                <span style={{ fontSize: 13, color: T.mut, fontWeight: 400 }}> ≈ {fmtMoney(Math.round(convert(p.value, "USD", "TRY", rates)), "TRY")}</span>
+              )}
+            </div>
+          </div>
+        </div>
+        {(p.unreal != null || p.realized !== 0) && (
+          /* Etiketler düz yazı, yalnız rakamlar mono: hepsi mono olunca satır 390px'te "gerçekleşen +"
+             ile rakamın arasından kırılıyordu. */
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 14px", fontSize: 13.5, color: T.mut, marginTop: -6 }}>
+            {p.unreal != null && (
+              <span style={{ whiteSpace: "nowrap" }}>açık K/Z{" "}
+                <span style={{ ...css.mono, color: yukari ? T.pos : T.neg }}>
+                  {yukari ? "+" : ""}{fmtMoney(Math.round(p.unreal), p.currency)}{p.unrealPct != null && <> ({fmtPct(p.unrealPct)})</>}
+                </span>
+              </span>
+            )}
+            {p.realized !== 0 && (
+              <span style={{ whiteSpace: "nowrap" }}>gerçekleşen{" "}
+                <span style={{ ...css.mono, color: p.realized > 0 ? T.pos : T.neg }}>{p.realized > 0 ? "+" : ""}{fmtMoney(Math.round(p.realized), p.currency)}</span>
+              </span>
+            )}
+          </div>
         )}
-        {p.cur == null && <span style={{ fontSize: 11.5, color: T.neg }}>fiyat çekilemedi — elle gir</span>}
+
+        <Satirlar>
+          <div style={{ ...satir, borderTop: "none" }}>
+            <span style={{ color: T.mut, flex: 1 }}>Ortalama maliyet</span>
+            <span style={{ ...css.mono, fontWeight: 500 }}>{fmtMoney(p.avg, p.currency, true)}</span>
+          </div>
+          <div style={satir}>
+            <span style={{ color: T.mut, flex: 1 }}>Güncel fiyat</span>
+            {p.cur != null
+              ? <span style={{ textAlign: "right" }}>
+                <span style={{ ...css.mono, fontWeight: 500 }}>{fmtMoney(p.cur, p.currency, true)}</span>
+                {yas && (
+                  /* Kesin an tooltip'te: kullanıcının sorusu "hangi saniyede" değil "ne kadar eski" */
+                  <span title={`${p.updated}${p.source === "manual" ? "" : ` — ${FIYAT_YASI_IPUCU}`}`} style={{ display: "block", fontSize: 12, color: T.mut }}>
+                    {yas} {p.source === "manual" ? "elle girildi" : "çekildi"}
+                  </span>
+                )}
+              </span>
+              : <span style={{ color: T.neg, fontSize: 14 }}>fiyat çekilemedi — aşağıya elle gir</span>}
+          </div>
+          {/* Elle fiyat: kullanıcıya özel (user_prices) — başkasının değerlemesini etkilemez */}
+          <div style={{ ...satir, gap: 8 }}>
+            <span style={{ color: T.mut, flex: 1 }}>Elle fiyat</span>
+            <input inputMode="decimal" aria-label="Elle fiyat" value={fiyat} onChange={(e) => setFiyat(e.target.value)}
+              placeholder={p.currency === "USD" ? "$" : "₺"}
+              style={{ width: 110, textAlign: "right", border: `1px solid ${T.line}`, borderRadius: 9, padding: "6px 10px", fontFamily: T.mono, fontSize: 15, background: T.panel, color: T.text, minHeight: 0 }} />
+            {fiyatDegisti && (
+              <button onClick={fiyatKaydet} disabled={busy} style={{ height: 34, minHeight: 0, padding: "0 12px", border: "none", borderRadius: 9, background: T.acc, color: T.accInk, fontFamily: T.disp, fontSize: 13.5, fontWeight: 600, cursor: "pointer" }}>Kaydet</button>
+            )}
+          </div>
+          {p.source === "manual" && p.cur != null && (
+            <div style={{ ...satir, justifyContent: "flex-end" }}>
+              <button title="Elle girdiğin fiyatı sil, otomatiğe dön" onClick={async () => { await api.delPrice(p.type, p.sym); reload(); }}
+                style={{ background: "none", border: "none", color: T.acc, fontFamily: T.disp, fontSize: 14, fontWeight: 600, cursor: "pointer", padding: "8px 0" }}>Otomatik fiyata dön</button>
+            </div>
+          )}
+        </Satirlar>
         {p.type === "FON" && (
-          <button
-            title={nakitSayilir ? "Nakit sayımından çıkar" : "Para piyasası fonu — nakit gibi say (takvimde etkin nakite eklenir)"}
-            onClick={onNakitSay}
-            style={{
-              fontSize: 11.5, fontWeight: 600, padding: "5px 10px", borderRadius: 999, cursor: "pointer",
-              border: `1px solid ${nakitSayilir ? T.pos : T.line}`,
-              background: nakitSayilir ? T.posSoft : "transparent",
-              color: nakitSayilir ? T.pos : T.mut,
-            }}>{nakitSayilir ? "✓ nakit sayılır" : "nakit say"}</button>
+          /* Fon fiyatı NAV'dır: gün içinde değişmez — yaşı tek başına görünce "bayat" sanılır */
+          <div style={{ fontSize: 12.5, color: T.mut, marginTop: -6 }}>Fon fiyatı (NAV) günde bir hesaplanır.</div>
         )}
-        {onDrip && (p.type === "BIST" || p.type === "ETF") && (
-          /* "Nakit say" ile AYNI dilbilgisi: pozisyona yapıştırılmış, tek tıkla dönen bir
-             opt-in işaret. Fon olmayan varlıkta temettü kavramı yok, o yüzden yalnız
-             hisse/ETF'de çıkar — her satırda duran ölü bir düğme gürültüdür. */
-          <button
-            title={dripAcik
-              ? "Temettü geri yatırımını kapat"
-              : "Temettü geldiğinde aynı hisseden alım da önerilsin (kayıt yine onayınla yazılır)"}
-            onClick={onDrip}
-            style={{
-              fontSize: 11.5, fontWeight: 600, padding: "5px 10px", borderRadius: 999, cursor: "pointer",
-              border: `1px solid ${dripAcik ? T.acc : T.line}`,
-              background: dripAcik ? T.accSoft : "transparent",
-              color: dripAcik ? T.acc : T.mut,
-            }}>{dripAcik ? "✓ temettüyü geri yatır" : "temettüyü geri yatır"}</button>
+
+        {p.type === "FON" && (
+          <Anahtar etiket="Nakit say" acik={nakitSayilir} onChange={nakitSay}
+            alt="para piyasası fonu: takvimde etkin nakde katılır, ödeme öncesi 'fon boz' önerisi devreye girer" />
         )}
+        {(p.type === "BIST" || p.type === "ETF") && (
+          <Anahtar etiket="Temettüyü geri yatır" acik={dripAcik} onChange={drip}
+            alt={dripAcik ? `${p.sym} temettüsü gelince alım da önerilir` : "temettü geldiğinde yalnız gelir olarak yazılır"} />
+        )}
+
         {onSymbol && (
-          <button style={{ ...css.ghost, fontSize: 11.5, padding: "5px 10px" }}
-            onClick={() => onSymbol(p.sym)}>hareketlerini gör</button>
+          <button onClick={() => { onSymbol(p.sym); onClose(); }} style={{
+            height: 46, borderRadius: 12, border: `1px solid ${T.line}`, background: T.panel, color: T.text,
+            fontFamily: T.disp, fontSize: 15, fontWeight: 600, cursor: "pointer",
+          }}>Hareketlerini gör</button>
         )}
       </div>
-    </div>
+    </Modal>
   );
 }
