@@ -402,6 +402,11 @@ export default function App() {
         .ozet-kutu{transition:border-color .15s}
         .ozet-kutu:hover{border-color:${T.mut3}!important}
         .kur-toggle{display:none!important}
+        /* Hesaplar: masaüstünde iki sütun (hesaplar | virman + vadeli), telefonda tek */
+        .hesap-ust{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,420px);gap:16px;align-items:start}
+        /* Dokunulabilir liste satırı (grup 3 — satırda ✎ ✕ yok, satırın tamamı düzenlemeyi açar) */
+        .liste-satir{transition:background .12s}
+        .liste-satir:hover{background:${T.panel3}!important}
         /* Form alt çubuğu (forms/parcalar.tsx FormAlt): modal kutusunun dibine yapışık. Kutu
            padding'i 22px — çubuk kenara kadar uzansın diye negatif kenar boşluğu. */
         .form-alt{position:sticky;bottom:-22px;margin:18px -22px -22px;padding:12px 22px 18px;background:${T.panel};border-top:1px solid ${T.line2};display:grid;gap:10px;z-index:2}
@@ -412,7 +417,7 @@ export default function App() {
         /* İçe aktarma önizlemesinin eylem çubuğu: liste kayarken altta yapışık durur */
         .ice-eylem{position:sticky;bottom:12px}
         @media (max-width:900px){
-          .grid2,.grid3,.ozet-ust,.ozet-alt,.ozet-bek{grid-template-columns:1fr}
+          .grid2,.grid3,.ozet-ust,.ozet-alt,.ozet-bek,.hesap-ust{grid-template-columns:1fr}
           /* Kutular mobilde 2×2 kalır: tam genişlikte dört kart ~600px yiyordu */
           .ozet-kpi{gap:10px}
           .ozet-kutu{padding:13px 14px!important;border-radius:14px!important}

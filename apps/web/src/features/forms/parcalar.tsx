@@ -57,12 +57,15 @@ export function Segment<V extends string>({ secenek, deger, sec, kucuk, ad }: {
 /** Büyük tutar. Altındaki biçimli önizleme sessiz yanlış ayrıştırmayı önler ("1.234,56" → ₺1.234,56)
     — eski `AmountField`'ın işi; burada tutar büyük yazıldığı için yalnız girdi rakamdan farklı
     okunabilecekse (ayırıcı varsa) ya da geçersizse çıkar. */
-export function TutarGirdisi({ value, onChange, renk, ccy = "TRY", inputRef, autoFocus, etiket }: {
+export function TutarGirdisi({ value, onChange, renk, ccy = "TRY", inputRef, autoFocus, etiket, serbest }: {
   value: string; onChange: (v: string) => void; renk?: string; ccy?: Currency;
   inputRef?: React.Ref<HTMLInputElement>; autoFocus?: boolean; etiket?: string;
+  /** 0 ve eksi de geçerli (açılış bakiyesi, mutabakatta gerçek bakiye: boş cüzdan, KMH) — `AmountField sign="serbest"` */
+  serbest?: boolean;
 }) {
   const v = value.trim();
-  const ok = num(value) > 0;
+  /* `num` çözemediğinde 0 döner → serbest modda "abc" ile "0" ayırt edilemez; biçime de bakılır */
+  const ok = serbest ? /^-?\s*[\d.,]+$/.test(v) : num(value) > 0;
   return (
     <div>
       {etiket && <div style={{ fontSize: 13, color: T.mut, marginBottom: 2 }}>{etiket}</div>}
