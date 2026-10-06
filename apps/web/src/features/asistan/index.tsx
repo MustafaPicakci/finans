@@ -46,12 +46,50 @@ export function clearChat() {
   try { localStorage.removeItem(ESKI_KEY); localStorage.removeItem(ESKI_SON_KEY); } catch { /* yoksay */ }
 }
 
+/* Örnekler kullanıcının gerçek kullanımından (yeniden tasarım, grup 7): kısa harcama cümlesi en üstte,
+   bir alım-satım, bir ekstre ödemesi ve bir SORU — asistan soru da cevaplıyor (Faz 35). */
 const ORNEKLER = [
+  "akbank 400 tl harcama",
   "11 temmuzda 12,71 TL'den 20 adet ASELS aldım",
-  "TP2 fonundan 2 TL'den 20.000 TL'lik sattım, para Garanti hesabıma geçti",
   "Akbank kartının ekstresini ödedim",
-  "Dün markete 850 TL harcadım, kartla",
+  "bu ay markete ne kadar harcadım?",
 ];
+
+/** Telefon genişliği mi (App.tsx'teki 900px kırılımıyla aynı) — masaüstünde liste solda hep açık */
+function useDar() {
+  const sorgu = "(max-width: 900px)";
+  const [dar, setDar] = useState(() => typeof window !== "undefined" && window.matchMedia(sorgu).matches);
+  useEffect(() => {
+    const m = window.matchMedia(sorgu);
+    const f = () => setDar(m.matches);
+    m.addEventListener("change", f);
+    return () => m.removeEventListener("change", f);
+  }, []);
+  return dar;
+}
+
+/** Onay kartı satırının tür rozeti — aracın adından (tools.ts); bilinmeyen araç rozetsiz kalır */
+function aracTuru(tool: string): { ad: string; renk: string } | null {
+  if (tool.endsWith("_sil")) return { ad: "Silme", renk: T.neg };
+  if (tool.endsWith("_duzenle")) return { ad: "Düzenleme", renk: T.warn };
+  if (tool.startsWith("kart_harcamasi")) return { ad: "Kart", renk: "var(--cat-8)" };
+  if (tool.startsWith("islem")) return { ad: "Gelir/gider", renk: T.text };
+  if (tool.startsWith("portfoy_islemi")) return { ad: "Portföy", renk: T.acc };
+  if (tool.startsWith("virman")) return { ad: "Virman", renk: "var(--cat-3)" };
+  if (tool === "ekstre_ode") return { ad: "Ekstre", renk: "var(--cat-8)" };
+  if (tool.startsWith("duzenli_kalem")) return { ad: "Düzenli", renk: T.mut };
+  if (tool.startsWith("plan_kalemi")) return { ad: "Plan", renk: T.mut };
+  if (tool.startsWith("kredi")) return { ad: "Kredi", renk: T.mut };
+  if (tool.startsWith("mevduat")) return { ad: "Mevduat", renk: T.mut };
+  if (tool.startsWith("kart_ekle")) return { ad: "Yeni kart", renk: T.mut };
+  if (tool.startsWith("hesap")) return { ad: "Hesap", renk: T.mut };
+  return null;
+}
+/** Özet metnindeki tutarları kalın + mono yazar ("1.250,00 ₺", "₺480") — onayda göz önce rakama gitmeli */
+function tutarVurgula(metin: string): React.ReactNode {
+  const parca = metin.split(/((?:₺\s?)?\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?\s?(?:₺|TL)|₺\s?\d[\d.,]*)/g);
+  return parca.map((p, i) => (i % 2 === 1 ? <b key={i} style={{ fontFamily: T.mono, fontWeight: 600 }}>{p}</b> : p));
+}
 
 export function Asistan({ data, reload, initialText, onConsumed }: {
   /** E2EE aşama 4: ajan döngüsü tarayıcıda koşar, bağlamı ve okuma araçlarını bu veriden kurar. */
@@ -73,6 +111,9 @@ export function Asistan({ data, reload, initialText, onConsumed }: {
   /** Onay kartından ✕ ile çıkarılan satırların sıra numaraları — sunucuya `skip` olarak gider */
   const [cikarilan, setCikarilan] = useState<number[]>([]);
   const [adDuzenle, setAdDuzenle] = useState(false);
+  /** "↩ N geri alınabilir işlem" çipinin açılır listesi */
+  const [geriAcik, setGeriAcik] = useState(false);
+  const dar = useDar();
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -259,243 +300,247 @@ export function Asistan({ data, reload, initialText, onConsumed }: {
     );
   }
 
-  if (listeAcik) {
-    return (
-      <SohbetListesi
-        liste={liste} dahaVar={dahaVar} acikId={convId} acikVar={!!sohbet}
-        onAc={async (id) => { setListeAcik(false); await sohbetYukle(id); }}
-        onDaha={() => { const son = liste[liste.length - 1]; if (son) listeYukle({ at: son.at, id: son.id }); }}
-        onSil={sohbetSil}
-        onKapat={() => setListeAcik(false)}
-        onYeni={yeniSohbet}
-      />
-    );
-  }
+  const listeElemani = (
+    <SohbetListesi
+      liste={liste} dahaVar={dahaVar} acikId={convId} gomulu={!dar}
+      onAc={async (id) => { setListeAcik(false); await sohbetYukle(id); }}
+      onDaha={() => { const son = liste[liste.length - 1]; if (son) listeYukle({ at: son.at, id: son.id }); }}
+      onYeni={yeniSohbet}
+    />
+  );
+  /* Telefonda iki seviye (liste ↔ sohbet); masaüstünde liste solda hep açık (yeniden tasarım, grup 7) */
+  if (dar && listeAcik) return <div className="asistan-kabuk">{listeElemani}</div>;
 
   const pending = sohbet?.pending ?? null;
   const geriAlinabilir = sohbet?.plans.filter((p) => p.undoable > 0) ?? [];
   const gosterilen = pending ? pending.actions.map((a, i) => ({ a, i })).filter(({ i }) => !cikarilan.includes(i)) : [];
   const bos = !sohbet || sohbet.messages.length === 0;
+  const ikonDugme: React.CSSProperties = {
+    width: 36, height: 36, minHeight: 0, borderRadius: 10, border: "none", background: T.panel2, color: T.text,
+    display: "grid", placeItems: "center", cursor: "pointer", flexShrink: 0, padding: 0,
+  };
 
   return (
-    <div style={{ ...css.card, display: "flex", flexDirection: "column", gap: 14, minHeight: 480 }}>
-      {/* Başlık TEK SATIR ve bu ölçülerek karara bağlandı: metinli düğmeler + model rozeti
-          390px'te dört satıra sarıyor, ~300px yiyor ve sohbeti ekranın altına itiyordu
-          (Faz 32'de Hareketler'de düzeltilen kusurun aynısı). Düğmeler ikona indi
-          (title + aria-label taşıyor), model rozeti ise aşağıdaki gizlilik satırına
-          taşındı — zaten "seçili model sağlayıcısı" cümlesinin yanına ait. */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <button onClick={() => setListeAcik(true)} title="Sohbetler" aria-label="Sohbetler"
-          style={{ ...css.ghost, padding: "8px 10px", flexShrink: 0, display: "flex", alignItems: "center" }}><ListIcon /></button>
-        {/* Başlık tıklanınca alana döner. Portföy grubu adı (GrupBasligi) her zaman görünür
-            bir alan olarak durur ve orada doğrudur — grup adları kısadır. Burada başlık
-            OTOMATİK türetilmiş bir cümledir ve neredeyse her zaman kırpılır: `input`
-            `text-overflow: ellipsis` yapamadığı için kırpma sessizleşir, kullanıcı adın
-            devamı olduğunu göremez. Bu yüzden okuma hâli metin, yazma hâli alandır. */}
-        {sohbet ? (adDuzenle ? (
-          <input
-            autoFocus defaultValue={sohbet.title} aria-label="Sohbet adı" maxLength={120}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") e.currentTarget.blur();
-              if (e.key === "Escape") { e.currentTarget.value = sohbet.title; e.currentTarget.blur(); }
-            }}
-            onBlur={(e) => {
-              setAdDuzenle(false);
-              const v = e.target.value.replace(/\s+/g, " ").trim();
-              if (v && v !== sohbet.title) adlandir(v); // boş bırakmak adı silmez: eskisi kalır
-            }}
-            style={{ ...css.input, fontFamily: T.disp, fontWeight: 700, fontSize: 15, padding: "4px 7px", flex: 1, minWidth: 0 }} />
-        ) : (
-          <button onClick={() => setAdDuzenle(true)} title="Sohbet adını düzenle" aria-label={`Sohbet adını düzenle: ${sohbet.title}`}
-            style={{
-              flex: 1, minWidth: 0, background: "none", border: "1px solid transparent", padding: "4px 7px",
-              font: "inherit", fontWeight: 700, fontSize: 15, color: T.text, cursor: "text", textAlign: "left",
-              display: "flex", alignItems: "center", gap: 6,
-            }}>
-            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sohbet.title}</span>
-            {/* Kalem, başlığın HEMEN yanında ve aynı düğmenin içinde: sağa yaslanmış ayrı bir
-                simge "başka bir eylem" gibi okunurdu, oysa söylediği şey "bu YAZI düzenlenir".
-                Buna ihtiyaç ölçüldü — tek ipucu fare tooltip'iydi, yani telefonda hiç yoktu. */}
-            <span aria-hidden="true" style={{ flexShrink: 0, color: T.mut3, display: "flex" }}><KalemIcon /></span>
-          </button>
-        )) : (
-          <div style={{ flex: 1, minWidth: 0, fontWeight: 700, fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            Ne yaptın, anlat
-          </div>
-        )}
-        {!bos && !busy && (
-          <button onClick={yeniSohbet} title="Yeni sohbet başlat (bu sohbet listede kalır)" aria-label="Yeni sohbet"
-            style={{ ...css.ghost, padding: "8px 10px", flexShrink: 0, display: "flex", alignItems: "center" }}><PlusIcon /></button>
-        )}
-      </div>
-
-      {bos && !bekleyen && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ fontSize: 13.5, color: T.mut, lineHeight: 1.6 }}>
-            İşlemlerini cümleyle anlat; asistan hangi kaydın oluşacağını çıkarır ve <b>onayına sunar</b>. Onaylamadan hiçbir şey yazılmaz.
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {ORNEKLER.map((o) => (
-              <button key={o} onClick={() => send(o)} style={{ ...css.ghost, fontSize: 12.5, textAlign: "left" }}>{o}</button>
-            ))}
-          </div>
+    <div className="asistan-kabuk">
+      {!dar && listeElemani}
+      <section style={{ ...css.card, padding: "10px 16px 10px", display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, height: "100%", boxSizing: "border-box" }}>
+        {/* Başlık TEK SATIR (ölçülerek: metinli düğmeler 390px'te dört satıra sarıyordu). Sil burada
+            — liste satırında ✕ yok (Faz 24 kural 1'in yeni hâli). */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, paddingBottom: 8, borderBottom: `1px solid ${T.line2}` }}>
+          {dar && (
+            <button type="button" onClick={() => setListeAcik(true)} title="Sohbetler" aria-label="Sohbetler" style={ikonDugme}><ListIcon /></button>
+          )}
+          {/* Başlık tıklanınca alana döner: otomatik başlık neredeyse hep kırpılır, `input`
+              ellipsis yapamadığı için okuma hâli metin, yazma hâli alandır. */}
+          {sohbet ? (adDuzenle ? (
+            <input
+              autoFocus defaultValue={sohbet.title} aria-label="Sohbet adı" maxLength={120}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+                if (e.key === "Escape") { e.currentTarget.value = sohbet.title; e.currentTarget.blur(); }
+              }}
+              onBlur={(e) => {
+                setAdDuzenle(false);
+                const v = e.target.value.replace(/\s+/g, " ").trim();
+                if (v && v !== sohbet.title) adlandir(v); // boş bırakmak adı silmez: eskisi kalır
+              }}
+              style={{ ...css.input, fontFamily: T.disp, fontWeight: 700, fontSize: 16, padding: "4px 7px", flex: 1, minWidth: 0 }} />
+          ) : (
+            <button onClick={() => setAdDuzenle(true)} title="Sohbet adını düzenle" aria-label={`Sohbet adını düzenle: ${sohbet.title}`}
+              style={{
+                flex: 1, minWidth: 0, background: "none", border: "1px solid transparent", padding: "4px 4px", minHeight: 0,
+                font: "inherit", fontWeight: 700, fontSize: 16, color: T.text, cursor: "text", textAlign: "left",
+                display: "flex", alignItems: "center", gap: 6,
+              }}>
+              <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sohbet.title}</span>
+              {/* Kalem başlığın HEMEN yanında: telefonda tek ipucu bu (tooltip yok) */}
+              <span aria-hidden="true" style={{ flexShrink: 0, color: T.mut3, display: "flex" }}><KalemIcon /></span>
+            </button>
+          )) : (
+            <div style={{ flex: 1, minWidth: 0, fontWeight: 700, fontSize: 16, padding: "4px 4px" }}>Yeni sohbet</div>
+          )}
+          {sohbet && convId != null && !busy && (
+            <SilDugmesi className="" ikon={<CopIcon />} title="Sohbeti sil" ad={sohbet.title}
+              style={{ ...ikonDugme, color: T.mut }}
+              sonuc={geriAlinabilir.length > 0
+                ? `Bu sohbetteki ${geriAlinabilir.length} işlem bundan sonra buradan GERİ ALINAMAZ. Kayıtların kendisi silinmez — ilgili sekmesinden silebilirsin.`
+                : "Yalnız yazışma silinir; asistanın oluşturduğu kayıtlar defterde kalır."}
+              onSil={() => sohbetSil(convId)} />
+          )}
+          {!bos && !busy && (
+            <button onClick={yeniSohbet} title="Yeni sohbet başlat (bu sohbet listede kalır)" aria-label="Yeni sohbet" style={ikonDugme}><PlusIcon /></button>
+          )}
         </div>
-      )}
 
-      {/* Sohbet gövdesi: mobilde kendi içinde kayar (App.tsx'teki .asistan-govde). Sayfa
-          akışında büyüseydi uzun bir konuşmadan sonra yazma kutusu ekranın metrelerce
-          altında kalıyordu — kullanıcı "chat alanı çok küçük" derken gördüğü buydu. */}
-      <div className="asistan-govde" style={{ display: "flex", flexDirection: "column", gap: 10, flex: 1 }}>
-        {sohbet?.truncated && (
-          <div style={{ fontSize: 11.5, color: T.mut3, textAlign: "center" }}>
-            Bu sohbetin yalnız son {sohbet.messages.length} mesajı gösteriliyor.
-          </div>
-        )}
-        {sohbet?.messages.map((m) => {
-          const durum = m.planId ? sohbet.plans.find((p) => p.planId === m.planId) : undefined;
-          return (
-            <div key={m.id} style={{ alignSelf: m.role === "user" ? "flex-end" : "flex-start", maxWidth: "86%", display: "flex", flexDirection: "column", gap: 5 }}>
-              <div style={{
-                background: m.role === "user" ? T.accSoft : T.panel2, color: m.role === "user" ? T.acc : T.text,
-                border: `1px solid ${T.line}`, borderRadius: 14, padding: "10px 13px", fontSize: 13.5, lineHeight: 1.55, whiteSpace: "pre-wrap",
-              }}>{m.content}</div>
-              {/* Geri al, olayın geçtiği yerde: eskiden sohbetin dışında ayrı bir listedeydi
-                  ve yalnız son 5 planı gösteriyordu — eski bir planı geri almak imkânsızdı. */}
-              {durum && (
-                <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, color: T.mut3 }}>
-                  {durum.undoable > 0 ? (
-                    <button onClick={() => undoPlan(m.planId!)} disabled={busy}
-                      style={{ ...css.ghost, padding: "4px 9px", fontSize: 11.5 }}>↩ Geri al</button>
-                  ) : <span>geri alındı</span>}
+        {/* Gövde kendi içinde kayar; yazma kutusu altta sabit kalır (mesajlaşma uygulaması gibi) */}
+        <div className="asistan-govde" style={{ flex: 1, minHeight: 0, overflowY: "auto", overscrollBehavior: "contain", display: "flex", flexDirection: "column", gap: 10, padding: "12px 0" }}>
+          {/* Geri alınabilir işlemler: eskiden yazma kutusunun altında ayrı bir bloktu; şimdi
+              sohbetin tepesinde tek çip. Panelin işi aynı — HÂLÂ geri alınabilenlerin listesi
+              (geri alınınca satır düşer); mesaj altındaki "geri al" ise olayın kaydında kalır. */}
+          {geriAlinabilir.length > 0 && (
+            <div style={{ alignSelf: geriAcik ? "stretch" : "center", display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 6, minWidth: 0, flexShrink: 0 }}>
+              <button type="button" onClick={() => setGeriAcik((v) => !v)} aria-expanded={geriAcik} style={{
+                justifySelf: "center", display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", minHeight: 0,
+                borderRadius: 16, border: "none", background: T.accSoft, color: T.acc, fontFamily: T.disp, fontSize: 13, fontWeight: 600, cursor: "pointer",
+              }}>↩ {geriAlinabilir.length} geri alınabilir işlem {geriAcik ? "▴" : "▾"}</button>
+              {geriAcik && (
+                <div style={{ border: `1px solid ${T.line}`, borderRadius: 12, padding: "4px 12px", minWidth: 0 }}>
+                  {geriAlinabilir.map((p, i) => (
+                    <div key={p.planId} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderTop: i === 0 ? "none" : `1px solid ${T.line2}`, fontSize: 13.5 }}>
+                      <span style={{ fontFamily: T.mono, fontSize: 12, color: T.mut, flexShrink: 0 }}>{shortTime(p.at)}</span>
+                      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {p.summary}{p.total > 1 ? ` (+${p.total - 1} işlem)` : ""}
+                      </span>
+                      <button onClick={() => undoPlan(p.planId)} disabled={busy} style={{ background: "none", border: "none", color: T.acc, fontFamily: T.disp, fontSize: 13.5, fontWeight: 600, cursor: "pointer", padding: "4px 0", minHeight: 0, flexShrink: 0 }}>Geri al</button>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
-          );
-        })}
-        {bekleyen && (
-          <div style={{
-            alignSelf: "flex-end", maxWidth: "86%", background: T.accSoft, color: T.acc, opacity: 0.7,
-            border: `1px solid ${T.line}`, borderRadius: 14, padding: "10px 13px", fontSize: 13.5, lineHeight: 1.55, whiteSpace: "pre-wrap",
-          }}>{bekleyen}</div>
-        )}
-        {busy && <div style={{ fontSize: 12.5, color: T.mut3 }}>düşünüyor…</div>}
-        <div ref={endRef} />
-      </div>
+          )}
 
-      {/* Onay kartı sohbetin DIŞINDA: gövde mobilde kendi içinde kaydığından kart oraya
-          konsaydı 320px'lik pencerede kırpılır, "Onayla" düğmesi kaydırmadan görünmezdi.
-          Görülmeden verilen onay, onay değildir (Faz 24, kural 4 ile aynı gerekçe).
-          Kart artık SUNUCUDAN gelir: sayfa yenilense ya da başka cihazdan bakılsa da
-          onayını bekleyen plan yerinde durur (eskiden sekme belleğindeydi, uçuyordu). */}
-      {pending && gosterilen.length > 0 && (
-        <div style={{ border: `1px solid ${T.acc}`, borderRadius: 14, padding: 14, background: T.panel2 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: T.acc, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 10 }}>
-            Onayını bekleyen {gosterilen.length} işlem
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-            {gosterilen.map(({ a, i }) => (
-              <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13.2, lineHeight: 1.5 }}>
-                <span style={{ color: T.mut3, fontFamily: T.mono, fontSize: 11.5, paddingTop: 2 }}>{i + 1}.</span>
-                <span style={{ flex: 1 }}>{a.summary}</span>
-                <button title="Bu işlemi çıkar" onClick={() => setCikarilan((cs) => [...cs, i])}
-                  style={{ background: "none", border: "none", color: T.mut3, cursor: "pointer", fontSize: 15, lineHeight: 1 }}>×</button>
+          {bos && !bekleyen && (
+            <div style={{ marginTop: "auto", display: "grid", gap: 14 }}>
+              <div style={{ textAlign: "center", padding: "0 8px" }}>
+                <div style={{ fontWeight: 700, fontSize: 19 }}>Ne yaptın, anlat</div>
+                <div style={{ fontSize: 14, color: T.mut, lineHeight: 1.5, marginTop: 4 }}>
+                  Harcamanı, gelirini, alım-satımını bir cümleyle yaz ya da söyle. Hangi kaydı açacağımı gösteririm; <b style={{ color: T.text }}>onaylamadan hiçbir şey yazılmaz</b>.
+                </div>
               </div>
-            ))}
-          </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
-            <button onClick={apply} disabled={busy} style={{ ...css.btn, opacity: busy ? 0.6 : 1 }}>Onayla ve uygula</button>
-            <button onClick={() => setCikarilan(pending.actions.map((_, i) => i))} disabled={busy} style={css.ghost}>Vazgeç</button>
-          </div>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 8 }}>
+                {ORNEKLER.map((o) => (
+                  <button key={o} type="button" onClick={() => send(o)} style={{
+                    padding: "9px 14px", minHeight: 0, border: `1px solid ${T.line}`, borderRadius: 18, background: T.panel,
+                    color: T.text, fontFamily: T.disp, fontSize: 14, textAlign: "left", cursor: "pointer",
+                  }}>{o}</button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {!bos && <div style={{ marginTop: "auto" }} />}
+          {sohbet?.truncated && (
+            <div style={{ fontSize: 12, color: T.mut, textAlign: "center" }}>Bu sohbetin yalnız son {sohbet.messages.length} mesajı gösteriliyor.</div>
+          )}
+          {sohbet?.messages.map((m) => {
+            const durum = m.planId ? sohbet.plans.find((p) => p.planId === m.planId) : undefined;
+            const ben = m.role === "user";
+            return (
+              <div key={m.id} style={{ alignSelf: ben ? "flex-end" : "flex-start", maxWidth: "86%", display: "flex", flexDirection: "column", gap: 5, alignItems: ben ? "flex-end" : "flex-start" }}>
+                <div style={{
+                  background: ben ? T.acc : T.panel2, color: ben ? T.accInk : T.text,
+                  borderRadius: ben ? "18px 18px 6px 18px" : "18px 18px 18px 6px", padding: "10px 14px", fontSize: 15, lineHeight: 1.45, whiteSpace: "pre-wrap",
+                }}>{m.content}</div>
+                {/* Geri al, olayın geçtiği yerde (eski planlar da geri alınabilsin) */}
+                {durum && (durum.undoable > 0 ? (
+                  <button onClick={() => undoPlan(m.planId!)} disabled={busy}
+                    style={{ background: "none", border: "none", color: T.acc, fontFamily: T.disp, fontSize: 13.5, fontWeight: 600, cursor: "pointer", padding: "0 4px", minHeight: 0 }}>↩ Geri al</button>
+                ) : <span style={{ fontSize: 12.5, color: T.mut, padding: "0 4px" }}>geri alındı</span>)}
+              </div>
+            );
+          })}
+          {bekleyen && (
+            <div style={{
+              alignSelf: "flex-end", maxWidth: "86%", background: T.acc, color: T.accInk, opacity: 0.7,
+              borderRadius: "18px 18px 6px 18px", padding: "10px 14px", fontSize: 15, lineHeight: 1.45, whiteSpace: "pre-wrap",
+            }}>{bekleyen}</div>
+          )}
+          {busy && <div style={{ fontSize: 13, color: T.mut }}>düşünüyor…</div>}
+          <div ref={endRef} />
         </div>
-      )}
 
-      {err && <div style={{ color: T.neg, fontSize: 13 }}>{err}</div>}
+        {/* Onay kartı gövdenin DIŞINDA: kaydırılan pencerede kırpılsaydı "Onayla" görülmeden
+            basılan bir düğme olurdu (görülmeden verilen onay, onay değildir). */}
+        {pending && gosterilen.length > 0 && (
+          <div style={{ border: `1px solid ${T.line}`, borderRadius: 16, boxShadow: "var(--shadow)", background: T.panel, marginBottom: 10, overflow: "hidden", maxHeight: "45vh", overflowY: "auto" }}>
+            <div style={{ padding: "12px 14px 6px", fontSize: 13, color: T.mut }}>
+              Onayını bekleyen {gosterilen.length} işlem · onaylamadan hiçbir şey yazılmaz
+            </div>
+            {gosterilen.map(({ a, i }) => {
+              const tur = aracTuru(a.tool);
+              return (
+                <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 14px", borderTop: `1px solid ${T.line2}` }}>
+                  {tur && (
+                    <span style={{ fontSize: 11.5, fontWeight: 700, padding: "2px 7px", borderRadius: 6, background: T.panel2, color: tur.renk, flexShrink: 0, marginTop: 2 }}>{tur.ad}</span>
+                  )}
+                  <span style={{ flex: 1, minWidth: 0, fontSize: 14.5, lineHeight: 1.45 }}>{tutarVurgula(a.summary)}</span>
+                  <button type="button" title="Bu işlemi çıkar" aria-label="Bu işlemi çıkar" onClick={() => setCikarilan((cs) => [...cs, i])}
+                    style={{ background: "none", border: "none", color: T.mut, cursor: "pointer", padding: 2, minHeight: 0, flexShrink: 0 }}>
+                    <svg width="13" height="13" viewBox="0 0 12 12" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" /></svg>
+                  </button>
+                </div>
+              );
+            })}
+            <div style={{ display: "flex", gap: 8, padding: "10px 14px 14px" }}>
+              <button onClick={apply} disabled={busy} style={{
+                flex: 1, height: 46, border: "none", borderRadius: 12, background: T.acc, color: T.accInk,
+                fontFamily: T.disp, fontSize: 15, fontWeight: 650, cursor: "pointer", opacity: busy ? 0.6 : 1,
+              }}>Onayla ve uygula</button>
+              <button onClick={() => setCikarilan(pending.actions.map((_, i) => i))} disabled={busy} style={{
+                height: 46, padding: "0 16px", border: `1px solid ${T.line}`, borderRadius: 12, background: T.panel,
+                color: T.text, fontFamily: T.disp, fontSize: 15, fontWeight: 500, cursor: "pointer",
+              }}>Vazgeç</button>
+            </div>
+          </div>
+        )}
 
-      {dict.listening && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: T.mut }}>
-          <span style={{ width: 8, height: 8, borderRadius: 999, background: T.neg, flexShrink: 0, animation: "dictPulse 1.2s ease-in-out infinite" }} />
-          <span style={{ flex: 1, minWidth: 0, fontStyle: dict.interim ? "italic" : "normal", color: dict.interim ? T.mut : T.mut3 }}>
-            {dict.interim || "dinliyor… konuşmayı bitirince mikrofona tekrar bas"}
-          </span>
-        </div>
-      )}
-      {dict.error && <div style={{ color: T.neg, fontSize: 12.5 }}>{dict.error}</div>}
+        {err && <div style={{ color: T.neg, fontSize: 13.5, marginBottom: 8 }}>{err}</div>}
+        {dict.listening && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: T.mut, marginBottom: 6 }}>
+            <span style={{ width: 8, height: 8, borderRadius: 999, background: T.neg, flexShrink: 0, animation: "dictPulse 1.2s ease-in-out infinite" }} />
+            <span style={{ flex: 1, minWidth: 0, fontStyle: dict.interim ? "italic" : "normal" }}>
+              {dict.interim || "dinliyor… konuşmayı bitirince mikrofona tekrar bas"}
+            </span>
+          </div>
+        )}
+        {dict.error && <div style={{ color: T.neg, fontSize: 13, marginBottom: 6 }}>{dict.error}</div>}
 
-      {/* Yazma kutusu tam satır, düğmeler kendi kümesinde: dar ekranda küme alt satıra
-          iner (flex-basis 220px + wrap), böylece kutu 17 karaktere sıkışmaz. */}
-      <form onSubmit={(e) => { e.preventDefault(); dict.stop(); send(input); }}
-        style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
-        <textarea ref={inputRef} value={input} rows={1} onChange={(e) => setInput(e.target.value)} disabled={busy}
-          onKeyDown={(e) => {
-            // Enter gönderir, Shift+Enter satır atlar (mobil klavyede "gönder" tuşu da buraya düşer)
-            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); dict.stop(); send(input); }
-          }}
-          enterKeyHint="send"
-          placeholder={dict.listening ? "konuşabilirsin…" : "Örn: bugün 5.000 TL maaş yattı, Garanti'ye"}
-          style={{
-            ...css.input, fontFamily: T.disp, flex: "1 1 220px", minWidth: 0,
-            resize: "none", overflowY: "auto", lineHeight: 1.5, maxHeight: 132,
-          }} />
-        <div style={{ display: "flex", gap: 8, flexShrink: 0, marginLeft: "auto" }}>
+        {/* Yazma kutusu TEK satır: metin + mikrofon + yuvarlak gönder (eskiden düğmeler ikinci satıra düşüyordu) */}
+        <form onSubmit={(e) => { e.preventDefault(); dict.stop(); send(input); }}
+          style={{ display: "flex", alignItems: "flex-end", gap: 4, padding: "4px 4px 4px 14px", border: `1px solid ${dict.listening ? T.neg : T.line}`, borderRadius: 24, background: T.panel }}>
+          <textarea ref={inputRef} value={input} rows={1} onChange={(e) => setInput(e.target.value)} disabled={busy}
+            onKeyDown={(e) => {
+              // Enter gönderir, Shift+Enter satır atlar (mobil klavyede "gönder" tuşu da buraya düşer)
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); dict.stop(); send(input); }
+            }}
+            enterKeyHint="send" aria-label="Asistana yaz"
+            placeholder={dict.listening ? "konuşabilirsin…" : "örn. akbank 400 tl harcama"}
+            style={{
+              flex: 1, minWidth: 0, border: "none", outline: "none", background: "transparent", resize: "none",
+              fontFamily: T.disp, fontSize: 16, lineHeight: 1.45, color: T.text, padding: "9px 0", minHeight: 0, maxHeight: 132, overflowY: "auto",
+            }} />
           {dict.supported && (
             <button type="button" onClick={() => { dict.toggle(); inputRef.current?.focus(); }} disabled={busy}
               title={dict.listening ? "Dikteyi durdur" : "Sesle yaz"}
               aria-label={dict.listening ? "Dikteyi durdur" : "Sesle yaz"} aria-pressed={dict.listening}
               style={{
-                ...css.ghost, padding: "9px 14px", flexShrink: 0, opacity: busy ? 0.6 : 1,
-                background: dict.listening ? T.negSoft : T.panel2,
-                color: dict.listening ? T.neg : T.mut,
-                borderColor: dict.listening ? T.neg : T.line,
+                width: 40, height: 40, minHeight: 0, borderRadius: 20, border: "none", flexShrink: 0, cursor: "pointer",
+                display: "grid", placeItems: "center", padding: 0,
+                background: dict.listening ? T.negSoft : "transparent", color: dict.listening ? T.neg : T.mut,
               }}><MicIcon stop={dict.listening} /></button>
           )}
-          <button type="submit" disabled={busy || !input.trim()} style={{ ...css.btn, flexShrink: 0, opacity: busy || !input.trim() ? 0.6 : 1 }}>Gönder</button>
-        </div>
-      </form>
+          <button type="submit" disabled={busy || !input.trim()} aria-label="Gönder" title="Gönder" style={{
+            width: 40, height: 40, minHeight: 0, borderRadius: 20, border: "none", flexShrink: 0, cursor: "pointer", padding: 0,
+            display: "grid", placeItems: "center", background: T.acc, color: T.accInk, opacity: busy || !input.trim() ? 0.4 : 1,
+          }}>
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M10 16V4M5 9l5-5 5 5" /></svg>
+          </button>
+        </form>
 
-      {/* ————— Geri alınabilir işlemler —————
-          Sohbetteki sonuç mesajının altında zaten bir "geri al" var ve o, olayın geçtiği
-          yerdedir. Ama uzun bir sohbette "şunu geri alacaktım" derken mesajları taramak
-          gerekiyordu — bulunabilirlik, erişilebilirlikten ayrı bir sorun. Bu panel o işi
-          yapar ve ikisi ÇAKIŞMAZ çünkü işleri farklı: panel HÂLÂ GERİ ALINABİLENLERİN
-          listesidir (geri alınınca satır düşer), sohbet ise ne olduğunun kaydıdır (geri
-          alınmış mesaj "geri alındı" yazmaya devam eder). Yazma kutusunun ALTINDA:
-          üstünde durunca mobilde kutuyu ekrandan aşağı itiyordu. */}
-      {geriAlinabilir.length > 0 && (
-        <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 12, display: "flex", flexDirection: "column", gap: 7 }}>
-          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", color: T.mut3 }}>
-            Geri alınabilir işlemler
-          </div>
-          {geriAlinabilir.map((p) => (
-            <div key={p.planId} className="ui-row" style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 12.5, color: T.mut }}>
-              <span className="row-lead" style={{ fontFamily: T.mono, fontSize: 11, color: T.mut3, flexShrink: 0 }}>{shortTime(p.at)}</span>
-              <span className="row-title" style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {p.summary}{p.total > 1 ? ` (+${p.total - 1} işlem)` : ""}
-              </span>
-              <button className="row-end" onClick={() => undoPlan(p.planId)} disabled={busy}
-                style={{ ...css.ghost, padding: "5px 10px", fontSize: 12, flexShrink: 0 }}>↩ Geri al</button>
-            </div>
-          ))}
+        {/* Gizlilik cümlesi görünür kalır (katlanmaz) ama tek satır; model adı ve yetki
+            açıklaması ⓘ arkasında (Faz 24 kural 3). */}
+        <div style={{ display: "flex", justifyContent: "center", alignItems: "baseline", gap: 6, flexWrap: "wrap", fontSize: 12, color: T.mut, marginTop: 6, textAlign: "center" }}>
+          <span>Mesajların yanıt için model sağlayıcısına gider</span>
+          <Aciklama label="ayrıntı" k="asistan-yetki">
+            Mesajların ve hesap/kart/kategori adların (bakiyelerle birlikte) yanıtı üretmesi için seçili model sağlayıcısına gönderilir
+            {status?.model ? <> (<span style={{ fontFamily: T.mono }}>{status.model}</span>)</> : null}.
+            Asistan senin yetkilerinle çalışır: yalnız kendi verine erişir, hesap silme gibi yıkıcı işlemleri yapamaz.
+            Hiçbir kayıt sen onaylamadan yazılmaz; uyguladıklarını sonuç mesajının altındaki düğmeyle geri alabilirsin.
+            Sohbetlerin hesabında saklanır — telefonda başlattığını bilgisayardan sürdürebilirsin.
+            {dict.supported && " Mikrofon, cihazın/tarayıcının kendi konuşma tanımasını kullanır — ses bu uygulamanın sunucusuna gitmez, yalnız yazıya dökülen metni sen gönderirsin."}
+          </Aciklama>
         </div>
-      )}
-
-      {/* Bilgilendirme mobilde altı satır yer kaplayıp sohbeti yukarı sıkıştırıyordu.
-          Özü (veri sağlayıcıya gider) görünür kalır — gizlilik uyarısı katlanmaz —
-          ayrıntı ⓘ arkasına iner (Faz 24, kural 3). */}
-      <div style={{ fontSize: 11.5, color: T.mut3, lineHeight: 1.5 }}>
-        Mesajların ve hesap/kart/kategori adların (bakiyelerle birlikte) yanıtı üretmesi için seçili model sağlayıcısına gönderilir.
-        {status?.model && (
-          <span style={{ fontFamily: T.mono, border: `1px solid ${T.line}`, borderRadius: 999, padding: "2px 8px", marginLeft: 6, whiteSpace: "nowrap", display: "inline-block" }}>
-            {status.model}
-          </span>
-        )}
-      </div>
-      <Aciklama label="asistan ne yapabilir?" k="asistan-yetki">
-        Asistan senin yetkilerinle çalışır: yalnız kendi verine erişir, hesap silme gibi yıkıcı işlemleri yapamaz.
-        Hiçbir kayıt sen onaylamadan yazılmaz; uyguladıklarını sonuç mesajının altındaki düğmeyle geri alabilirsin.
-        Sohbetlerin hesabında saklanır — telefonda başlattığını bilgisayardan sürdürebilirsin; silmek istediğini
-        Sohbetler listesinden silersin (indirilen veri paketine de dâhildir).
-        {dict.supported && " Mikrofon, cihazın/tarayıcının kendi konuşma tanımasını kullanır — ses bu uygulamanın sunucusuna gitmez, yalnız yazıya dökülen metni sen gönderirsin."}
-      </Aciklama>
+      </section>
     </div>
   );
 }
@@ -505,61 +550,42 @@ export function Asistan({ data, reload, initialText, onConsumed }: {
    kullanıcının kararı "hiçbir şey kendiliğinden silinmesin". Kaç sohbetin gizlendiği
    "Daha eski sohbetler" düğmesiyle açıkça söylenir (bkz. ui/DahaFazla'nın gerekçesi);
    burada dilim istemcide değil sunucuda olduğundan `useSayfalama` kullanılmaz. */
-function SohbetListesi({ liste, dahaVar, acikId, acikVar, onAc, onDaha, onSil, onKapat, onYeni }: {
+function SohbetListesi({ liste, dahaVar, acikId, gomulu, onAc, onDaha, onYeni }: {
   liste: AiKonusma[]; dahaVar: boolean; acikId: number | null;
-  /** açık bir sohbet var mı — yoksa "geri dön" gidilecek yer olmadığından çizilmez */
-  acikVar: boolean;
-  onAc: (id: number) => void; onDaha: () => void; onSil: (id: number) => void;
-  onKapat: () => void; onYeni: () => void;
+  /** masaüstü: sohbetin solunda sabit sütun */
+  gomulu: boolean;
+  onAc: (id: number) => void; onDaha: () => void; onYeni: () => void;
 }) {
+  /* Satırın tamamı sohbeti açar; ✕ satırdan kalktı, silme sohbetin başlığında (Faz 24 kural 1'in yeni hâli). */
   return (
-    <div style={{ ...css.card, display: "flex", flexDirection: "column", gap: 12, minHeight: 480 }}>
-      {/* Liste AÇILIŞ ekranı olduğundan "← Sohbete dön" çoğu zaman gidilecek yeri olmayan
-          bir düğmedir; yalnız açık bir sohbetten gelindiğinde çizilir. */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        {acikVar && (
-          <button onClick={onKapat} title="Açık sohbete dön" aria-label="Açık sohbete dön"
-            style={{ ...css.ghost, padding: "8px 10px", flexShrink: 0, display: "flex", alignItems: "center" }}><GeriIcon /></button>
-        )}
-        <div style={{ flex: 1, minWidth: 0, fontWeight: 700, fontSize: 15 }}>Sohbetler</div>
-        <button onClick={onYeni} style={{ ...css.btn, fontSize: 12.5, padding: "7px 13px", flexShrink: 0 }}>+ Yeni sohbet</button>
+    <div style={{ ...css.card, padding: gomulu ? 12 : "8px 12px", display: "flex", flexDirection: "column", gap: 2, minHeight: 0, height: "100%", boxSizing: "border-box", overflowY: "auto" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: gomulu ? "2px 4px 8px" : "8px 4px 8px" }}>
+        <div style={{ flex: 1, minWidth: 0, fontWeight: 700, fontSize: gomulu ? 16 : 17 }}>Sohbetler</div>
+        <button onClick={onYeni} style={gomulu ? {
+          background: "none", border: "none", color: T.acc, fontFamily: T.disp, fontSize: 14, fontWeight: 600, cursor: "pointer", padding: "4px 0", minHeight: 0,
+        } : {
+          height: 36, minHeight: 0, padding: "0 14px", border: "none", borderRadius: 10, background: T.acc, color: T.accInk,
+          fontFamily: T.disp, fontSize: 14, fontWeight: 600, cursor: "pointer",
+        }}>+ Yeni sohbet</button>
       </div>
 
       {liste.length === 0 ? (
         <Empty>Henüz sohbet yok. Bir cümle yaz, ilk sohbetin burada listelensin.</Empty>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column" }}>
-          {liste.map((k) => (
-            <div key={k.id} className="ui-row" style={{
-              display: "flex", alignItems: "center", gap: 10, padding: "10px 4px",
-              borderBottom: `1px solid ${T.line}`,
-              background: k.id === acikId ? T.accSoft : "transparent", borderRadius: k.id === acikId ? 10 : 0,
-            }}>
-              <button onClick={() => onAc(k.id)} className="row-title" style={{
-                flex: 1, minWidth: 0, background: "none", border: "none", cursor: "pointer",
-                textAlign: "left", padding: 0, font: "inherit", color: T.text,
-              }}>
-                <div style={{ fontSize: 13.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{k.title}</div>
-                <div style={{ fontSize: 11.5, color: T.mut3, marginTop: 2 }}>
-                  {shortTime(k.at)} · {k.messages} mesaj
-                  {k.undoable > 0 && <span style={{ color: T.acc }}> · {k.undoable} geri alınabilir işlem</span>}
-                </div>
-              </button>
-              <SilDugmesi
-                ad={k.title}
-                sonuc={k.undoable > 0
-                  ? `Bu sohbetteki ${k.undoable} işlem bundan sonra buradan GERİ ALINAMAZ. Kayıtların kendisi silinmez — ilgili sekmesinden silebilirsin.`
-                  : "Yalnız yazışma silinir; asistanın oluşturduğu kayıtlar defterde kalır."}
-                onSil={() => onSil(k.id)}
-                title="Sohbeti sil"
-              />
-            </div>
-          ))}
-        </div>
-      )}
+      ) : liste.map((k) => (
+        <button key={k.id} type="button" onClick={() => onAc(k.id)} className="liste-satir" style={{
+          display: "block", width: "100%", textAlign: "left", padding: "10px 12px", borderRadius: 12, border: "none", cursor: "pointer",
+          background: k.id === acikId ? T.accSoft : "transparent", color: T.text, fontFamily: T.disp, minHeight: 0,
+        }}>
+          <span style={{ display: "block", fontSize: 15, fontWeight: k.id === acikId ? 600 : 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{k.title}</span>
+          <span style={{ display: "block", fontSize: 12.5, color: T.mut, marginTop: 2 }}>
+            {shortTime(k.at)} · {k.messages} mesaj
+            {k.undoable > 0 && <span style={{ color: T.acc }}> · {k.undoable} geri alınabilir</span>}
+          </span>
+        </button>
+      ))}
 
       {dahaVar && (
-        <button onClick={onDaha} style={{ ...css.ghost, fontSize: 12.5, alignSelf: "center" }}>Daha eski sohbetler</button>
+        <button onClick={onDaha} style={{ ...css.ghost, fontSize: 13, alignSelf: "center", marginTop: 6 }}>Daha eski sohbetler</button>
       )}
     </div>
   );
@@ -572,10 +598,10 @@ const KalemIcon = () => (
   </svg>
 );
 
-/** Geri ikonu */
-const GeriIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" style={{ display: "block" }}>
-    <path d="M12 4.5 6.5 10l5.5 5.5" />
+/** Çöp kutusu (sohbeti sil) */
+const CopIcon = () => (
+  <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ display: "block" }}>
+    <path d="M4.5 6h11M8 6V4.5h4V6M6 6l.7 9.5h6.6L14 6" />
   </svg>
 );
 

@@ -200,7 +200,8 @@ export const SilDugmesi = ({ ad, sonuc, onSil, title, ikon = "✕", className = 
   sonuc?: React.ReactNode;
   onSil: () => void | Promise<void>;
   title?: string;
-  ikon?: string;
+  /** düğmenin içeriği: "✕", "Sil" ya da bir SVG simgesi */
+  ikon?: React.ReactNode;
   className?: string;
   /** css.del üzerine eklenir (satır içi küçük ✕'ler için) */
   style?: React.CSSProperties;

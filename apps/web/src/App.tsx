@@ -413,6 +413,9 @@ export default function App() {
         .nakit-izgara{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,420px);gap:16px;align-items:start}
         .plan-izgara{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,440px);grid-template-areas:"duzenli tek" "duzenli kredi";grid-template-rows:auto 1fr;gap:16px;align-items:start}
         .kayit-izgara > *, .nakit-izgara > *, .plan-izgara > *{min-width:0}
+        /* Grup 7: Asistan — masaüstünde sohbetler | sohbet, sabit yükseklik (gövde kendi içinde kayar) */
+        .asistan-kabuk{display:grid;grid-template-columns:300px minmax(0,1fr);gap:16px;height:calc(100dvh - 150px);min-height:520px}
+        .asistan-kabuk > *{min-width:0;min-height:0}
         /* Dokunulabilir liste satırı (grup 3 — satırda ✎ ✕ yok, satırın tamamı düzenlemeyi açar) */
         .liste-satir{transition:background .12s}
         .liste-satir:hover{background:${T.panel3}!important}
@@ -489,7 +492,8 @@ export default function App() {
              cümle için sayfayı dibe kaydırmak zorunda kalıyordu. Üst sınır vh ile değil
              min(...) ile: klavye açıkken 48vh hâlâ ekranın yarısını yiyip kutuyu klavyenin
              altına itiyordu. */
-          .asistan-govde{max-height:min(46vh,320px);overflow-y:auto;overscroll-behavior:contain}
+          /* Asistan telefonda ekranı doldurur: üst çubuk + içerik dolgusu + alt menü düşülür */
+          .asistan-kabuk{grid-template-columns:1fr!important;height:calc(100dvh - 186px - env(safe-area-inset-bottom))!important;min-height:420px!important}
           /* Üst çubuk: sekme alt başlığı dar ekranda üç satıra sarıp başlığı ikonlardan
              koparıyordu; başlık tek başına yeterli. */
           .topbar-sub{display:none}
