@@ -6,6 +6,7 @@ import {
 import { api } from "../../api";
 import { T, css, tl } from "../../theme";
 import { Field, AmountField, Row, SilDugmesi, Empty, Aciklama } from "../../ui";
+import { Segment } from "../forms/parcalar";
 import { pushDestekli, buCihaz, bildirimAc } from "../../bildirim";
 
 /* ————— Kurulum sihirbazı —————
@@ -47,12 +48,10 @@ export function Kurulum({ data, days, reload, onBitir }: {
   };
   const git = (n: number) => { setI(n); window.scrollTo({ top: 0 }); };
 
-  return (
-    <div style={{ ...css.card, maxWidth: 720, width: "100%", margin: "0 auto" }}>
+  return (<>
+    <div style={{ ...css.card, maxWidth: 720, width: "100%", margin: "0 auto", boxSizing: "border-box" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-        <span style={{ fontSize: 11.5, color: T.mut, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>
-          Kurulum · {i + 1}/{ADIMLAR.length}
-        </span>
+        <span style={{ fontSize: 13, color: T.mut, whiteSpace: "nowrap" }}>{i + 1} / {ADIMLAR.length}</span>
         {/* ilerleme: adımlar arasında serbest gezinme — sıra bir öneri, zorunluluk değil */}
         <div style={{ display: "flex", gap: 4, flex: 1 }}>
           {ADIMLAR.map((a, n) => (
@@ -62,10 +61,10 @@ export function Kurulum({ data, days, reload, onBitir }: {
             }} />
           ))}
         </div>
-        {!son && <button style={{ ...css.del, fontSize: 12.5, fontFamily: T.disp }} onClick={onBitir}>Sonra</button>}
+        {!son && <button style={{ background: "none", border: "none", padding: "4px 0", minHeight: 0, color: T.mut, fontSize: 13.5, fontFamily: T.disp, cursor: "pointer" }} onClick={onBitir}>Sonra</button>}
       </div>
-      <h2 style={{ margin: "0 0 4px", fontSize: 20, fontFamily: T.disp }}>{adim.baslik}</h2>
-      <div style={{ fontSize: 13.5, color: T.mut, marginBottom: 14 }}>{adim.soru}</div>
+      <h2 style={{ margin: "0 0 4px", fontSize: 21, fontFamily: T.disp }}>{adim.baslik}</h2>
+      <div style={{ fontSize: 14, color: T.mut, lineHeight: 1.45, marginBottom: 14 }}>{adim.soru}</div>
 
       {adim.k === "hesap" && <HesapAdimi data={data} reload={reload} />}
       {adim.k === "gelir" && <KalemAdimi kind="income" data={data} reload={reload} />}
@@ -74,13 +73,18 @@ export function Kurulum({ data, days, reload, onBitir }: {
       {adim.k === "kredi" && <KrediAdimi data={data} reload={reload} />}
       {adim.k === "sonuc" && <Sonuc data={data} days={days} />}
 
-      <div style={{ display: "flex", gap: 8, marginTop: 18, justifyContent: "flex-end" }}>
-        {i > 0 && <button style={css.ghost} onClick={() => git(i - 1)}>Geri</button>}
-        {son
-          ? <button style={css.btn} onClick={onBitir}>Özet'e git</button>
-          : <button style={dolu[adim.k] ? css.btn : css.ghost} onClick={() => git(i + 1)}>{dolu[adim.k] ? "İleri" : "Bu adımı atla"}</button>}
-      </div>
     </div>
+    {/* Eylem çubuğu altta yapışık (telefonda alt menünün üstünde — .ice-eylem): adımın formu uzayınca
+        "İleri" ekranın altında kaybolmasın. Düğme bir sonraki adımın ADINI söyler. */}
+    <div className="ice-eylem" style={{ ...css.card, maxWidth: 720, width: "100%", margin: "0 auto", padding: "10px 12px", display: "flex", gap: 8, zIndex: 5, boxShadow: "var(--shadow)" }}>
+      {i > 0 && <button style={{ ...css.ghost, height: 48 }} onClick={() => git(i - 1)}>Geri</button>}
+      {son
+        ? <button style={{ ...css.btn, flex: 1, height: 48, fontSize: 15.5 }} onClick={onBitir}>Özet'e git</button>
+        : <button style={{ ...(dolu[adim.k] ? css.btn : css.ghost), flex: 1, height: 48, fontSize: 15.5 }} onClick={() => git(i + 1)}>
+          {dolu[adim.k] ? `İleri: ${ADIMLAR[i + 1].baslik}` : "Bu adımı atla"}
+        </button>}
+    </div>
+    </>
   );
 }
 
@@ -102,6 +106,8 @@ const EkleDugmesi = ({ ok, mesgul }: { ok: boolean; mesgul: boolean }) => (
     {mesgul ? "…" : "Ekle"}
   </button>
 );
+/** Ekleme alanı kendi kutusunda (yeniden tasarım, grup 8): eklenenlerin listesinden ayrışsın */
+const formKutu: React.CSSProperties = { marginTop: 14, padding: "4px 12px 12px", border: `1px solid ${T.line}`, borderRadius: 14, background: T.panel2 };
 const gunGecerli = (s: string) => +s >= 1 && +s <= 31 && Number.isInteger(+s);
 
 function HesapAdimi({ data, reload }: { data: AllData; reload: () => void | Promise<void> }) {
@@ -118,17 +124,16 @@ function HesapAdimi({ data, reload }: { data: AllData; reload: () => void | Prom
           sonuc="Açılış bakiyesi net varlığından düşer; bu hesaba bağlanan düzenli kalemler hedefsiz kalır." />
       </Row>
     ))}
-    <form onSubmit={async (e) => {
+    <form style={formKutu} onSubmit={async (e) => {
       e.preventDefault(); if (!ok) return;
       if (await kaydet(() => api.post("accounts", { name: f.name.trim(), balance: num(f.balance), kind: f.kind })))
         setF({ ...f, name: "", balance: "" });
     }}>
       <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "flex-start" }}>
-        <Field label="Tür">
-          <select style={css.input} value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value as AccountKind })}>
-            {(Object.keys(ACCOUNT_KIND_LABEL) as AccountKind[]).map((k) => <option key={k} value={k}>{ACCOUNT_KIND_LABEL[k]}</option>)}
-          </select>
-        </Field>
+        <div style={{ flexBasis: "100%", display: "flex", paddingTop: 8 }}>
+          <Segment kucuk ad="Hesap türü" deger={f.kind} sec={(k) => setF({ ...f, kind: k })}
+            secenek={(Object.keys(ACCOUNT_KIND_LABEL) as AccountKind[]).map((k) => ({ v: k, l: ACCOUNT_KIND_LABEL[k] }))} />
+        </div>
         <Field label="Ad" flex={2}><input style={css.input} value={f.name} placeholder={f.kind === "nakit" ? "örn. Cüzdan" : "örn. Garanti"} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
         <AmountField label="Bugünkü bakiye (TL)" value={f.balance} onChange={(v) => setF({ ...f, balance: v })} sign="serbest" />
         <EkleDugmesi ok={ok} mesgul={mesgul} />
@@ -176,7 +181,7 @@ function KalemAdimi({ kind, data, reload }: { kind: Recurring["kind"]; data: All
         ))}
       </div>
     )}
-    <form onSubmit={async (e) => {
+    <form style={formKutu} onSubmit={async (e) => {
       e.preventDefault(); if (!ok) return;
       const account_id = f.target.startsWith("acc:") ? +f.target.slice(4) : null;
       const card_id = f.target.startsWith("card:") ? +f.target.slice(5) : null;
@@ -231,7 +236,7 @@ function KartAdimi({ data, reload }: { data: AllData; reload: () => void | Promi
           sonuc="Karta girilmiş harcamalar da silinir." />
       </Row>
     ))}
-    <form onSubmit={async (e) => {
+    <form style={formKutu} onSubmit={async (e) => {
       e.preventDefault(); if (!ok) return;
       const body = {
         name: f.name.trim(), limit_amount: num(f.limit), statement_day: +f.kesim, due_day: +f.sonOdeme,
@@ -282,7 +287,7 @@ function KrediAdimi({ data, reload }: { data: AllData; reload: () => void | Prom
         ama "kaç taksit kaldı, sıradaki ne zaman" sorusunu bilir. Kalan taksit sayısı ilk tarih +
         toplamdan türediği için (loanRemaining) sıradaki taksiti "ilk", kalanı "toplam" yazmak
         projeksiyonu ve borcu birebir aynı verir — yeni bir alan ya da kural gerekmez. */}
-    <form onSubmit={async (e) => {
+    <form style={formKutu} onSubmit={async (e) => {
       e.preventDefault(); if (!ok) return;
       const body = { name: f.name.trim(), amount: num(f.amount), first_date: f.sonraki, total: +f.kalan };
       if (await kaydet(() => api.post("loans", body))) setF({ name: "", amount: "", kalan: "", sonraki: "" });

@@ -263,6 +263,8 @@ createServer(async (req, res) => {
   /* Durum ucu gerçek sunucuyla AYNI kuralı uygular (`ai_enabled` yoksa AÇIK, "0" ise kapalı)
      ve `neden` döner — yoksa Hesabım'daki anahtarı kapatıp Asistan'a bakınca stub "AI_API_KEY
      eksik" ekranını gösterirdi, yani denetlenmek istenen ekranın yanlış hâli. */
+  /* Hesabım'daki bildirim satırı bu ucu okur; yoksa yanıt gövdesiz kalır ve ekran boş açılırdı */
+  if (url.pathname === "/api/push/durum") return json({ acik: true, publicKey: null, abonelikler: [] });
   if (url.pathname === "/api/ai/status") {
     const model = "gemini/gemini-3.6-flash (2 anahtar)";
     return json(all.settings.ai_enabled === "0"

@@ -148,23 +148,24 @@ export function Auth({ onAuthed, urlAuth, bilgi }: {
        100dvh + 32px oluyordu, yani içerik rahat sığsa bile sayfa her zaman 32px
        kaydırılıyordu (telefonda adres çubuğu bunu zıplamaya çevirir). */
     <div style={{ minHeight: "100dvh", boxSizing: "border-box", background: T.bg, color: T.text, display: "grid", placeItems: "center", padding: 16 }}>
-      <style>{themeCSS}</style>
+      <style>{themeCSS}{GIRIS_CSS}</style>
       {/* Kart ve tanıtım TEK grid çocuğu: ayrı çocuk olsalar grid iki satıra bölünür ve
-          aralarında ekran boyuna göre değişen bir boşluk açılırdı. */}
-      <div style={{ width: "100%", maxWidth: 380 }}>
+          aralarında ekran boyuna göre değişen bir boşluk açılırdı. Masaüstünde ikisi yan yana
+          (`.giris-izgara`; bu ekranda App'in stilleri yüklü değil, kural burada). */}
+      <div className={kurtarma ? undefined : "giris-izgara"} style={{ width: "100%", maxWidth: kurtarma ? 400 : undefined }}>
       {kurtarma ? <KurtarmaAdimi {...kurtarma} onBitti={onAuthed} /> : (
       <div style={{ ...css.card, width: "100%" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 9, fontWeight: 680, fontSize: 18, letterSpacing: "-0.02em", marginBottom: 4 }}>
-          <span style={{ width: 30, height: 30, borderRadius: 9, background: T.acc, color: T.accInk, display: "grid", placeItems: "center", fontSize: 16, fontWeight: 800, fontFamily: T.mono }}>₺</span>
-          finans
+        <div style={{ display: "flex", alignItems: "center", gap: 10, fontWeight: 700, fontSize: 20, letterSpacing: "-0.02em", marginBottom: 4 }}>
+          <span style={{ width: 34, height: 34, borderRadius: 10, background: T.acc, color: T.accInk, display: "grid", placeItems: "center", fontSize: 17, fontWeight: 800, fontFamily: T.mono }}>₺</span>
+          Finans
         </div>
-        <div style={{ fontSize: 13, color: T.mut3, marginBottom: 18 }}>{SUBTITLE[mode]}</div>
+        <div style={{ fontSize: 14, color: T.mut, marginBottom: 18 }}>{SUBTITLE[mode]}</div>
 
-        <form onSubmit={submit} style={{ display: "grid", gap: 12 }}>
+        <form onSubmit={submit} style={{ display: "grid", gap: 14 }}>
           {mode !== "reset" && (
             <div>
-              <div style={css.label}>E-posta</div>
-              <input style={{ ...css.input, width: "100%" }} type="email" autoComplete="email" inputMode="email"
+              <div style={etiketStil}>E-posta</div>
+              <input style={alanStil} type="email" autoComplete="email" inputMode="email"
                 value={email} onChange={(e) => setEmail(e.target.value)} placeholder="ornek@eposta.com" autoFocus />
             </div>
           )}
@@ -186,8 +187,8 @@ export function Auth({ onAuthed, urlAuth, bilgi }: {
               )}
               {resetYol === "kod" ? (
                 <div>
-                  <div style={css.label}>Kurtarma kodu</div>
-                  <input style={{ ...css.input, width: "100%", fontFamily: T.mono, textTransform: "uppercase" }} value={kod}
+                  <div style={etiketStil}>Kurtarma kodu</div>
+                  <input style={{ ...alanStil, fontFamily: T.mono, textTransform: "uppercase" }} value={kod}
                     onChange={(e) => setKod(e.target.value)} placeholder="XXXX-XXXX-XXXX-XXXX-…" autoComplete="off" autoCapitalize="characters" autoFocus />
                 </div>
               ) : (
@@ -204,15 +205,29 @@ export function Auth({ onAuthed, urlAuth, bilgi }: {
           )}
           {mode !== "forgot" && (
             <div>
-              <div style={css.label}>{mode === "reset" ? "Yeni parola" : "Parola"}</div>
-              <input style={{ ...css.input, width: "100%" }} type="password"
+              <div style={etiketStil}>
+                <span style={{ flex: 1 }}>{mode === "reset" ? "Yeni parola" : "Parola"}</span>
+                {/* "Şifremi unuttum" aranan yerde: parola alanının hemen üstünde */}
+                {mode === "login" && <button type="button" onClick={() => go("forgot")} style={{ ...linkBtn, fontSize: 13.5, padding: 0 }}>Şifremi unuttum</button>}
+              </div>
+              <input style={alanStil} type="password"
                 autoComplete={mode === "login" ? "current-password" : "new-password"}
                 value={password} onChange={(e) => setPassword(e.target.value)}
                 placeholder={mode === "login" ? "••••••••" : `en az ${PAROLA_MIN} karakter`} autoFocus={mode === "reset" && !resetBilgi?.sifreli} />
               {/* Canlı ipucu yalnız YENİ parola belirlenirken; girişte gösterilmez (orada kural yok,
                   eski hesapların parolası kısa olabilir ve giriş yapabilmeleri gerekiyor). */}
               {/* gönderimde aynı sorun `err` olarak da basılıyordu — ikisi aynı anda görünmesin */}
-              {canliSorun && canliSorun !== err && <div style={{ fontSize: 12, color: T.mut3, marginTop: 5 }}>{canliSorun}</div>}
+              {/* Yeni parola belirlenirken kural CANLI bir liste: neyin eksik olduğu yazarken görünür
+                  (yalnız kayıt ve sıfırlamada; girişte kural yok — eski kısa parolalar girebilmeli). */}
+              {yeniParola && (
+                <div style={{ display: "grid", gap: 3, fontSize: 13, marginTop: 8 }}>
+                  <span style={{ color: password.length >= PAROLA_MIN ? T.pos : T.mut }}>{password.length >= PAROLA_MIN ? "✓" : "○"} en az {PAROLA_MIN} karakter</span>
+                  <span style={{ color: password.length >= PAROLA_MIN && !canliSorun ? T.pos : T.mut }}>
+                    {password.length >= PAROLA_MIN && !canliSorun ? "✓" : "○"} yaygın bir kalıp ya da e-postan olmasın
+                  </span>
+                  {password.length >= PAROLA_MIN && canliSorun && canliSorun !== err && <span style={{ color: T.mut }}>{canliSorun}</span>}
+                </div>
+              )}
             </div>
           )}
           {err && <div style={{ fontSize: 13, color: T.neg }}>{err}</div>}
@@ -222,24 +237,28 @@ export function Auth({ onAuthed, urlAuth, bilgi }: {
             </div>
           )}
           {info && <div style={{ fontSize: 13, color: T.pos }}>{info}</div>}
+          {/* Kayıtta tek cümle: veri şifreli, biz göremeyiz, sonra kurtarma kodu — kurtarma ekranı sürpriz olmasın */}
+          {mode === "register" && (
+            <div style={{ fontSize: 13, lineHeight: 1.5, padding: "10px 12px", borderRadius: 11, background: T.panel2, color: T.text }}>
+              Verilerin parolanla açılan bir anahtarla şifrelenir; biz göremeyiz. Kayıttan sonra sana bir <b>kurtarma kodu</b> vereceğiz.
+            </div>
+          )}
           {(() => {
             const silYolu = mode === "reset" && resetBilgi?.sifreli && resetYol === "sil";
             const bekliyor = mode === "reset" && !resetBilgi; // bağlantının durumu henüz bilinmiyor
             const kapali = busy || bekliyor || (silYolu && !silOnay);
             return (
               <button type="submit" disabled={kapali}
-                style={{ ...css.btn, width: "100%", padding: "11px 14px", opacity: kapali ? 0.6 : 1, ...(silYolu ? { background: T.neg } : {}) }}>
+                style={{ ...css.btn, width: "100%", height: 50, fontSize: 15.5, opacity: kapali ? 0.6 : 1, ...(silYolu ? { background: T.neg } : {}) }}>
                 {busy ? mesgul : silYolu ? "Verilerimi silerek şifreyi güncelle" : cta}
               </button>
             );
           })()}
         </form>
 
-        <div style={{ fontSize: 13, color: T.mut, marginTop: 14, textAlign: "center", lineHeight: 1.9 }}>
+        <div style={{ fontSize: 14, color: T.mut, marginTop: 14, textAlign: "center", lineHeight: 1.9 }}>
           {mode === "login" && (
             <>
-              <button onClick={() => go("forgot")} style={linkBtn}>Şifremi unuttum</button>
-              <br />
               Hesabın yok mu? <button onClick={() => go("register")} style={linkBtn}>Kayıt ol</button>
             </>
           )}
@@ -260,9 +279,12 @@ export function Auth({ onAuthed, urlAuth, bilgi }: {
    (2) uygulamanın ne yaptığını anlatmalı, (3) gizlilik politikası ile kullanım koşullarına
    link vermeli. Önceden `/` yalnız bir form olduğundan üçü de karşılanmıyordu.
    Kullanıcı için de kazanç: bağlantıyı ilk kez açan biri neye kaydolduğunu görüyor. */
+const GIRIS_CSS = `.giris-izgara{display:grid;grid-template-columns:400px 340px;gap:64px;align-items:center;max-width:804px}
+@media (max-width:900px){.giris-izgara{grid-template-columns:minmax(0,1fr);gap:22px;max-width:400px}}`;
+
 function Tanitim() {
   return (
-    <div style={{ marginTop: 22, color: T.mut, fontSize: 13, lineHeight: 1.65 }}>
+    <div style={{ color: T.mut, fontSize: 13.5, lineHeight: 1.65 }}>
       <div style={{ fontWeight: 650, color: T.text, fontSize: 14, marginBottom: 6 }}>Finans nedir?</div>
       <p style={{ margin: "0 0 12px" }}>
         Kişisel finans panelin. Banka hesaplarına <strong>bağlanmaz</strong>; kayıtlarını sen
@@ -284,5 +306,9 @@ function Tanitim() {
 }
 
 const legalLink: React.CSSProperties = { color: T.acc, textDecoration: "none", fontWeight: 600 };
+
+/** Yeniden tasarım (grup 8): etiket düz yazı (diğer formlarla aynı dil), alan 50px */
+const etiketStil: React.CSSProperties = { fontSize: 13.5, color: T.mut, marginBottom: 6, display: "flex", alignItems: "baseline", gap: 8 };
+const alanStil: React.CSSProperties = { ...css.input, width: "100%", height: 50, fontSize: 16, boxSizing: "border-box" };
 
 const linkBtn: React.CSSProperties = { background: "none", border: "none", color: T.acc, cursor: "pointer", fontWeight: 600, fontSize: 13, fontFamily: T.disp };
