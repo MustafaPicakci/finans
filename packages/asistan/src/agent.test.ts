@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { agentLoop, executeActions, konusmaBasligi, formatResults, tamamlandiDiyor, type AgentDeps, type PendingAction } from "./agent.js";
+import { agentLoop, executeActions, konusmaBasligi, formatResults, tamamlandiDiyor, yapildiDiyor, sonucMesaji, KAYIT_YOK, type AgentDeps, type PendingAction } from "./agent.js";
 import { ROUTE_TOOLS } from "./tools.js";
 import type { AiProvider, ChatRequest, ChatResult, ToolCall } from "./types.js";
 
@@ -93,9 +93,43 @@ describe("agentLoop — yazma araçları yalnız planlanır", () => {
     expect((await agentLoop(deps(p), [{ role: "user", content: "markete 850 harcadım" }])).reply)
       .toBe("Migros harcamasını hazırladım, onaylarsan kaydedeceğim.");
   });
-  it("plan YOKSA geçmiş zaman serbesttir (geçmiş bir kaydı anlatmak doğrudur)", async () => {
-    const p = fakeProvider([{ text: "12 Ağustos'ta Migros'a 850 TL harcama kaydedilmiş." }]);
+  it("plan YOKSA, veriye BAKILDIYSA geçmiş zaman serbesttir (geçmiş bir kaydı anlatmak doğrudur)", async () => {
+    const p = fakeProvider([{ toolCalls: [call("kayit_ara", { q: "migros" })] }, { text: "12 Ağustos'ta Migros'a 850 TL harcama kaydedilmiş." }]);
     expect((await agentLoop(deps(p), [{ role: "user", content: "markete ne zaman harcamıştım" }])).reply).toContain("kaydedilmiş");
+  });
+
+  /* Gözlenen hata: model geçmişteki gerçek "✓ Kart harcaması: …" sonuç satırını kopyalayıp
+     ARAÇ ÇAĞIRMADAN yazdı — onay kartı çıkmadı, kayıt yazılmadı, kullanıcı yazıldı sandı. */
+  it("araç çağırmadan '✓' sonuç satırı yazan modele bir kez düzeltme verilir, aracı çağırırsa plan kurulur", async () => {
+    const p = fakeProvider([
+      { text: "✓ Kart harcaması: Akbank · Otobüs bileti · 2.000,00 ₺ · 2026-10-09" },
+      { toolCalls: [call("kart_harcamasi_ekle", { card_id: 2, date: "2026-10-09", name: "Otobüs bileti", amount: 2000 })] },
+      { text: "Akbank kartına 2.000 TL otobüs bileti harcamasını hazırladım, onaylarsan kaydedeceğim." },
+    ]);
+    const res = await agentLoop(deps(p), [{ role: "user", content: "akbank kredi kartı 2000 tl otobüs bileti" }]);
+    expect(res.pending).toHaveLength(1);
+    expect(res.pending[0].tool).toBe("kart_harcamasi_ekle");
+    expect(res.reply).toContain("onaylarsan");
+    const duzeltme = p.seen[1].messages.at(-1)!;
+    expect(duzeltme.role).toBe("user");
+    expect((duzeltme as any).content).toContain("HİÇBİR KAYIT YAZILMADI");
+  });
+  it("düzeltmeden sonra da araç çağırmayıp 'yapıldı' diyorsa kullanıcıya yalan söylenmez", async () => {
+    const p = fakeProvider([{ text: "✓ Kart harcaması: Akbank · Otobüs bileti · 2.000,00 ₺" }, { text: "Harcamayı kaydettim." }]);
+    const res = await agentLoop(deps(p), [{ role: "user", content: "akbank 2000 otobüs" }]);
+    expect(p.seen).toHaveLength(2); // tek düzeltme hakkı
+    expect(res.pending).toHaveLength(0);
+    expect(res.reply).toBe(KAYIT_YOK);
+  });
+  it("düzeltmeden sonra soru sorarsa soru olduğu gibi kalır", async () => {
+    const p = fakeProvider([{ text: "Harcamayı ekledim." }, { text: "Akbank hesabından mı, Akbank kartından mı?" }]);
+    const res = await agentLoop(deps(p), [{ role: "user", content: "akbank 400 tl harcama" }]);
+    expect(res.reply).toBe("Akbank hesabından mı, Akbank kartından mı?");
+  });
+  it("sonucMesaji gerçek uygulama sonucunu sistem kaydı olarak etiketler", () => {
+    expect(sonucMesaji("✓ Kart harcaması: Garanti · Yemek")).toMatch(/^\[SİSTEM KAYDI[^\n]*\]\n✓ Kart harcaması/);
+    expect(yapildiDiyor("Önce şunu sorayım:\n✓ Kart harcaması: X")).toBe(true);
+    expect(yapildiDiyor("Hangi kartla ödedin?")).toBe(false);
   });
   it("tamamlandiDiyor: gözlenen gerçek yanıtları yakalar, plan kipini yakalamaz", () => {
     expect(tamamlandiDiyor("Axess kartınızın ekstresi (400 TL) Ana Hesap üzerinden ödendi olarak kaydedildi.")).toBe(true);

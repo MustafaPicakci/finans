@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api, type AiKonusma, type AiSohbet, type AllData } from "../../api";
 import { sohbetEt, planUygula, planGeriAl } from "./istemci";
+import { sonucMesaji } from "@finans/asistan";
 import { T, css } from "../../theme";
 import { Aciklama, Empty, SilDugmesi } from "../../ui";
 import { useDictation } from "./dictation";
@@ -184,7 +185,7 @@ export function Asistan({ data, reload, initialText, onConsumed }: {
     try {
       /* Geçmiş yalnız AYNI sohbete devam ediliyorsa verilir (yeni sohbet boş başlar). */
       const onceki = hedef && sohbet?.id === hedef
-        ? sohbet.messages.map((m) => ({ role: m.role, content: m.content }))
+        ? sohbet.messages.map((m) => ({ role: m.role, content: m.planId ? sonucMesaji(m.content) : m.content }))
         : [];
       const res = await sohbetEt(data, t, hedef, onceki);
       await sohbetYukle(res.conversationId);

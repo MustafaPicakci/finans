@@ -59,6 +59,8 @@ export function systemPrompt(ctx: UserContext): string {
     "- Yazma aracı çağırdıysan işlem HENÜZ YAPILMADI: kullanıcı onay kartında onaylayınca uygulanacak.",
     "  Yanıtında 'kaydedildi / eklendi / ödendi / oluşturuldu / yapıldı' gibi GEÇMİŞ ZAMAN KULLANMA.",
     "  Doğru biçim: 'Şunu hazırladım, onaylarsan kaydedeceğim' ya da 'Onayına sundum'.",
+    "- Kayıt YALNIZ yazma aracı çağırarak hazırlanır. Geçmişte '[SİSTEM KAYDI' ile başlayan mesajları sen",
+    "  yazmadın; '✓ …' sonuç satırlarını ASLA kendin yazma — araç çağırmadan yazarsan hiçbir şey kaydedilmez.",
     "- Bir cümlede birden fazla olay varsa (örn. fon sattım + kart ekstresini ödedim) her biri için ayrı araç çağır.",
     "- Zorunlu bir bilgi eksikse (tutar, tarih, hangi kart) araç çağırmak yerine kısa bir soru sor.",
     "- Aynı olayı iki kez kaydetme. Emin değilsen önce okuma araçlarıyla (kayit_ara, pozisyonlar, kart_ekstreleri) bak.",
@@ -143,11 +145,23 @@ export async function agentLoop(deps: AgentDeps, history: ChatTurn[]): Promise<{
   );
   const pending: PendingAction[] = [];
   let reply = "";
+  let okundu = false;      // bu turda bir okuma aracı çalıştı mı (geçmiş zaman o zaman veriye dayanır)
+  let duzeltildi = false;  // sahte "yapıldı" yanıtı için tek düzeltme hakkı kullanıldı mı
 
   for (let step = 0; step < MAX_STEPS; step++) {
     const res = await deps.provider.chat({ system: deps.system, messages, tools: toolDefs() });
     reply = res.text || reply;
-    if (!res.toolCalls.length) break;
+    if (!res.toolCalls.length) {
+      /* Araç çağırmadan "yapıldı" (gözlendi: geçmişteki "✓ Kart harcaması: …" sonuç satırını
+         kopyalayıp yazdı — kart çıkmadı, kayıt yazılmadı, kullanıcı yazıldı sandı). Bir kez
+         düzeltme fırsatı verilir; aracı çağırırsa plan normal akışla kurulur. */
+      if (!pending.length && !okundu && !duzeltildi && yapildiDiyor(res.text)) {
+        duzeltildi = true;
+        messages.push({ role: "assistant", content: res.text }, { role: "user", content: DUZELTME });
+        continue;
+      }
+      break;
+    }
     messages.push({ role: "assistant", content: res.text, toolCalls: res.toolCalls });
 
     for (const call of res.toolCalls) {
@@ -155,6 +169,7 @@ export async function agentLoop(deps: AgentDeps, history: ChatTurn[]): Promise<{
       const read = READ_TOOLS.find((t) => t.name === call.name);
       const write = ROUTE_TOOLS.find((t) => t.name === call.name);
       if (read) {
+        okundu = true;
         result = await deps.runRead(call.name, call.args).catch((e) => ({ hata: String((e as Error).message).slice(0, 200) }));
       } else if (write) {
         const missing = missingFields(call.args, write.parameters.required);
@@ -181,11 +196,25 @@ export async function agentLoop(deps: AgentDeps, history: ChatTurn[]): Promise<{
      olmadığını söyler (ölçüldü: dört gerçek akışın dördünde de böyle yazdı). Kaybolan bir şey
      yok: işlemlerin kendisi onay kartında satır satır duruyor. */
   if (pending.length && tamamlandiDiyor(reply)) reply = PLAN_YANITI;
+  /* Düzeltmeden sonra da plan yok ve yanıt hâlâ "yapıldı" diyorsa kullanıcıya yalan söylenmez. */
+  if (!pending.length && !okundu && yapildiDiyor(reply)) reply = KAYIT_YOK;
   if (!reply) reply = pending.length ? PLAN_YANITI : "Bunu anlayamadım, biraz daha açar mısın?";
   return { reply, pending };
 }
 
 const PLAN_YANITI = "Aşağıdaki işlemleri hazırladım, onaylarsan uygulayayım.";
+export const KAYIT_YOK = "Bu mesajla hiçbir kayıt hazırlanmadı ve hiçbir şey yazılmadı. Cümleyi biraz daha açık yazar mısın? (örn. \"Akbank kartıyla 2.000 TL otobüs bileti\")";
+const DUZELTME = "[SİSTEM] Bu turda hiçbir yazma aracı çağırmadın: HİÇBİR KAYIT YAZILMADI ve kullanıcıya onay kartı çıkmadı. " +
+  "Kayıt yapılmış gibi yazamazsın; '✓' ile başlayan sonuç satırlarını yalnız sistem yazar. Kaydetmek gerekiyorsa şimdi ilgili aracı çağır; " +
+  "zorunlu bir bilgi eksikse kısa bir soru sor; kullanıcı bir kaydın yapılıp yapılmadığını soruyorsa tahmin etme, kayit_ara ile bak.";
+
+/** Geçmişteki gerçek uygulama sonucu mesajının modele giden hâli. Etiketsiz giderse model bunu
+    kendi yazdığı bir metin sanıp biçimini taklit ediyordu (araç çağırmadan "✓ …" yazmak). */
+export const sonucMesaji = (icerik: string) =>
+  `[SİSTEM KAYDI — bunu asistan yazmadı: kullanıcı onay kartını onayladı ve uygulama şu sonucu verdi]\n${icerik}`;
+
+/** Araç çağrısı olmadan yazıldığında yalan olan yanıt: sonuç satırı taklidi ya da tamamlanmış kip. */
+export const yapildiDiyor = (metin: string) => /^\s*[✓✔]/m.test(metin) || tamamlandiDiyor(metin);
 
 /** Plan içi başvuruların (eksi kimlik) denetimi. Hata metni modele gider ki düzeltsin:
     ileriye başvuru (henüz planlanmamış işlem) ve yanlış tür (hesap beklenen yerde kart) reddedilir. */

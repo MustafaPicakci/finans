@@ -79,8 +79,11 @@ export async function planUygula(planId: string, skip: number[]) {
       tool: r.tool ?? "", summary: r.summary, undo_method: r.undo!.method, undo_path: r.undo!.path,
     }))).catch((e) => console.error("[asistan] uygulama günlüğü yazılamadı:", e));
   }
+  /* planId HER ZAMAN bağlanır (geri alınacak bir şey olmasa da): sohbet geçmişi modele giderken
+     bu mesaj "sistem kaydı" diye etiketlenir (bkz. `sonucMesaji`). Geri al düğmesi buna değil
+     günlüğe (ai_actions) bakar, yani günlüğü olmayan planda düğme yine çıkmaz. */
   if (conversationId) {
-    await api.aiMesaj({ conversationId, role: "assistant", content: formatResults(results), planId: geriAlinabilir.length ? planId : null })
+    await api.aiMesaj({ conversationId, role: "assistant", content: formatResults(results), planId })
       .catch((e) => console.error("[asistan] sonuç mesajı yazılamadı:", e));
   }
   return { conversationId, results, undoable: geriAlinabilir.length };
