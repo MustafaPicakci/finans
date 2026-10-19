@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { clampDay, firstCutoff, dueOf, txShares, cardInfos, stmtKey, statementAmount } from "./cards.js";
+import { clampDay, firstCutoff, dueOf, txShares, cardInfos, stmtKey, statementAmount, ekstreOdemeleri, acikDonem } from "./cards.js";
 import type { Card, CardTx } from "./types.js";
 
 const card: Card = { id: 1, name: "Test Kart", limit_amount: 50000, statement_day: 15, due_day: 5 };
@@ -120,6 +120,35 @@ describe("cardInfos", () => {
     expect(info.debt).toBeCloseTo(150);           // yalnız ödenmemiş pay
     expect(info.nextDue).toEqual(new Date(2026, 7, 5)); // sıradaki = ilk ÖDENMEMİŞ ekstre
     expect(info.nextAmount).toBeCloseTo(150);
+  });
+  it("ödenmiş ekstreye sonradan düşen harcama borca EKSİK olarak girer (sessizce yutulmaz)", () => {
+    const today = new Date(2026, 5, 1);
+    const txs: CardTx[] = [
+      { id: 1, card_id: 1, date: "2026-06-10", name: "A", amount: 300, installments: 1 },
+      { id: 2, card_id: 1, date: "2026-06-12", name: "B", amount: 200, installments: 1 }, // ödemeden sonra
+    ];
+    const [info] = cardInfos([card], txs, today, new Map([[stmtKey(1, "2026-07-05"), 300]]));
+    expect(info.statements[0]).toMatchObject({ paid: true, amount: 500, eksik: 200 });
+    expect(info.debt).toBeCloseTo(200);
+    // tamamı ödendiyse ya da tutar bilinmiyorsa eksik yok; kuruş yuvarlaması eksik sayılmaz
+    for (const odenen of [500, 499.995, null]) {
+      expect(cardInfos([card], txs, today, new Map([[stmtKey(1, "2026-07-05"), odenen]]))[0].debt).toBe(0);
+    }
+  });
+  it("ekstreOdemeleri: ödenen tutar ödemenin gider kaydından okunur, kayıt yoksa bilinmez", () => {
+    const m = ekstreOdemeleri({
+      statement_payments: [{ card_id: 1, due: "2026-07-05", tx_id: 9 }, { card_id: 1, due: "2026-08-05", tx_id: null }, { card_id: 2, due: "2026-07-05" }],
+      transactions: [{ id: 9, date: "2026-06-20", name: "Kart ekstresi", amount: -300, category_id: null, account_id: 1 }],
+    });
+    expect(m.get(stmtKey(1, "2026-07-05"))).toBe(300);
+    expect(m.get(stmtKey(1, "2026-08-05"))).toBeNull();
+    expect(m.has(stmtKey(2, "2026-07-05"))).toBe(true);
+  });
+  it("açık dönem: kesim günü (dahil) gelmeden ekstre kesinleşmez", () => {
+    const [info] = cardInfos([card], [{ id: 1, card_id: 1, date: "2026-06-10", name: "A", amount: 100, installments: 1 }], new Date(2026, 5, 1));
+    expect(info.statements[0].cut).toEqual(new Date(2026, 5, 15));
+    expect(acikDonem(info.statements[0], new Date(2026, 5, 15))).toBe(true);  // kesim günü harcama alır
+    expect(acikDonem(info.statements[0], new Date(2026, 5, 16))).toBe(false);
   });
 });
 

@@ -164,6 +164,27 @@ describe("project", () => {
     expect(due.net).toBe(0); // tekrar düşülmez — çift sayım engellendi
   });
 
+  /* Gözlenen hata: ödendi işareti ekstrenin KİMLİĞİNE bağlıydı; ödemeden sonra o ekstreye düşen
+     harcama borçtan da nakit akışından da sessizce siliniyordu. Eksik kalan vadesinde düşer. */
+  it("ödenmiş ekstreye SONRADAN düşen harcama: eksik kalan vade gününde gider + borç", () => {
+    const data = baseData({
+      accounts: [{ id: 1, name: "Vadesiz", balance: 0 }],
+      cards: [{ id: 1, name: "Kart", limit_amount: 10000, statement_day: 15, due_day: 5 }],
+      card_txs: [
+        { id: 1, card_id: 1, date: "2026-01-10", name: "Market", amount: 300, installments: 1 },
+        { id: 2, card_id: 1, date: "2026-01-12", name: "Otobüs", amount: 200, installments: 1 }, // ödemeden sonra girildi
+      ],
+      transactions: [{ id: 9, date: "2026-01-11", name: "Kart ekstresi", amount: -300, category_id: null, account_id: 1 }],
+      statement_payments: [{ card_id: 1, due: "2026-02-05", tx_id: 9 }],
+    });
+    const days = project(data, 2);
+    const due = days.find((d) => d.k === "2026-02-05")!;
+    expect(due.net).toBe(-200);
+    expect(due.ev.find((e) => e.t === "ekstre")?.n).toBe("Kart ekstresi (eksik kalan)");
+    expect(days[0].debt).toBe(200);
+    expect(netWorthBreakdown(data).kartBorcu).toBe(200); // ekranla aynı tanım
+  });
+
   it("portföy değeri güncel fiyatla o günün toplam varlığına eklenir", () => {
     const data = baseData({
       accounts: [{ id: 1, name: "Vadesiz", balance: 1000 }],

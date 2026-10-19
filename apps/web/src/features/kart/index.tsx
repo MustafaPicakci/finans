@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { parseD, fmtD, keyOf, num, cardInfos, stmtKey, txShares, type AllData, type Card } from "@finans/engine";
+import { parseD, fmtD, keyOf, num, cardInfos, stmtKey, txShares, ekstreOdemeleri, acikDonem, type AllData, type Card } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, tl, fmtMoney } from "../../theme";
 import { Empty, Aciklama, Modal, SilDugmesi, useSayfalama, DahaFazla } from "../../ui";
@@ -50,8 +50,9 @@ const satir: React.CSSProperties = { display: "flex", alignItems: "center", gap:
 
 export function Kartlar({ data, reload }: { data: AllData; reload: () => void; onAdd?: (k: AddKind) => void }) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const paidSet = new Set(data.statement_payments.map((p) => stmtKey(p.card_id, p.due)));
-  const infos = cardInfos(data.cards, data.card_txs, today, paidSet);
+  /* stmtKey → ödenen tutar: ödenmiş ekstreye sonradan düşen harcama borçtan yutulmasın (`eksik`) */
+  const odemeler = ekstreOdemeleri(data);
+  const infos = cardInfos(data.cards, data.card_txs, today, odemeler);
   const totalDebt = infos.reduce((s, c) => s + c.debt, 0);
   /* Kart harcamaları uygulamanın EN HIZLI büyüyen listesidir (her alışveriş bir satır). Sıralama
      hook'un dışında memolanır; satır tek katmanlı → 20'lik dilim. */
@@ -59,7 +60,7 @@ export function Kartlar({ data, reload }: { data: AllData; reload: () => void; o
     useMemo(() => [...data.card_txs].sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id), [data.card_txs]),
     20,
   );
-  const [paying, setPaying] = useState<{ card: Card; dueK: string; amount: number } | null>(null);
+  const [paying, setPaying] = useState<Odeme | null>(null);
   const [editing, setEditing] = useState<EditTarget | null>(null);
   /** Kart sayfası: `null` kapalı, `"yeni"` ekleme, kart nesnesi düzenleme */
   const [kartSayfa, setKartSayfa] = useState<Card | "yeni" | null>(null);
@@ -88,11 +89,14 @@ export function Kartlar({ data, reload }: { data: AllData; reload: () => void; o
           const usage = ci.card.limit_amount > 0 ? Math.min(1, ci.debt / ci.card.limit_amount) : 0;
           const past = lastPastStatement(ci.card, data.card_txs, today);
           const ekstreler = [
-            ...(past ? [{ et: "Geçen", due: past.due, amount: past.amount, paid: paidSet.has(stmtKey(ci.card.id, keyOf(past.due))) }] : []),
-            ...ci.statements.slice(0, 3).map((s, j) => ({ et: j === 0 ? "Sıradaki" : "Sonraki", due: s.due, amount: s.amount, paid: s.paid })),
+            ...(past ? [{ et: "Geçen", due: past.due, cut: null as Date | null, amount: past.amount, paid: odemeler.has(stmtKey(ci.card.id, keyOf(past.due))), eksik: 0 }] : []),
+            ...ci.statements.slice(0, 3).map((s, j) => ({ et: j === 0 ? "Sıradaki" : "Sonraki", due: s.due, cut: s.cut as Date | null, amount: s.amount, paid: s.paid, eksik: s.eksik })),
           ];
-          /* Birincil "Ödedim" yalnız ilk ödenmemiş ekstrede: sıradaki iş odur */
-          const ilkOdenmemis = ekstreler.findIndex((e) => !e.paid);
+          /* Kesimi gelmemiş ekstreye ödeme VERİLMEZ: tutarı kesinleşmedi, ödendi işaretlenirse kesime
+             kadar girilen her harcama "ödenmiş" ekstreye düşüp borca yansımıyordu (gerçek kullanımda). */
+          const acik = (e: { cut: Date | null; paid: boolean }) => !e.paid && e.cut != null && acikDonem({ cut: e.cut }, today);
+          /* Birincil "Ödedim" yalnız ilk ödenebilir ekstrede: sıradaki iş odur */
+          const ilkOdenmemis = ekstreler.findIndex((e) => !e.paid && !acik(e));
           const oto = ci.card.pay_account_id != null ? data.accounts.find((a) => a.id === ci.card.pay_account_id) : null;
           return (
             <div key={ci.card.id} style={{ ...css.card, padding: 0, overflow: "hidden" }}>
@@ -120,14 +124,26 @@ export function Kartlar({ data, reload }: { data: AllData; reload: () => void; o
                 return (
                   <div key={dueK} style={satir}>
                     <span style={{ flex: 1, minWidth: 0 }}>{e.et} <span style={{ color: T.mut, fontSize: 13 }}>· {kisaTarih(e.due)}</span></span>
-                    <span style={{ ...css.mono, color: e.paid ? T.mut : T.text, textDecoration: e.paid ? "line-through" : "none", fontWeight: j === ilkOdenmemis ? 600 : 400 }}>
+                    <span style={{ ...css.mono, color: e.paid && !e.eksik ? T.mut : T.text, textDecoration: e.paid && !e.eksik ? "line-through" : "none", fontWeight: j === ilkOdenmemis ? 600 : 400 }}>
                       {tl.format(Math.round(e.amount))}
                     </span>
-                    {e.paid ? (<>
+                    {e.paid && e.eksik > 0 ? (<>
+                      {/* Ödemeden SONRA bu ekstreye harcama düştü: fark borçta, sessizce kaybolmaz */}
+                      <span title={`Ödendikten sonra bu ekstreye ${tl.format(Math.round(e.eksik))} harcama eklendi`}
+                        style={{ fontSize: 11.5, fontWeight: 600, padding: "2px 7px", borderRadius: 6, background: T.warnSoft, color: T.warn, whiteSpace: "nowrap" }}>
+                        {tl.format(Math.round(e.eksik))} eksik
+                      </span>
+                      <button onClick={() => setPaying({ card: ci.card, dueK, amount: e.amount, yeniden: e.amount - e.eksik })}
+                        style={{ background: "none", border: "none", color: T.acc, fontFamily: T.disp, fontSize: 13.5, cursor: "pointer", padding: "6px 0", minHeight: 0, whiteSpace: "nowrap" }}>yeniden öde</button>
+                    </>) : e.paid ? (<>
                       <span style={{ fontSize: 11.5, fontWeight: 600, padding: "2px 7px", borderRadius: 6, background: T.posSoft, color: T.pos }}>ödendi</span>
                       <button title="Ödemeyi geri al (gider kaydı silinir, bakiye iade edilir)" onClick={() => unpay(ci.card.id, dueK)}
                         style={{ background: "none", border: "none", color: T.mut, fontFamily: T.disp, fontSize: 13, cursor: "pointer", padding: "6px 0", minHeight: 0 }}>geri al</button>
-                    </>) : j === ilkOdenmemis ? (
+                    </>) : acik(e) ? (
+                      <span title="Kesim günü gelmeden ekstre kesinleşmez; ödeme kesimden sonra kaydedilir" style={{ fontSize: 13, color: T.mut, whiteSpace: "nowrap" }}>
+                        kesim {kisaTarih(e.cut!)}
+                      </span>
+                    ) : j === ilkOdenmemis ? (
                       <button onClick={() => setPaying({ card: ci.card, dueK, amount: e.amount })} style={{
                         height: 34, minHeight: 0, padding: "0 14px", border: "none", borderRadius: 10, background: T.acc, color: T.accInk,
                         fontFamily: T.disp, fontSize: 13.5, fontWeight: 600, cursor: "pointer",
@@ -197,10 +213,16 @@ export function Kartlar({ data, reload }: { data: AllData; reload: () => void; o
   </>);
 }
 
+/** `yeniden`: ekstre zaten ödenmiş ama sonradan harcama düşmüş — önceki ödemenin tutarı. */
+type Odeme = { card: Card; dueK: string; amount: number; yeniden?: number };
+
 /** "Ödedim": ekstre gider olarak deftere geçer, borçtan düşer. Tutar ekranda yazan ekstre tutarıdır
-    (`statementAmount`) — kullanıcının onayladığı ile yazılan tanım gereği aynı (E2EE aşama 1b). */
+    (`statementAmount`) — kullanıcının onayladığı ile yazılan tanım gereği aynı (E2EE aşama 1b).
+    "Yeniden öde": ekstre başına TEK ödeme kaydı var (statement_payments PK), yani eksik fark ayrı
+    ödenemez — önceki ödeme geri alınır, tamamı yeniden yazılır. İki istek atomik değil: ikincisi
+    patlarsa ekstre ÖDENMEMİŞ görünür (dürüst durum, borç eksiksiz), sessiz bozulma olmaz. */
 function EkstreOde({ data, reload, odeme, onClose }: {
-  data: AllData; reload: () => void; odeme: { card: Card; dueK: string; amount: number }; onClose: () => void;
+  data: AllData; reload: () => void; odeme: Odeme; onClose: () => void;
 }) {
   const [pp, setPp] = useState({ account_id: odeme.card.pay_account_id != null ? String(odeme.card.pay_account_id) : "", category_id: "" });
   const [busy, setBusy] = useState(false);
@@ -209,6 +231,7 @@ function EkstreOde({ data, reload, odeme, onClose }: {
     if (busy) return;
     setBusy(true);
     try {
+      if (odeme.yeniden != null) await api.unpayStatement(odeme.card.id, odeme.dueK);
       await api.payStatement(odeme.card.id, odeme.dueK, {
         account_id: pp.account_id ? +pp.account_id : null,
         category_id: pp.category_id ? +pp.category_id : null,
@@ -218,7 +241,7 @@ function EkstreOde({ data, reload, odeme, onClose }: {
     } finally { setBusy(false); }
   };
   return (
-    <Modal title="Ekstreyi öde" onClose={onClose}>
+    <Modal title={odeme.yeniden != null ? "Ekstreyi yeniden öde" : "Ekstreyi öde"} onClose={onClose}>
       <form onSubmit={(e) => { e.preventDefault(); kaydet(); }}>
         <Bolum>
           <div>
@@ -236,9 +259,12 @@ function EkstreOde({ data, reload, odeme, onClose }: {
           </Satirlar>
         </Bolum>
         <FormAlt ok={!busy} reason="Kaydediliyor…" editing etiket="Ödendi olarak kaydet"
-          sonuc={acc
-            ? <><b>{acc.name}</b> bakiyesinden <Vurgu v={odeme.amount} isaret="−" /> düşer; ekstre ödendi sayılır, borçtan çıkar.</>
-            : "Hesap seçilmedi: yalnız gider kaydı olur, bakiyeye dokunmaz; ekstre ödendi sayılır."} />
+          sonuc={<>
+            {odeme.yeniden != null && <>Önceki <Vurgu v={odeme.yeniden} /> ödemen geri alınır, ekstrenin tamamı bugünle yeniden yazılır. </>}
+            {acc
+              ? <><b>{acc.name}</b> bakiyesinden <Vurgu v={odeme.amount} isaret="−" /> düşer; ekstre ödendi sayılır, borçtan çıkar.</>
+              : "Hesap seçilmedi: yalnız gider kaydı olur, bakiyeye dokunmaz; ekstre ödendi sayılır."}
+          </>} />
       </form>
     </Modal>
   );

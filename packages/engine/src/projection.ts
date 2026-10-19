@@ -2,7 +2,7 @@ import type { AllData, Currency } from "./types.js";
 import { keyOf, hits, ymOf } from "./date.js";
 import { recActiveOn, recurringAmountIndex, recAmountOn } from "./recurring.js";
 import { loanPayDay, loanRemaining, loanActiveOn } from "./loans.js";
-import { cardInfos, stmtKey } from "./cards.js";
+import { cardInfos, ekstreOdemeleri } from "./cards.js";
 import { convert, qtyDelta, positions, portfolioValueTry, type Rates } from "./portfolio.js";
 import { depositValueOn } from "./deposits.js";
 import { totalCash } from "./accounts.js";
@@ -71,20 +71,22 @@ export function project(data: AllData, months: number, rates: Rates = { usdTry: 
     return { assets, cashFunds };
   };
   let bal = totalCash(data.account_entries ?? []); // bakiye defterden türetilir (E2EE aşama 1a)
-  /* kart ekstre ödemeleri: son ödeme tarihine gider olarak düşer; ödendi işaretlenen ekstre atlanır
-     (ödeme zaten transactions'a yazıldı → başlangıç bakiyesinde; tekrar düşmek çift sayım olurdu) */
-  const paidStmts = new Set((data.statement_payments ?? []).map((p) => `${p.card_id}:${p.due}`));
+  /* kart ekstre ödemeleri: son ödeme tarihine gider olarak düşer; ödendi işaretlenen ekstrenin ödenen
+     kısmı atlanır (ödeme zaten transactions'a yazıldı → başlangıç bakiyesinde; tekrar düşmek çift sayım
+     olurdu) ama ödemeden SONRA o ekstreye düşen eksik kısım vadesinde yine gider olarak düşer */
+  const paidStmts = ekstreOdemeleri(data);
   const stmtMap = new Map<string, DayEv[]>();
   /* kalan kart borcu: bugün itibarıyla ödenmemiş ekstrelerin toplamı (cardInfos zaten
      `due >= bugün` olanları verir) — döngüde her ekstre kendi son ödeme gününde düşülür */
   let cardDebt = 0;
   cardInfos(data.cards, data.card_txs, start, paidStmts).forEach((ci) => {
     ci.statements.forEach((s) => {
-      if (s.paid) return;
-      cardDebt += s.amount;
+      const tutar = s.paid ? s.eksik : s.amount;
+      if (!(tutar > 0)) return;
+      cardDebt += tutar;
       const k = keyOf(s.due);
       if (!stmtMap.has(k)) stmtMap.set(k, []);
-      stmtMap.get(k)!.push({ n: `${ci.card.name} ekstresi`, a: -s.amount, t: "ekstre", r: `e:${ci.card.id}` });
+      stmtMap.get(k)!.push({ n: s.paid ? `${ci.card.name} ekstresi (eksik kalan)` : `${ci.card.name} ekstresi`, a: -tutar, t: "ekstre", r: `e:${ci.card.id}` });
     });
   });
   const days: Day[] = [];
@@ -153,7 +155,7 @@ export function netWorthBreakdown(data: AllData, rates: Rates = { usdTry: 0 }): 
   const nakit = totalCash(data.account_entries ?? []);
   const portfoy = portfolioValueTry(positions(data.trades, data.prices), rates);
   const vadeli = data.deposits.reduce((s, d) => s + depositValueOn(d, today), 0);
-  const paid = new Set((data.statement_payments ?? []).map((p) => stmtKey(p.card_id, p.due)));
+  const paid = ekstreOdemeleri(data);
   /* Kart ve kredi borcu AYRI AYRI hesaplanır, biri diğerinden çıkarılarak bulunmaz: çıkarma
      kullanılsa projeksiyona üçüncü bir borç türü eklendiği gün o tutar sessizce "kart borcu"
      etiketiyle görünürdü. Şimdi bileşenlerin toplamı `Day.debt`'e eşit olmak ZORUNDA (test). */

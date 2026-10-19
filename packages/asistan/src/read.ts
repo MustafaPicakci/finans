@@ -30,7 +30,7 @@
    "MIGROS" artık "Migros"u da buluyor, yani asistanın bulduğu ile ekranın bulduğu aynı. */
 
 import {
-  positions, openPositions, txShares, keyOf, stmtKey, harcamaOzeti, netWorthBreakdown, project,
+  positions, openPositions, txShares, keyOf, stmtKey, ekstreOdemeleri, harcamaOzeti, netWorthBreakdown, project,
   cashGap, fundSellSuggestion, metinEsler,
   type AllData, type HarcamaTemeli, type HarcamaGrup, type Rates,
 } from "@finans/engine";
@@ -68,7 +68,7 @@ export const READ_TOOLS: ReadTool[] = [
       properties: { card_id: { type: "integer", description: "Yalnız bu kartı listele (opsiyonel)" } },
     },
     run(data, a, bugun) {
-      const paid = new Set((data.statement_payments ?? []).map((p) => stmtKey(p.card_id, p.due)));
+      const paid = ekstreOdemeleri(data);
       const from = gunKaydir(bugun, -95), to = gunKaydir(bugun, 125);
       const wanted = a.card_id != null ? data.cards.filter((c) => c.id === Number(a.card_id)) : data.cards;
       return wanted.map((card) => {
@@ -82,7 +82,12 @@ export const READ_TOOLS: ReadTool[] = [
         return {
           kart_id: card.id, kart: card.name, kesim_gunu: card.statement_day, son_odeme_gunu: card.due_day,
           ekstreler: [...byDue.entries()].sort((x, y) => x[0].localeCompare(y[0]))
-            .map(([due, amount]) => ({ due, tutar: r2(amount), odendi: paid.has(stmtKey(card.id, due)) })),
+            .map(([due, amount]) => {
+              const k = stmtKey(card.id, due), odenen = paid.get(k);
+              /* ödemeden SONRA bu ekstreye düşen tutar — ekranla aynı kural (cardInfos `eksik`) */
+              const eksik = paid.has(k) && odenen != null && amount - odenen >= 0.01 ? r2(amount - odenen) : 0;
+              return { due, tutar: r2(amount), odendi: paid.has(k), ...(eksik ? { odenmemis_kalan: eksik } : {}) };
+            }),
         };
       });
     },

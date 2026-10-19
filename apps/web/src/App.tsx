@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { project, positions, cardInfos, stmtKey, loanRemaining, portfolioValueTry, depositValueOn, totalCash, convert,
+import { project, positions, cardInfos, ekstreOdemeleri, loanRemaining, portfolioValueTry, depositValueOn, totalCash, convert,
   bekleyenDuzenli, bekleyenEkstreler, todayStr, kurulumGerekli, type Currency } from "@finans/engine";
 import { api, ApiError, type SessionUser } from "./api";
 import { T, css, fmtMoney, fiyatYasi, FIYAT_YASI_IPUCU, themeCSS, THEME_KEY, CCY_KEY, type ThemeMode } from "./theme";
@@ -267,8 +267,7 @@ export default function App() {
   const cardInfoList = useMemo(() => {
     if (!data) return [];
     const t = new Date(); t.setHours(0, 0, 0, 0);
-    const paid = new Set(data.statement_payments.map((p) => stmtKey(p.card_id, p.due)));
-    return cardInfos(data.cards, data.card_txs, t, paid);
+    return cardInfos(data.cards, data.card_txs, t, ekstreOdemeleri(data));
   }, [data]);
   const cardDebt = useMemo(() => cardInfoList.reduce((s, c) => s + c.debt, 0), [cardInfoList]);
   const loanDebt = useMemo(() => {
