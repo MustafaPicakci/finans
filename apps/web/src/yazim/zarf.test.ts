@@ -141,6 +141,20 @@ describe("kısmi güncelleme", () => {
   it("POST'ta gönderilmeyen hassas alan null olarak zarfa girer (okuma tarafı tutarlı olsun)", () => {
     expect(zarfIci(zarfla("POST", "/portfolios", { name: "Emeklilik" }, bos()).enc)).toEqual({ name: "Emeklilik", note: null });
   });
+  /* Eski DDL varsayılanları: kolon düzken DEFAULT tamamlıyordu. Asistan taksitsiz kart harcaması
+     yazınca `installments: null` kaydediliyor ve harcama hiçbir ekstreye girmiyordu. */
+  it("POST'ta gönderilmeyen taksit 1, kart limiti 0 olarak zarfa girer", () => {
+    expect(zarfIci(zarfla("POST", "/cardtxs", { card_id: 1, date: "2026-10-12", name: "Otobüs", amount: 2000 }, bos()).enc))
+      .toEqual({ name: "Otobüs", amount: 2000, installments: 1 });
+    expect(zarfIci(zarfla("POST", "/cards", { name: "Axess", statement_day: 25, due_day: 5 }, bos()).enc))
+      .toEqual({ name: "Axess", limit_amount: 0 });
+  });
+  it("geçersiz taksit sayısı reddedilir (eski CHECK installments >= 1)", () => {
+    for (const bozuk of [0, -2, 1.5, "abc"]) {
+      expect(() => zarfla("POST", "/cardtxs", { card_id: 1, date: "2026-10-12", name: "X", amount: 10, installments: bozuk }, bos())).toThrow(/taksit/);
+    }
+    expect(zarfIci(zarfla("POST", "/cardtxs", { card_id: 1, date: "2026-10-12", name: "X", amount: 10, installments: "3" }, bos()).enc).installments).toBe(3);
+  });
 });
 
 describe("yönlendirme", () => {

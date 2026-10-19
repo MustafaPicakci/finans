@@ -144,10 +144,24 @@ function ayir(tablo: ZarfliTablo, body: Satir, data: AllData | null, id?: number
     if (!mevcut) throw new ZarfHatasi(`${tablo} #${id} bulunamadı — kısmi güncellemede zarf yeniden kurulamaz`);
     for (const a of alanlar) if (!(a in hassas)) hassas[a] = mevcut[a] ?? null;
   } else {
-    for (const a of alanlar) if (!(a in hassas)) hassas[a] = null;
+    for (const a of alanlar) if (!(a in hassas)) hassas[a] = VARSAYILAN[tablo]?.[a] ?? null;
+  }
+  /* Eski `CHECK (installments >= 1)` — kolon zarfa taşınınca sunucu bunu göremez oldu */
+  if (tablo === "card_txs" && "installments" in hassas) {
+    const n = Number(hassas.installments ?? 1);
+    if (!Number.isInteger(n) || n < 1) throw new ZarfHatasi("taksit sayısı 1 ya da daha büyük bir tam sayı olmalı");
+    hassas.installments = n;
   }
   return { duz, hassas };
 }
+
+/* Zarfa taşınan kolonların eski DDL varsayılanları. Kolon düz dururken gövdede olmayan alanı
+   veritabanının DEFAULT'u tamamlıyordu; zarfta o iş buraya düştü. Yokken asistanın taksitsiz
+   yazdığı kart harcaması `installments: null` kaydediliyor ve hiçbir ekstreye/borca girmiyordu. */
+const VARSAYILAN: Partial<Record<ZarfliTablo, Record<string, unknown>>> = {
+  card_txs: { installments: 1 },
+  cards: { limit_amount: 0 },
+};
 
 /* ————— Defter hareketi —————
    Sunucu eskiden hareketi (`account_entries`) kendisi kuruyordu: tutar + not. İkisi de

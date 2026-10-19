@@ -71,6 +71,19 @@ describe("txShares", () => {
     expect(shares[1].due).toEqual(new Date(2026, 7, 5));
     expect(shares[2].due).toEqual(new Date(2026, 8, 5));
   });
+  /* Gözlenen hata: asistan taksiti göndermedi, zarf `installments: null` yazdı — harcama listede
+     görünüp hiçbir ekstreye ve borca girmiyordu. Mevcut bozuk kayıtlar da doğru ekstreye düşmeli. */
+  it("taksit sayısı boş/geçersizse harcama TEK ÇEKİM sayılır (kaybolmaz)", () => {
+    for (const bozuk of [null, undefined, 0, NaN, "abc"]) {
+      const tx = { id: 3, card_id: 1, date: "2026-06-10", name: "Otobüs", amount: 2000, installments: bozuk } as unknown as CardTx;
+      const shares = txShares(tx, card);
+      expect(shares).toHaveLength(1);
+      expect(shares[0].amount).toBe(2000);
+      expect(shares[0].total).toBe(1);
+    }
+    const tx = { id: 3, card_id: 1, date: "2026-06-10", name: "Otobüs", amount: 2000, installments: null } as unknown as CardTx;
+    expect(cardInfos([card], [tx], new Date(2026, 5, 15))[0].debt).toBe(2000);
+  });
 });
 
 describe("cardInfos", () => {

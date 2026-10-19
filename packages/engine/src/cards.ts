@@ -23,14 +23,24 @@ export type Share = { due: Date; amount: number; idx: number; total: number };
 /** Bir harcamanın taksit paylarını son ödeme tarihleriyle döndürür */
 export function txShares(tx: CardTx, card: Card): Share[] {
   const fc = firstCutoff(parseD(tx.date), card.statement_day);
-  const per = tx.amount / tx.installments;
+  const n = taksitSayisi(tx);
+  const per = tx.amount / n;
   const out: Share[] = [];
-  for (let i = 0; i < tx.installments; i++) {
+  for (let i = 0; i < n; i++) {
     const cut = clampDay(fc.getFullYear(), fc.getMonth() + i, card.statement_day);
-    out.push({ due: dueOf(cut, card.due_day), amount: per, idx: i + 1, total: tx.installments });
+    out.push({ due: dueOf(cut, card.due_day), amount: per, idx: i + 1, total: n });
   }
   return out;
 }
+
+/** Taksit sayısı; boş/geçersiz değer TEK ÇEKİMDİR. E2EE'de kolon zarfa taşınınca veritabanının
+    `DEFAULT 1`'i kalktı ve asistanın taksitsiz yazdığı harcamalar `installments: null` kaydedildi —
+    döngü hiç dönmüyor, harcama listede görünüp hiçbir ekstreye ve borca girmiyordu. Burada
+    çözülünce o kayıtlar veri düzeltmesi gerekmeden doğru ekstreye düşer. */
+export const taksitSayisi = (tx: Pick<CardTx, "installments">): number => {
+  const n = Math.trunc(Number(tx.installments));
+  return Number.isFinite(n) && n >= 1 ? n : 1;
+};
 
 /** Belirli bir ekstrenin (son ödeme tarihi `dueKey`, 'YYYY-MM-DD') toplam tutarı: o vadeye düşen
     tüm taksit paylarının toplamı. Ekstre ödemesinin tutarı İSTEMCİDEN alınmaz — hem sunucu
