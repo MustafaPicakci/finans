@@ -47,8 +47,32 @@ export const taksitSayisi = (tx: Pick<CardTx, "installments">): number => {
     tüm taksit paylarının toplamı. Ekstre ödemesinin tutarı İSTEMCİDEN alınmaz — hem sunucu
     (`POST /cards/:id/pay-statement`) hem asistanın onay ekranı aynı hesabı buradan çağırır. */
 export const statementAmount = (card: Card, txs: CardTx[], dueKey: string): number =>
-  txs.filter((t) => t.card_id === card.id)
-    .reduce((s, t) => s + txShares(t, card).filter((sh) => keyOf(sh.due) === dueKey).reduce((a, x) => a + x.amount, 0), 0);
+  ekstreDetayi(card, txs, dueKey).toplam;
+
+/** Ekstreye düşen tek kalem: harcamanın kendisi + o ekstreye düşen PAYI (taksitte `idx`/`total`). */
+export type EkstreKalemi = { tx: CardTx; tutar: number; idx: number; total: number };
+
+/** Bir ekstrenin İÇERİĞİ: dönem aralığı (`donemBasi`..`kesim`, ikisi dahil) ve o vadeye düşen paylar,
+    harcama tarihine göre yeniden eskiye. Ekstreye düşen şey harcamanın tarihi değil kesim günü ve
+    taksit payıdır — 6 taksitli bir alışverişin Kasım payı tarihle süzülerek bulunamaz, bu yüzden
+    kalemler `txShares`'ten gelir ve `statementAmount` bunun toplamıdır (satırdaki rakam ile
+    sayfadaki liste tanım gereği aynı). Ekstrede kalem yoksa kesim bilinmez (`null`). */
+export function ekstreDetayi(card: Card, txs: CardTx[], dueKey: string): { kesim: Date | null; donemBasi: Date | null; kalemler: EkstreKalemi[]; toplam: number } {
+  let kesim: Date | null = null;
+  const kalemler: EkstreKalemi[] = [];
+  for (const t of txs) {
+    if (t.card_id !== card.id) continue;
+    for (const sh of txShares(t, card)) {
+      if (keyOf(sh.due) !== dueKey) continue;
+      kesim = sh.cut;
+      kalemler.push({ tx: t, tutar: sh.amount, idx: sh.idx, total: sh.total });
+    }
+  }
+  kalemler.sort((a, b) => b.tx.date.localeCompare(a.tx.date) || b.tx.id - a.tx.id);
+  const donemBasi = kesim ? clampDay(kesim.getFullYear(), kesim.getMonth() - 1, card.statement_day) : null;
+  donemBasi?.setDate(donemBasi.getDate() + 1); // önceki kesimin ertesi günü
+  return { kesim, donemBasi, kalemler, toplam: kalemler.reduce((s, k) => s + k.tutar, 0) };
+}
 
 /** Bir ekstre: `paid` ödendi işareti, `eksik` ödemeden SONRA o ekstreye düşen ve henüz ödenmemiş
     tutar (ödenmemiş ekstrede 0 — orada borç zaten `amount`'un tamamı). */

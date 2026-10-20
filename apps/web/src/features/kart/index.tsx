@@ -1,11 +1,11 @@
 import React, { useMemo, useState } from "react";
-import { parseD, fmtD, keyOf, num, cardInfos, stmtKey, txShares, ekstreOdemeleri, acikDonem, type AllData, type Card } from "@finans/engine";
+import { parseD, fmtD, keyOf, num, cardInfos, stmtKey, txShares, ekstreOdemeleri, ekstreDetayi, acikDonem, type AllData, type Card } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, tl, fmtMoney } from "../../theme";
 import { Empty, Aciklama, Modal, SilDugmesi, useSayfalama, DahaFazla } from "../../ui";
 import type { AddKind } from "../forms";
 import { KategoriAlani } from "../forms/KategoriAlani";
-import { girdi, Bolum, Etiketli, TutarGirdisi, Satirlar, SatirSec, SatirMetin, FormAlt, Vurgu } from "../forms/parcalar";
+import { girdi, Bolum, Etiketli, TutarGirdisi, Satirlar, SatirSec, SatirMetin, FormAlt, Vurgu, Segment } from "../forms/parcalar";
 import { EditSheet, type EditTarget } from "../../EditSheet";
 
 /* ————— KARTLAR —————
@@ -56,11 +56,17 @@ export function Kartlar({ data, reload }: { data: AllData; reload: () => void; o
   const totalDebt = infos.reduce((s, c) => s + c.debt, 0);
   /* Kart harcamaları uygulamanın EN HIZLI büyüyen listesidir (her alışveriş bir satır). Sıralama
      hook'un dışında memolanır; satır tek katmanlı → 20'lik dilim. */
+  /* Kart süzgeci yalnız 2+ kartta (tek kartta seçenek yok). Arama/dönem Kayıtlar'dadır — burada
+     kopyalanmaz; ekstre içeriği ise ekstre satırına dokununca açılır (tarihle süzmek taksit payını bulamaz). */
+  const [kartSuz, setKartSuz] = useState("hepsi");
   const kartTxS = useSayfalama(
-    useMemo(() => [...data.card_txs].sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id), [data.card_txs]),
-    20,
+    useMemo(() => [...data.card_txs].filter((t) => kartSuz === "hepsi" || t.card_id === +kartSuz)
+      .sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id), [data.card_txs, kartSuz]),
+    20, kartSuz,
   );
   const [paying, setPaying] = useState<Odeme | null>(null);
+  /** Açık ekstre sayfası: kart kimliği + vade (nesne değil — reload sonrası bayat rakam olmasın) */
+  const [ekstreSayfa, setEkstreSayfa] = useState<{ cardId: number; dueK: string } | null>(null);
   const [editing, setEditing] = useState<EditTarget | null>(null);
   /** Kart sayfası: `null` kapalı, `"yeni"` ekleme, kart nesnesi düzenleme */
   const [kartSayfa, setKartSayfa] = useState<Card | "yeni" | null>(null);
@@ -119,39 +125,29 @@ export function Kartlar({ data, reload }: { data: AllData; reload: () => void; o
               </div>
               <div style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase", color: T.mut, padding: "12px 16px 6px" }}>Ekstreler</div>
               {ekstreler.length === 0 && <div style={{ ...satir, color: T.mut, fontSize: 13.5 }}>Yaklaşan ekstre yok.</div>}
+              {/* Satırın tamamı ekstre sayfasını açar (içerik + ödeme eylemleri); satırda yalnız bekleyen TEK
+                  eylem kalır — ilk ödenebilir ekstrede "Ödedim" (Faz 24 kural 1). */}
               {ekstreler.map((e, j) => {
                 const dueK = keyOf(e.due);
+                const ac = () => setEkstreSayfa({ cardId: ci.card.id, dueK });
                 return (
-                  <div key={dueK} style={satir}>
+                  <div key={dueK} role="button" tabIndex={0} className="liste-satir" onClick={ac}
+                    onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); ac(); } }}
+                    style={{ ...satir, cursor: "pointer" }}>
                     <span style={{ flex: 1, minWidth: 0 }}>{e.et} <span style={{ color: T.mut, fontSize: 13 }}>· {kisaTarih(e.due)}</span></span>
                     <span style={{ ...css.mono, color: e.paid && !e.eksik ? T.mut : T.text, textDecoration: e.paid && !e.eksik ? "line-through" : "none", fontWeight: j === ilkOdenmemis ? 600 : 400 }}>
                       {tl.format(Math.round(e.amount))}
                     </span>
-                    {e.paid && e.eksik > 0 ? (<>
-                      {/* Ödemeden SONRA bu ekstreye harcama düştü: fark borçta, sessizce kaybolmaz */}
-                      <span title={`Ödendikten sonra bu ekstreye ${tl.format(Math.round(e.eksik))} harcama eklendi`}
-                        style={{ fontSize: 11.5, fontWeight: 600, padding: "2px 7px", borderRadius: 6, background: T.warnSoft, color: T.warn, whiteSpace: "nowrap" }}>
-                        {tl.format(Math.round(e.eksik))} eksik
-                      </span>
-                      <button onClick={() => setPaying({ card: ci.card, dueK, amount: e.amount, yeniden: e.amount - e.eksik })}
-                        style={{ background: "none", border: "none", color: T.acc, fontFamily: T.disp, fontSize: 13.5, cursor: "pointer", padding: "6px 0", minHeight: 0, whiteSpace: "nowrap" }}>yeniden öde</button>
-                    </>) : e.paid ? (<>
-                      <span style={{ fontSize: 11.5, fontWeight: 600, padding: "2px 7px", borderRadius: 6, background: T.posSoft, color: T.pos }}>ödendi</span>
-                      <button title="Ödemeyi geri al (gider kaydı silinir, bakiye iade edilir)" onClick={() => unpay(ci.card.id, dueK)}
-                        style={{ background: "none", border: "none", color: T.mut, fontFamily: T.disp, fontSize: 13, cursor: "pointer", padding: "6px 0", minHeight: 0 }}>geri al</button>
-                    </>) : acik(e) ? (
-                      <span title="Kesim günü gelmeden ekstre kesinleşmez; ödeme kesimden sonra kaydedilir" style={{ fontSize: 13, color: T.mut, whiteSpace: "nowrap" }}>
-                        kesim {kisaTarih(e.cut!)}
-                      </span>
-                    ) : j === ilkOdenmemis ? (
-                      <button onClick={() => setPaying({ card: ci.card, dueK, amount: e.amount })} style={{
-                        height: 34, minHeight: 0, padding: "0 14px", border: "none", borderRadius: 10, background: T.acc, color: T.accInk,
-                        fontFamily: T.disp, fontSize: 13.5, fontWeight: 600, cursor: "pointer",
-                      }}>Ödedim</button>
-                    ) : (
-                      <button onClick={() => setPaying({ card: ci.card, dueK, amount: e.amount })}
-                        style={{ background: "none", border: "none", color: T.acc, fontFamily: T.disp, fontSize: 13.5, cursor: "pointer", padding: "6px 0", minHeight: 0 }}>öde</button>
-                    )}
+                    {e.paid && e.eksik > 0 ? <Rozet renk={T.warn} zemin={T.warnSoft}>{tl.format(Math.round(e.eksik))} eksik</Rozet>
+                      : e.paid ? <Rozet renk={T.pos} zemin={T.posSoft}>ödendi</Rozet>
+                      : acik(e) ? <span style={{ fontSize: 13, color: T.mut, whiteSpace: "nowrap" }}>kesim {kisaTarih(e.cut!)}</span>
+                      : j === ilkOdenmemis ? (
+                        <button onClick={(ev) => { ev.stopPropagation(); setPaying({ card: ci.card, dueK, amount: e.amount }); }} style={{
+                          height: 34, minHeight: 0, padding: "0 14px", border: "none", borderRadius: 10, background: T.acc, color: T.accInk,
+                          fontFamily: T.disp, fontSize: 13.5, fontWeight: 600, cursor: "pointer",
+                        }}>Ödedim</button>
+                      ) : null}
+                    <span aria-hidden="true" style={{ color: T.mut3, fontSize: 18, lineHeight: 1 }}>›</span>
                   </div>
                 );
               })}
@@ -177,6 +173,12 @@ export function Kartlar({ data, reload }: { data: AllData; reload: () => void; o
           <span style={{ fontWeight: 700, fontSize: 16, flex: 1 }}>Kart harcamaları</span>
           <span style={{ fontSize: 12.5, color: T.mut }}>dokun: düzenle</span>
         </div>
+        {data.cards.length > 1 && (
+          <div style={{ padding: "0 16px 10px", overflowX: "auto" }}>
+            <Segment kucuk ad="Kart" deger={kartSuz} sec={setKartSuz}
+              secenek={[{ v: "hepsi", l: "Tümü" }, ...data.cards.map((c) => ({ v: String(c.id), l: c.name }))]} />
+          </div>
+        )}
         {/* Satırın tamamı dokunma hedefi (yeniden tasarım, grup 3 — Faz 24 kural 1'in güncellemesi):
             ✎ ✕ satırdan kalktı, silme düzenleme sayfasının içinde (yan etkisiyle). */}
         {kartTxS.gorunen.map((t) => {
@@ -206,11 +208,107 @@ export function Kartlar({ data, reload }: { data: AllData; reload: () => void; o
       </div>
     )}
 
+    {ekstreSayfa && (() => {
+      const card = data.cards.find((c) => c.id === ekstreSayfa.cardId);
+      return card ? <EkstreSayfasi data={data} card={card} dueK={ekstreSayfa.dueK} today={today} odemeler={odemeler}
+        onPay={(o) => { setEkstreSayfa(null); setPaying(o); }}
+        onUnpay={async () => { await unpay(card.id, ekstreSayfa.dueK); }}
+        onEdit={(t) => { setEkstreSayfa(null); setEditing({ kind: "cardtx", row: t }); }}
+        onClose={() => setEkstreSayfa(null)} /> : null;
+    })()}
     {paying && <EkstreOde data={data} reload={reload} odeme={paying} onClose={() => setPaying(null)} />}
     {kartSayfa && <KartSayfasi data={data} reload={reload} kart={kartSayfa === "yeni" ? null : kartSayfa}
       borc={kartSayfa === "yeni" ? 0 : infos.find((c) => c.card.id === kartSayfa.id)?.debt ?? 0} onClose={() => setKartSayfa(null)} />}
     {editing && <EditSheet data={data} target={editing} reload={reload} onClose={() => setEditing(null)} />}
   </>);
+}
+
+const Rozet = ({ renk, zemin, children }: { renk: string; zemin: string; children: React.ReactNode }) => (
+  <span style={{ fontSize: 11.5, fontWeight: 600, padding: "2px 7px", borderRadius: 6, background: zemin, color: renk, whiteSpace: "nowrap" }}>{children}</span>
+);
+
+/** Ekstrenin İÇERİĞİ: dönem, durum, o vadeye düşen kalemler (taksitte o ekstreye düşen pay) ve ödeme
+    eylemleri. Rakamlar `ekstreDetayi`'nden — satırdaki toplamla tanım gereği aynı. Açık dönemde
+    (kesim gelmedi) "şu ana kadar" toplamdır ve ödeme verilmez. Kaleme dokunmak düzenlemeyi açar. */
+function EkstreSayfasi({ data, card, dueK, today, odemeler, onPay, onUnpay, onEdit, onClose }: {
+  data: AllData; card: Card; dueK: string; today: Date; odemeler: Map<string, number | null>;
+  onPay: (o: Odeme) => void; onUnpay: () => Promise<void>; onEdit: (t: AllData["card_txs"][number]) => void; onClose: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const due = parseD(dueK);
+  const { kesim, donemBasi, kalemler, toplam } = ekstreDetayi(card, data.card_txs, dueK);
+  const k = stmtKey(card.id, dueK);
+  const paid = odemeler.has(k), odenen = odemeler.get(k) ?? null;
+  const eksik = paid && odenen != null && toplam - odenen >= 0.01 ? toplam - odenen : 0;
+  const acik = !paid && kesim != null && acikDonem({ cut: kesim }, today);
+  const gecmis = due < today;
+  const gunKaldi = kesim ? Math.round((+kesim - +today) / 86_400_000) : 0;
+  const ay = fmtD(due, { month: "long" });
+  const durum = eksik > 0 ? { t: `ödendi · ${tl.format(Math.round(eksik))} eksik`, r: T.warn, z: T.warnSoft }
+    : paid ? { t: "ödendi", r: T.pos, z: T.posSoft }
+    : acik ? { t: gunKaldi === 0 ? "açık dönem · kesim bugün" : `açık dönem · kesime ${gunKaldi} gün`, r: T.mut, z: T.panel2 }
+    : gecmis ? { t: "vadesi geçti · ödendi sayılır", r: T.mut, z: T.panel2 }
+    : { t: "ödenecek", r: T.acc, z: T.accSoft };
+  const kats = new Map(data.categories.map((c) => [c.id, c.name]));
+  return (
+    <Modal title={`${card.name} · ${ay.charAt(0).toLocaleUpperCase("tr") + ay.slice(1)} ekstresi`} onClose={onClose}>
+      <Bolum>
+        <div>
+          <div style={{ fontSize: 13, color: T.mut }}>
+            {kesim && donemBasi ? <>dönem {fmtD(donemBasi, { day: "numeric", month: "short" })} – {fmtD(kesim, { day: "numeric", month: "short" })} · </> : null}
+            son ödeme {fmtD(due, { day: "numeric", month: "long" })}
+          </div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginTop: 2 }}>
+            <span style={{ ...css.mono, fontSize: 34, fontWeight: 600, letterSpacing: "-0.02em" }}>{fmtMoney(toplam, "TRY", true)}</span>
+            <Rozet renk={durum.r} zemin={durum.z}>{durum.t}</Rozet>
+          </div>
+          {acik && <div style={{ fontSize: 13, color: T.mut, marginTop: 4 }}>Şu ana kadar; kesime kadar girilen harcamalar bu ekstreye eklenir.</div>}
+          {paid && odenen != null && eksik > 0 && <div style={{ fontSize: 13, color: T.mut, marginTop: 4 }}>{tl.format(Math.round(odenen))} ödendi, sonradan {tl.format(Math.round(eksik))} harcama eklendi.</div>}
+        </div>
+        <div style={{ margin: "0 -4px" }}>
+          {kalemler.length === 0 && <Empty>Bu ekstrede harcama yok.</Empty>}
+          {kalemler.map(({ tx, tutar, idx, total }) => {
+            const alt = [total > 1 ? `taksit ${idx}/${total} · toplam ${tl.format(Math.round(tx.amount))}` : null,
+              tx.category_id != null ? kats.get(tx.category_id) : null].filter(Boolean).join(" · ");
+            return (
+              <button key={`${tx.id}:${idx}`} type="button" onClick={() => onEdit(tx)} className="liste-satir" style={{
+                ...satir, width: "100%", padding: "0 4px", minHeight: 52, background: "none", border: "none",
+                borderTop: `1px solid ${T.line2}`, textAlign: "left", cursor: "pointer", fontFamily: T.disp, color: T.text,
+              }}>
+                {/* tarih alttaki "Kart harcamaları" listesiyle aynı biçimde: büyük gün, altında ay */}
+                <span style={{ width: 32, textAlign: "center", lineHeight: 1.05, flexShrink: 0 }}>
+                  <span style={{ display: "block", ...css.mono, fontSize: 15, fontWeight: 600 }}>{fmtD(parseD(tx.date), { day: "2-digit" })}</span>
+                  <span style={{ display: "block", fontSize: 11, color: T.mut }}>{fmtD(parseD(tx.date), { month: "short" })}</span>
+                </span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tx.name}</span>
+                  {alt && <span style={{ display: "block", fontSize: 12.5, color: T.mut, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{alt}</span>}
+                </span>
+                <span style={{ ...css.mono, flexShrink: 0 }}>{fmtMoney(tutar, "TRY", true)}</span>
+              </button>
+            );
+          })}
+        </div>
+        {!acik && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            {paid && (
+              <button type="button" disabled={busy} title="Gider kaydı silinir, bakiye iade edilir"
+                onClick={async () => { setBusy(true); try { await onUnpay(); } finally { setBusy(false); } }}
+                style={{ height: 44, padding: "0 16px", border: `1px solid ${T.line}`, borderRadius: 12, background: T.panel, color: T.text, fontFamily: T.disp, fontSize: 14.5, cursor: "pointer" }}>
+                Ödemeyi geri al
+              </button>
+            )}
+            {(!paid || eksik > 0) && toplam > 0 && (
+              <button type="button" onClick={() => onPay({ card, dueK, amount: toplam, ...(eksik > 0 ? { yeniden: toplam - eksik } : {}) })}
+                style={{ height: 44, padding: "0 18px", border: "none", borderRadius: 12, background: T.acc, color: T.accInk, fontFamily: T.disp, fontSize: 14.5, fontWeight: 650, cursor: "pointer" }}>
+                {eksik > 0 ? "Yeniden öde" : gecmis ? "Ödendi olarak kaydet" : "Ödedim"}
+              </button>
+            )}
+          </div>
+        )}
+      </Bolum>
+    </Modal>
+  );
 }
 
 /** `yeniden`: ekstre zaten ödenmiş ama sonradan harcama düşmüş — önceki ödemenin tutarı. */

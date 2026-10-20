@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { clampDay, firstCutoff, dueOf, txShares, cardInfos, stmtKey, statementAmount, ekstreOdemeleri, acikDonem } from "./cards.js";
+import { clampDay, firstCutoff, dueOf, txShares, cardInfos, stmtKey, statementAmount, ekstreOdemeleri, acikDonem, ekstreDetayi } from "./cards.js";
 import type { Card, CardTx } from "./types.js";
 
 const card: Card = { id: 1, name: "Test Kart", limit_amount: 50000, statement_day: 15, due_day: 5 };
@@ -164,5 +164,25 @@ describe("statementAmount", () => {
   });
   it("başka kartın harcamasını saymaz, ekstresi olmayan vadede 0 döner", () => {
     expect(statementAmount(card, txs, "2026-09-05")).toBe(0);
+  });
+});
+
+describe("ekstreDetayi", () => {
+  const txs: CardTx[] = [
+    { id: 1, card_id: 1, date: "2026-05-02", name: "Telefon", amount: 600, installments: 6 }, // 15 May kesim → 5 Haz, 5 Tem…
+    { id: 2, card_id: 1, date: "2026-06-12", name: "Market", amount: 200, installments: 1 },  // 15 Haz kesim → 5 Tem
+    { id: 3, card_id: 1, date: "2026-06-16", name: "Sonraki dönem", amount: 50, installments: 1 }, // 15 Tem kesim
+    { id: 4, card_id: 2, date: "2026-06-12", name: "Başka kart", amount: 999, installments: 1 },
+  ];
+  it("ekstreye düşen PAYLARI dönem aralığıyla verir; toplam statementAmount ile aynı", () => {
+    const e = ekstreDetayi(card, txs, "2026-07-05");
+    expect(e.kesim).toEqual(new Date(2026, 5, 15));
+    expect(e.donemBasi).toEqual(new Date(2026, 4, 16)); // önceki kesimin ertesi günü
+    expect(e.kalemler.map((k) => [k.tx.id, k.tutar, k.idx, k.total])).toEqual([[2, 200, 1, 1], [1, 100, 2, 6]]); // yeniden eskiye
+    expect(e.toplam).toBe(300);
+    expect(statementAmount(card, txs, "2026-07-05")).toBe(e.toplam);
+  });
+  it("kalemi olmayan vadede kesim bilinmez", () => {
+    expect(ekstreDetayi(card, txs, "2027-01-05")).toEqual({ kesim: null, donemBasi: null, kalemler: [], toplam: 0 });
   });
 });
