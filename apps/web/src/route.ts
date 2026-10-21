@@ -57,3 +57,13 @@ export function useTabRoute(): [TabKey, (t: TabKey, replace?: boolean) => void] 
   }, []);
   return [tab, go];
 }
+
+/** Bildirimden gelen `?dogrula=<id>` (Faz 48 haftalık hatırlatma). Tek kullanımlık: okununca adres
+    temizlenir, yoksa yenileme ya da geri tuşu doğrulama sayfasını yeniden açardı. */
+export const dogrulaParam = (): number | null => {
+  const v = Number(new URLSearchParams(window.location.search).get("dogrula"));
+  return Number.isInteger(v) && v > 0 ? v : null;
+};
+export const dogrulaParamTemizle = () => {
+  if (new URLSearchParams(window.location.search).has("dogrula")) window.history.replaceState({}, "", window.location.pathname);
+};

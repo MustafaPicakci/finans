@@ -81,7 +81,7 @@ describe("bildirimPlani", () => {
   });
 
   it("harcaması olmayan kesim hatırlatılmaz (her ay '₺0' gürültü olurdu)", () => {
-    expect(plan(data({ cards: [kart()] }))).toEqual([]);
+    expect(plan(data({ cards: [kart()] })).filter((o) => !o.anahtar.startsWith("dg:"))).toEqual([]); // doğrulama hatırlatması ayrı (Faz 48)
   });
 
   it("ödenmiş ekstre hatırlatılmaz", () => {
@@ -101,5 +101,45 @@ describe("bildirimPlani", () => {
     });
     const p = bildirimPlani(d, project(d, 6), new Date(), { ufukGun: 30 });
     expect(p.map((o) => o.anahtar)).toEqual(["r:1:2026-10-01", "o:4:2026-10-03"]);
+  });
+
+  describe("doğrulama hatırlatması (Faz 48)", () => {
+    const dg = (d: AllData) => plan(d).filter((o) => o.anahtar.startsWith("dg:"));
+
+    it("son doğrulamadan 7 gün sonra 09:00'da, sonra haftada bir — doğrulanana dek", () => {
+      const d = data({ accounts: [{ id: 1, name: "Garanti", last_recon_date: "2026-09-18" }] });
+      const o = dg(d);
+      expect(o[0]).toMatchObject({ anahtar: "dg:2026-09-25", zaman: iso(2026, 9, 25), url: "/hesaplar?dogrula=1", baslik: "Garanti · bakiyeyi doğrula" });
+      expect(o[0].govde).toContain("Son doğrulama 18 Eylül");
+      expect(o[1].anahtar).toBe("dg:2026-10-02");
+      expect(o[0].bitis).toBe(new Date(2026, 9, 1, 9).toISOString()); // bir sonraki yuvadan önce düşer
+    });
+
+    it("gecikmiş doğrulama: geçmiş yuvalar atlanır, haftalık ritim (son doğrulamanın günü) korunur", () => {
+      const d = data({ cards: [kart({ last_recon_date: "2026-08-31" })] }); // pazartesi
+      const o = dg(d);
+      expect(o[0].anahtar).toBe("dg:2026-09-21");
+      expect(o[0]).toMatchObject({ baslik: "Bonus · borcu doğrula", url: "/kart?dogrula=3" });
+      expect(o[0].govde).toContain("kullanılabilir limiti");
+    });
+
+    it("hiç doğrulanmamış kalem pazartesi hatırlatılır — 'yarın' değil (her açılışta kayardı)", () => {
+      const d = data({ accounts: [{ id: 1, name: "Nakit" }] });
+      expect(dg(d)[0].anahtar).toBe("dg:2026-09-21"); // 20 Eylül pazar → 21 Eylül pazartesi
+      expect(dg(d)[0].govde).toContain("Henüz doğrulanmadı");
+    });
+
+    it("aynı güne düşen kalemler TEK bildirimde; doğrulama günü ilerleyince yuva kayar", () => {
+      const d = data({
+        accounts: [{ id: 1, name: "Garanti", last_recon_date: "2026-09-18" }, { id: 2, name: "Nakit", last_recon_date: "2026-09-18" }],
+        cards: [kart({ last_recon_date: "2026-09-18" })],
+      });
+      const o = dg(d);
+      expect(o.filter((x) => x.anahtar === "dg:2026-09-25")).toHaveLength(1);
+      expect(o[0]).toMatchObject({ baslik: "Bakiyeleri doğrula", url: "/hesaplar" });
+      expect(o[0].govde).toContain("Garanti, Nakit, Bonus kartı");
+      const sonra = data({ accounts: [{ id: 1, name: "Garanti", last_recon_date: "2026-09-20" }] });
+      expect(dg(sonra)[0].anahtar).toBe("dg:2026-09-27");
+    });
   });
 });

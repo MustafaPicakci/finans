@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { parseD, fmtD, keyOf, num, todayStr, cardInfos, stmtKey, txShares, ekstreOdemeleri, ekstreDetayi, acikDonem, kartMutabakat, mutabakatKalemi, reconStatus, KART_MUTABAKAT_ADI, type AllData, type Card } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, tl, fmtMoney } from "../../theme";
@@ -7,6 +7,7 @@ import type { AddKind } from "../forms";
 import { KategoriAlani } from "../forms/KategoriAlani";
 import { girdi, Bolum, Etiketli, TutarGirdisi, Satirlar, SatirSec, SatirMetin, FormAlt, Vurgu, Segment } from "../forms/parcalar";
 import { EditSheet, type EditTarget } from "../../EditSheet";
+import { dogrulaParam, dogrulaParamTemizle } from "../../route";
 
 /* ————— KARTLAR —————
    Kart TANIMI burada yapılır; kart HARCAMASI girişi global "+" akışındadır.
@@ -70,8 +71,10 @@ export function Kartlar({ data, reload }: { data: AllData; reload: () => void; o
   const [editing, setEditing] = useState<EditTarget | null>(null);
   /** Kart sayfası: `null` kapalı, `"yeni"` ekleme, kart nesnesi düzenleme */
   const [kartSayfa, setKartSayfa] = useState<Card | "yeni" | null>(null);
-  /** Borcu doğrulanan kartın kimliği (nesne değil — reload sonrası güncel kart/harcamalar okunsun) */
-  const [dogrula, setDogrula] = useState<number | null>(null);
+  /** Borcu doğrulanan kartın kimliği (nesne değil — reload sonrası güncel kart/harcamalar okunsun).
+      Haftalık doğrulama bildirimi `/kart?dogrula=<id>` ile gelir: sayfa doğrudan açılır. */
+  const [dogrula, setDogrula] = useState<number | null>(() => dogrulaParam());
+  useEffect(dogrulaParamTemizle, []);
   const bugunStr = todayStr();
   const unpay = async (cardId: number, dueK: string) => { await api.unpayStatement(cardId, dueK); reload(); };
 

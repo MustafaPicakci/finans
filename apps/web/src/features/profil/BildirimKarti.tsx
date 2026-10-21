@@ -36,7 +36,7 @@ export function BildirimSatiri() {
   /* Yeniden tasarım (grup 8): kart değil, Hesabım'daki "Gizlilik ve bildirimler" bölümünün satırı.
      Açma/kapama bir anahtar; desteklenmeyen / sunucuda kapalı / izin engelli hâllerde anahtar yerine
      nedeni yazan satır. Cihaz listesi aynı bölümün alt satırlarında (satılan telefon kaldırılabilsin). */
-  const aciklama = <>Ödeme ve kesim günlerinden <b>3 gün önce</b>, tutarıyla haber verir. İçerik bu cihazda şifrelenir; sunucu okuyamaz.</>;
+  const aciklama = <>Ödeme ve kesim günlerinden <b>3 gün önce</b>, tutarıyla haber verir; bakiyesi ya da borcu <b>7 gündür</b> doğrulanmayan hesap ve kartı hatırlatır. İçerik bu cihazda şifrelenir; sunucu okuyamaz.</>;
   const engel = !destek
     ? (iosSekmede()
       ? <>iPhone'da bildirim yalnız ana ekrana eklenmiş uygulamada çalışır: Safari'de <b>Paylaş → Ana Ekrana Ekle</b>, sonra uygulamayı oradan aç.</>

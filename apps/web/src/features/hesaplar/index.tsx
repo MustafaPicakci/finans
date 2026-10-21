@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   fmtD, num, todayStr, parseD,
   depositMaturity, depositValueOn, depositMaturityValue, depositNetInterest, depositAccruedInterest, depositDaysRemaining, depositMatured,
@@ -11,6 +11,7 @@ import { T, css, tl, fmtMoney } from "../../theme";
 import { Empty, Aciklama, Modal, SilDugmesi, useSayfalama, DahaFazla } from "../../ui";
 import { girdi, Bolum, Etiketli, Segment, TutarGirdisi, Satirlar, SatirMetin, FormAlt, Vurgu } from "../forms/parcalar";
 import { EditSheet, type EditTarget } from "../../EditSheet";
+import { dogrulaParam, dogrulaParamTemizle } from "../../route";
 
 /* ————— HESAPLAR EKRANI —————
    Banka varlıklarının tek yönetim yeri: vadesiz (nakit) hesaplar + vadeli mevduat. Buradaki "hesap"
@@ -63,7 +64,10 @@ const durumMetni = (a: Account, today: string) => {
 
 export function Hesaplar({ data, reload }: { data: AllData; reload: () => void }) {
   const [editing, setEditing] = useState<EditTarget | null>(null);
-  const [acik, setAcik] = useState<number | "yeni" | null>(null); // hesap sayfası
+  /* Haftalık doğrulama bildirimi `/hesaplar?dogrula=<id>` ile gelir: hesabın doğrulama görünümü açılır */
+  const [dogrulaId, setDogrulaId] = useState(dogrulaParam); // yalnız ilk açılışta: kapatınca düşer
+  useEffect(dogrulaParamTemizle, []);
+  const [acik, setAcik] = useState<number | "yeni" | null>(dogrulaId); // hesap sayfası
   const today = new Date(); today.setHours(0, 0, 0, 0);
   /* Bakiye kolonda değil defterde (E2EE aşama 1a); tek geçişte hepsi */
   const bakiyeler = balancesByAccount(data.account_entries);
@@ -133,7 +137,7 @@ export function Hesaplar({ data, reload }: { data: AllData; reload: () => void }
     </div>
 
     {acik === "yeni" && <HesapEkle reload={reload} onClose={() => setAcik(null)} />}
-    {acikHesap && <HesapSayfasi data={data} hesap={acikHesap} reload={reload} onClose={() => setAcik(null)} />}
+    {acikHesap && <HesapSayfasi data={data} hesap={acikHesap} reload={reload} onClose={() => { setAcik(null); setDogrulaId(null); }} ilk={acikHesap.id === dogrulaId ? "dogrula" : "ana"} />}
     {editing && <EditSheet data={data} target={editing} reload={reload} onClose={() => setEditing(null)} />}
   </>);
 }
@@ -200,8 +204,8 @@ function HesapEkle({ reload, onClose }: { reload: () => void; onClose: () => voi
 /* ————— HESAP SAYFASI —————
    Satıra dokununca açılır. Üç görünüm, tek sayfa: ana (bakiye + hareketler), doğrula (mutabakat),
    düzenle (ad, tür, sil). Alt görünümlerden sol üstteki geri ile ana görünüme dönülür. */
-function HesapSayfasi({ data, hesap, reload, onClose }: { data: AllData; hesap: Account; reload: () => void; onClose: () => void }) {
-  const [gorunum, setGorunum] = useState<"ana" | "dogrula" | "duzenle">("ana");
+function HesapSayfasi({ data, hesap, reload, onClose, ilk = "ana" }: { data: AllData; hesap: Account; reload: () => void; onClose: () => void; ilk?: "ana" | "dogrula" }) {
+  const [gorunum, setGorunum] = useState<"ana" | "dogrula" | "duzenle">(ilk);
   const kind = accountKindOf(hesap);
   const d = durumMetni(hesap, todayStr());
   const bakiye = accountBalance(data.account_entries, hesap.id);

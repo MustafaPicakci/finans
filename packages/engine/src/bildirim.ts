@@ -2,7 +2,7 @@ import type { AllData } from "./types.js";
 import type { Day } from "./projection.js";
 import { firstCutoff, clampDay, dueOf, statementAmount } from "./cards.js";
 import { loanRemaining } from "./loans.js";
-import { keyOf, fmtD } from "./date.js";
+import { keyOf, fmtD, parseD } from "./date.js";
 
 /* ————— Bildirim planı (Faz 44) —————
    "3 gün sonra kira var, ₺25.000" türünden hatırlatmalar. Sunucu şifreli veriyi okuyamadığı için
@@ -18,11 +18,24 @@ import { keyOf, fmtD } from "./date.js";
    bildirimdeki tutar, sistemin o an bildiği en güncel tutardır.
 
    Kapsam (kullanıcı kararı): yalnız GİDERLER + kart kesimi, olaydan `gunOnce` gün önce, tutarıyla.
-   Gelir hatırlatılmaz. Kesimde harcama yoksa bildirim çıkmaz (her ay "₺0" demek gürültüdür). */
+   Gelir hatırlatılmaz. Kesimde harcama yoksa bildirim çıkmaz (her ay "₺0" demek gürültüdür).
+
+   DOĞRULAMA HATIRLATMASI (Faz 48): hesap bakiyesi ve kart borcu bankayla en son ne zaman
+   karşılaştırıldıysa (`last_recon_date`) ondan `DOGRULAMA_GUN` gün sonra, sonra haftada bir —
+   doğrulanana dek. Kayıtlar her gün girilmeyince fark sessizce büyüyordu; mutabakat ancak düzenli
+   yapılırsa işe yarar. Ufuk içindeki BÜTÜN haftalık yuvalar plana girer: uygulama haftalarca
+   açılmasa da hatırlatma sürer (plan yalnız açılışta yenilenir). Hiç doğrulanmamış kalem için
+   çapa PAZARTESİDİR, "yarın" değil: plan her açılışta baştan kurulduğundan "yarın" her gün bir gün
+   ileri kayar ve uygulamayı her gün açan kullanıcıya hiç gitmezdi. Aynı güne düşen kalemler TEK
+   bildirimde toplanır (ödeme olaylarından farklı olarak — beş hesabı birlikte doğrulayan kullanıcıya
+   haftada beş bildirim gürültüdür). */
 
 /** Plan kuralları değişince artırılır: sunucu daha DÜŞÜK sürümlü bir planı reddeder — önbellekteki
     eski bir PWA, yeni sürümün kurduğu planın üzerine eski kurallarla yazamasın. */
-export const BILDIRIM_SURUM = 1;
+export const BILDIRIM_SURUM = 2;
+
+/** Doğrulama hatırlatmasının aralığı (gün) — kullanıcı kararı */
+export const DOGRULAMA_GUN = 7;
 
 export type BildirimOge = {
   /** tekrar gönderim anahtarı: kaynak kayıt + olay günü ("r:12:2026-10-01", "k:3:2026-10-05") */
@@ -96,6 +109,37 @@ export function bildirimPlani(data: AllData, days: Day[], simdi: Date, s: Bildir
       ekle(c, `k:${card.id}:${keyOf(c)}`, `${card.name} ekstresi ${sonra} kesiliyor`,
         `Kesim: ${gun(c)} · şu ana kadar ${para(tutar)}`, "/kart");
     }
+  }
+  /* doğrulama: her hesap ve kart için son doğrulamadan itibaren haftalık yuvalar */
+  type Kalem = { tur: "hesap" | "kart"; id: number; ad: string; son: string | null };
+  const kalemler: Kalem[] = [
+    ...data.accounts.map((a) => ({ tur: "hesap" as const, id: a.id, ad: a.name, son: a.last_recon_date ?? null })),
+    ...data.cards.map((c) => ({ tur: "kart" as const, id: c.id, ad: c.name, son: c.last_recon_date ?? null })),
+  ];
+  const yuvalar = new Map<string, { gun: Date; kalemler: Kalem[] }>();
+  for (const k of kalemler) {
+    let y: Date;
+    if (k.son) y = kaydir(parseD(k.son), DOGRULAMA_GUN);
+    else { y = new Date(bugun); y.setDate(y.getDate() + ((8 - y.getDay()) % 7)); } // bugün ya da sonraki pazartesi
+    for (; y <= ufuk; y = kaydir(y, DOGRULAMA_GUN)) {
+      const z = new Date(y); z.setHours(saat, 0, 0, 0);
+      if (z <= simdi) continue;
+      const k2 = keyOf(y);
+      if (!yuvalar.has(k2)) yuvalar.set(k2, { gun: new Date(y), kalemler: [] });
+      yuvalar.get(k2)!.kalemler.push(k);
+    }
+  }
+  for (const [k, { gun: g, kalemler: ks }] of yuvalar) {
+    const z = new Date(g); z.setHours(saat, 0, 0, 0);
+    const tek = ks.length === 1 ? ks[0] : null;
+    const kisa = (d: string) => fmtD(parseD(d), { day: "numeric", month: "long" });
+    const baslik = tek ? `${tek.ad} · ${tek.tur === "kart" ? "borcu" : "bakiyeyi"} doğrula` : "Bakiyeleri doğrula";
+    const govde = tek
+      ? `${tek.son ? `Son doğrulama ${kisa(tek.son)}.` : "Henüz doğrulanmadı."} Banka uygulamasındaki ${tek.tur === "kart" ? "kullanılabilir limiti" : "bakiyeyi"} gir.`
+      : `${ks.map((x) => x.tur === "kart" ? `${x.ad} kartı` : x.ad).join(", ")} — banka uygulamasındaki rakamlarla karşılaştır.`;
+    const url = tek ? `/${tek.tur === "kart" ? "kart" : "hesaplar"}?dogrula=${tek.id}` : ks.some((x) => x.tur === "hesap") ? "/hesaplar" : "/kart";
+    // bir sonraki yuva gelene dek geçerli (sunucu uyuyup geç uyanırsa hatırlatma hâlâ doğru)
+    out.push({ anahtar: `dg:${k}`, zaman: z.toISOString(), bitis: kaydir(z, DOGRULAMA_GUN - 1).toISOString(), baslik, govde, url });
   }
   return out.sort((a, b) => a.zaman.localeCompare(b.zaman) || a.anahtar.localeCompare(b.anahtar));
 }

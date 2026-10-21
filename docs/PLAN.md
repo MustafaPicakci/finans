@@ -671,7 +671,7 @@ Doğrulama: gerçek model anahtarı yerine yerelde OpenAI uyumlu **senaryolu bir
 maaş yeni hesaba, Netflix yeni karta, ikisi de `auto`, hepsi `v1:` → "Geri al" dördünü de sildi.
 Gerçek modelin bu talimata ne kadar uyduğu prod'da (ya da gerçek anahtarla yerelde) görülecek.
 
-## Faz 48 — Kart mutabakatı ✅ (yerelde uçtan uca doğrulandı, 2026-10-21)
+## Faz 48 — Kart mutabakatı + haftalık doğrulama hatırlatması ✅ (yerelde uçtan uca doğrulandı, 2026-10-21)
 
 **Neden.** Harcamalar uygulamaya her gün girilmediğinde kart borcu bankadakinden sessizce ayrışıyor ve
 fark büyüdükçe takip bırakılıyordu. Kayıtları otomatik almanın yolları tek tek elendi (kullanıcıyla):
@@ -712,7 +712,19 @@ Satırlar `v1:`, işaret düz metinde yok; sunucu bozuk/eksik gövdeyi, var olma
 kartı reddediyor (satır yazılmadan). Kiracı yalıtımı: ikinci kullanıcı kaydedilip e-postası
 veritabanından onaylandı, gerçek formdan girdi; onun oturumundan birinci kullanıcının kalemini `sil`
 ile silme (400), kartına toplu satır (400), kartını doğrulama / fark kalemi / limit zarfını ezme (404)
-denendi — hiçbiri satır yazmadı ya da silmedi. Kalan: haftalık hatırlatma bildirimi (ayrı adım).
+denendi — hiçbiri satır yazmadı ya da silmedi.
+
+**Haftalık doğrulama hatırlatması** (kullanıcı kararı: hesaplar da dahil, 7 gün). Bildirim planına
+(Faz 44, `bildirimPlani`) eklendi: her hesap ve kart için son doğrulamadan 7 gün sonra 09:00'da, sonra
+haftada bir — ufuktaki bütün yuvalar plana girer, yani uygulama açılmasa da sürer. Hiç doğrulanmamış
+kalemde çapa pazartesidir: "yarın" seçilseydi plan her açılışta baştan kurulduğu için bir gün ileri
+kayar, uygulamayı her gün açana hiç gitmezdi. Aynı güne düşen kalemler tek bildirimde toplanır
+(ödeme olaylarının "olay başına ayrı" kuralından bilinçli sapma: birlikte doğrulanan beş hesap haftada
+beş bildirim olurdu). Tek kalemde bildirim `/kart?dogrula=<id>` / `/hesaplar?dogrula=<id>` ile doğrudan
+doğrulama sayfasını açar, adres okununca temizlenir. `BILDIRIM_SURUM` 2. Yerelde (geçici VAPID, gerçek
+FCM aboneliği): kuyruk hesap için pazartesileri, bugün doğrulanan kart için 7 gün sonraki
+çarşambaları aldı; hesap da doğrulanınca plan yeniden kuruldu ve iki kalem aynı yuvalarda birleşti
+(16 → 8 satır); iki bağlantı da tam sayfa yüklemede doğru sayfayı açtı.
 
 ## Doğrulama
 `pnpm build` temiz, 57 engine testi yeşil. Kota sıfırlandıktan sonra `returns-by-date` tasarımı gerçek veride **tam** doğrulandı:
