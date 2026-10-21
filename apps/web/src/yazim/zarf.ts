@@ -142,9 +142,9 @@ function ayir(tablo: ZarfliTablo, body: Satir, data: AllData | null, id?: number
   if (id !== undefined) {
     const mevcut = ((data as any)?.[tablo] as Satir[] | undefined)?.find((r) => r.id === id);
     if (!mevcut) throw new ZarfHatasi(`${tablo} #${id} bulunamadı — kısmi güncellemede zarf yeniden kurulamaz`);
-    for (const a of alanlar) if (!(a in hassas)) hassas[a] = mevcut[a] ?? null;
+    for (const a of alanlar) if (!(a in hassas) && !(ISARET[tablo]?.includes(a) && mevcut[a] == null)) hassas[a] = mevcut[a] ?? null;
   } else {
-    for (const a of alanlar) if (!(a in hassas)) hassas[a] = VARSAYILAN[tablo]?.[a] ?? null;
+    for (const a of alanlar) if (!(a in hassas) && !ISARET[tablo]?.includes(a)) hassas[a] = VARSAYILAN[tablo]?.[a] ?? null;
   }
   /* Eski `CHECK (installments >= 1)` — kolon zarfa taşınınca sunucu bunu göremez oldu */
   if (tablo === "card_txs" && "installments" in hassas) {
@@ -158,6 +158,11 @@ function ayir(tablo: ZarfliTablo, body: Satir, data: AllData | null, id?: number
 /* Zarfa taşınan kolonların eski DDL varsayılanları. Kolon düz dururken gövdede olmayan alanı
    veritabanının DEFAULT'u tamamlıyordu; zarfta o iş buraya düştü. Yokken asistanın taksitsiz
    yazdığı kart harcaması `installments: null` kaydediliyor ve hiçbir ekstreye/borca girmiyordu. */
+/* Yalnız taşıyan satırın zarfına giren işaret alanları: yoksa yazılmaz (her kart harcamasının
+   zarfına `"mutabakat": null` girmesin), kısmi düzenlemede varsa korunur. */
+const ISARET: Partial<Record<ZarfliTablo, readonly string[]>> = {
+  card_txs: ["mutabakat"],
+};
 const VARSAYILAN: Partial<Record<ZarfliTablo, Record<string, unknown>>> = {
   card_txs: { installments: 1 },
   cards: { limit_amount: 0 },
@@ -221,6 +226,19 @@ const OZEL: Isleyici[] = [
     const { hassas } = ayir("accounts", { last_recon_balance: sayi(balance) }, d, Number(m[1]));
     const not = note ? `Mutabakat: ${String(note).slice(0, 120)}` : "Mutabakat farkı";
     return { ...kalan, enc: zarfKur("accounts", hassas!), entry_enc: hareket(sayi(diff), not) };
+  } },
+  /* Kart mutabakatı: limit bankadakinden farklı girildiyse kartın zarfı yeniden kurulur; fark
+     "açıklanamayan kart harcaması" kaleminin zarfına girer (`mutabakat` işareti zarfta). */
+  { method: "POST", yol: /^\/cards\/(\d+)\/reconcile$/, fn: (m, b, d) => {
+    const { limit_amount, tx, ...kalan } = b;
+    const kart = bos(limit_amount) ? null : ayir("cards", { limit_amount: sayi(limit_amount) }, d, Number(m[1])).hassas;
+    let kalem: Satir | undefined;
+    if (tx) {
+      const { date, name, amount, installments } = tx as Satir;
+      if (!(Math.abs(sayi(amount)) > 0)) throw new ZarfHatasi("fark 0 — yazılacak kalem yok");
+      kalem = { date, enc: zarfKur("card_txs", { name, amount: sayi(amount), installments: sayi(installments ?? 1) || 1, mutabakat: true }) };
+    }
+    return { ...kalan, ...(kart ? { enc: zarfKur("cards", kart) } : {}), ...(kalem ? { tx: kalem } : {}) };
   } },
   /* Virman: TEK kayıt, İKİ hareket. */
   { method: "*", yol: /^\/transfers(?:\/(\d+))?$/, fn: (_, b, d) => virmanZarfi(b, d) },
@@ -303,6 +321,8 @@ const OZEL: Isleyici[] = [
       const { name, amount, installments, ...kalan } = r;
       return { ...kalan, enc: zarfKur("card_txs", { name, amount, installments: installments ?? 1 }) };
     }),
+    // kart mutabakatının kaldırılan açıklanamayan kalemleri (kimlik listesi, zarfsız)
+    ...(Array.isArray(b.sil) ? { sil: b.sil } : {}),
   }) },
 ];
 

@@ -102,6 +102,9 @@ const tutarTr = (n: number) =>
   `${r2(n).toLocaleString("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} TL`;
 const KATEGORISIZ = "(kategorisiz)";
 const KART_KOVA = "Kart harcaması (kategorisiz)";
+/* Kart mutabakatının açıklanamayan farkı (kartMutabakat.ts): kategorisiz kart kovasına KONMAZ —
+   orada "kategorisini gir" uyarısı üretirdi, oysa düzeltmesi kategori değil ekstreyi içe aktarmak. */
+const MUTABAKAT_KOVA = "Açıklanamayan kart farkı";
 const KART_DISI = "Kart dışı (hesap/nakit)";
 
 /** Tarih aralığı + metin süzgeciyle gelir/gider özeti. Saf: `veri` değişmez. */
@@ -118,7 +121,7 @@ export function harcamaOzeti(veri: HarcamaVeri, s: HarcamaSecenek): HarcamaOzeti
   const ekstre = new Set(veri.ekstreTxIds ?? []);
 
   let gider = 0, gelir = 0, adet = 0;
-  let haricEkstre = 0, kategorisizKart = 0;
+  let haricEkstre = 0, kategorisizKart = 0, mutabakatFarki = 0;
   const kovalar = new Map<string, HarcamaKalem>();
   const koy = (ad: string, g: { gider?: number; gelir?: number }) => {
     if (grup === "yok") return;
@@ -159,11 +162,14 @@ export function harcamaOzeti(veri: HarcamaVeri, s: HarcamaSecenek): HarcamaOzeti
          `katAdi` yalnız BU kullanıcının kategorilerini taşır, uydurulacak bir ad yok. */
       const kategori = c.category_id != null ? katAdi.get(c.category_id) ?? null : null;
       if (metin && !metinEsler(`${c.name} ${kart}${kategori ? ` ${kategori}` : ""}`, metin)) continue;
-      const tutar = Math.abs(c.amount);
+      /* Mutabakat farkı İŞARETLİDİR (eksi = bankada borç daha az: fazla girilmiş kayıt ya da iade) */
+      const mutabakat = c.mutabakat === true;
+      const tutar = mutabakat ? c.amount : Math.abs(c.amount);
       adet++;
       gider += tutar;
-      if (kategori == null) kategorisizKart += tutar;
-      koy(grup === "ay" ? c.date.slice(0, 7) : grup === "kategori" ? kategori ?? KART_KOVA : kart, { gider: tutar });
+      if (mutabakat) mutabakatFarki += tutar;
+      else if (kategori == null) kategorisizKart += tutar;
+      koy(grup === "ay" ? c.date.slice(0, 7) : grup === "kategori" ? (mutabakat ? MUTABAKAT_KOVA : kategori ?? KART_KOVA) : kart, { gider: tutar });
     }
   }
 
@@ -175,6 +181,12 @@ export function harcamaOzeti(veri: HarcamaVeri, s: HarcamaSecenek): HarcamaOzeti
     );
     if (haricEkstre > 0) {
       uyari.push(`Bu aralıkta ${tutarTr(haricEkstre)} ekstre ödemesi vardı ve toplamın DIŞINDA.`);
+    }
+    if (Math.abs(mutabakatFarki) >= 0.005) {
+      uyari.push(
+        `Toplama ${tutarTr(mutabakatFarki)} kart mutabakatı farkı dahil — bankada olup kaydı girilmemiş ` +
+        "harcama. Ekstre içe aktarılınca gerçek kayıtlarıyla yer değiştirir.",
+      );
     }
     if (grup === "kategori" && kategorisizKart > 0) {
       uyari.push(

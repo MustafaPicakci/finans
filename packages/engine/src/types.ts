@@ -53,11 +53,13 @@ export type Portfolio = { id: number; name: string; note: string | null };
 export type Deposit = { id: number; name: string; principal: number; rate: number; open_date: string; term_days: number; withholding: number; account_id?: number | null };
 /** `pay_account_id` doluysa otomatik ödeme talimatı: vadesi gelen ekstre o hesaptan ödenir.
     `pay_since` talimatın başladığı gün (sunucu damgalar) — bu günden önceki vadelere dokunulmaz. */
-export type Card = { id: number; name: string; limit_amount: number; statement_day: number; due_day: number; pay_account_id?: number | null; pay_since?: string | null };
+export type Card = { id: number; name: string; limit_amount: number; statement_day: number; due_day: number; pay_account_id?: number | null; pay_since?: string | null; last_recon_date?: string | null };
 /** Kart harcaması. `category_id` **Faz 39'da eklendi** ve opsiyoneldir: eski kayıtlarda (ve
     eski sunucu/PWA önbelleğinden gelen yanıtta) yoktur — kategorisi olmayan kart harcaması
     "kategorisi girilmemiş" sayılır, uydurulmaz. */
-export type CardTx = { id: number; card_id: number; date: string; name: string; amount: number; installments: number; category_id?: number | null };
+/** `mutabakat`: kart mutabakatının yazdığı "açıklanamayan harcama" (kartMutabakat.ts) — bankada tek
+    karşılığı yok, ekstre içe aktarılınca kaldırılır. */
+export type CardTx = { id: number; card_id: number; date: string; name: string; amount: number; installments: number; category_id?: number | null; mutabakat?: boolean | null };
 /** Bir kart ekstresinin (card_id + son ödeme günü) ödendiğini işaretler — borçtan ve projeksiyondan düşer.
     `tx_id` **Faz 40'ta açıldı**: ödemenin deftere yazdığı `transactions` satırı. Ekstre ödemesini
     ADINDAN tanımak mümkün değil ("Akbank ekstresi" elle de yazılabilir), oysa harcama özetinin

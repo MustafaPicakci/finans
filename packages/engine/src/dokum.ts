@@ -124,9 +124,11 @@ export function hesapDefteri(data: AllData, accountId: number): { defter: Defter
   };
 }
 
-/** Kartın harcamaları, hesap diline çevrili (harcama −), taksit sayısıyla. */
+/** Kartın harcamaları, hesap diline çevrili (harcama −), taksit sayısıyla. Kart MUTABAKATININ
+    yazdığı açıklanamayan kalem hariç — bankada tek karşılığı yoktur (hesap defterindeki düzeltme
+    hareketiyle aynı gerekçe); eşleşse yanlışlıkla bir gerçek satırı "zaten var" gösterirdi. */
 export function kartDefteri(data: AllData, cardId: number): DefterKaydi[] {
   return data.card_txs
-    .filter((t) => t.card_id === cardId)
+    .filter((t) => t.card_id === cardId && t.mutabakat !== true)
     .map((t) => ({ kimlik: `c${t.id}`, date: t.date, amount: -t.amount, name: t.name, taksit: t.installments, kaynak: { tablo: "card_txs", id: t.id } }));
 }

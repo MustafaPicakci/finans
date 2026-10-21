@@ -93,7 +93,7 @@ export function reconcileDiff(currentBalance: number, realBalance: number): numb
 /** Mutabakat durumu — `staleDays` günden eski (veya hiç yapılmamış) doğrulama arayüzde hatırlatılır.
     `today`/`last_recon_date` 'YYYY-MM-DD'; sözlük sırası tarih sırasıyla aynı olduğundan gün farkı
     yerine doğrudan eşik tarihiyle karşılaştırılır. */
-export function reconStatus(account: Account, today: string, staleDays = 30): "hic" | "guncel" | "bayat" {
+export function reconStatus(account: Pick<Account, "last_recon_date">, today: string, staleDays = 30): "hic" | "guncel" | "bayat" {
   const last = account.last_recon_date;
   if (!last) return "hic";
   const t = new Date(`${today}T00:00:00`);

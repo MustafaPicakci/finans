@@ -56,6 +56,8 @@ const ROTALAR: { ad: string; tablolar: string[]; method: string; path: string; b
   { ad: "toplu içe aktarma + açılışı geri çek", tablolar: ["transactions", "account_entries"], method: "POST", path: "/transactions/bulk", body: { rows: [{ date: "2025-01-01", name: G("b2"), amount: -987654.45, account_id: 1 }], acilis: { account_id: 1, date: "2025-01-01", amount: 987654.46 } } },
   { ad: "kart", tablolar: ["cards"], method: "POST", path: "/cards", body: { name: G("kart"), limit_amount: 987654.4, statement_day: 25, due_day: 10 } },
   { ad: "kart ekstresi içe aktarma", tablolar: ["card_txs"], method: "POST", path: "/cardtxs/bulk", body: { rows: [{ card_id: 3, date: "2026-01-01", name: G("kb1"), amount: 987654.44, installments: 1 }] } },
+  { ad: "kart mutabakatı (limit + fark kalemi)", tablolar: ["cards", "card_txs"], method: "POST", path: "/cards/3/reconcile", body: { date: "2026-01-01", limit_amount: 987654.52, tx: { date: "2026-01-01", name: G("fark"), amount: 987654.53, installments: 3 } } },
+  { ad: "kart ekstresi + mutabakat kalemini kaldır", tablolar: ["card_txs"], method: "POST", path: "/cardtxs/bulk", body: { rows: [{ card_id: 3, date: "2026-01-01", name: G("kb2"), amount: 987654.54, installments: 1 }], sil: [12] } },
   { ad: "kart harcaması", tablolar: ["card_txs"], method: "POST", path: "/cardtxs", body: { card_id: 3, date: "2026-01-01", name: G("harcama"), amount: 987654.41, installments: 987654 } },
   { ad: "kategori", tablolar: ["categories"], method: "POST", path: "/categories", body: { name: G("kategori"), kind: "expense" } },
   { ad: "portföy grubu", tablolar: ["portfolios"], method: "POST", path: "/portfolios", body: { name: G("grup"), note: G("not") } },
@@ -85,6 +87,20 @@ describe("sızıntı: hassas alan gövdeden yalnız zarfın içinde çıkar", ()
   it("haritadaki HER tablo en az bir rotada kapsanıyor", () => {
     const kapsanan = new Set(ROTALAR.flatMap((r) => r.tablolar));
     expect(Object.keys(ZARF).filter((t) => !kapsanan.has(t))).toEqual([]);
+  });
+});
+
+describe("kart mutabakatı", () => {
+  it("fark kalemi işaretiyle zarflanır, kartın adı korunur, limit değişmediyse kart zarfı gönderilmez", () => {
+    const out: any = zarfla("POST", "/cards/3/reconcile", { date: "2026-01-01", tx: { date: "2026-01-01", name: "Açıklanamayan", amount: -40, installments: 1 } }, veri);
+    expect(out.enc).toBeUndefined();
+    expect(zarfIci(out.tx.enc)).toEqual({ name: "Açıklanamayan", amount: -40, installments: 1, mutabakat: true });
+    const lim: any = zarfla("POST", "/cards/3/reconcile", { date: "2026-01-01", limit_amount: 60000 }, veri);
+    expect(zarfIci(lim.enc)).toMatchObject({ limit_amount: 60000 });
+    expect(lim.tx).toBeUndefined();
+  });
+  it("toplu kart içe aktarma silinecek kalem kimliklerini olduğu gibi taşır", () => {
+    expect((zarfla("POST", "/cardtxs/bulk", { rows: [], sil: [4, 5] }, veri) as any).sil).toEqual([4, 5]);
   });
 });
 

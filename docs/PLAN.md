@@ -671,6 +671,49 @@ Doğrulama: gerçek model anahtarı yerine yerelde OpenAI uyumlu **senaryolu bir
 maaş yeni hesaba, Netflix yeni karta, ikisi de `auto`, hepsi `v1:` → "Geri al" dördünü de sildi.
 Gerçek modelin bu talimata ne kadar uyduğu prod'da (ya da gerçek anahtarla yerelde) görülecek.
 
+## Faz 48 — Kart mutabakatı ✅ (yerelde uçtan uca doğrulandı, 2026-10-21)
+
+**Neden.** Harcamalar uygulamaya her gün girilmediğinde kart borcu bankadakinden sessizce ayrışıyor ve
+fark büyüdükçe takip bırakılıyordu. Kayıtları otomatik almanın yolları tek tek elendi (kullanıcıyla):
+banka uygulamaları ekstre dışında dışa aktarım vermiyor, bildirimler tutar yazmıyor, SMS her zaman
+gelmiyor, Android banka uygulamaları ekran görüntüsünü engelliyor; açık bankacılık TCMB lisansı ister
+ve veriyi aracının sunucusundan geçirir (E2EE ile çelişir). Hedef bu yüzden "her kaydı otomatik al"dan
+**"fark görünmeden büyümesin"e** çevrildi: hesaplarda bu zaten vardı (Faz 16 mutabakatı), kartta yoktu.
+
+**Neyle karşılaştırılır — kullanılabilir limit.** "Toplam borç" / "dönem borcu" bankadan bankaya
+farklı tanımlanıyor (kimi gelecek taksitleri sayar, kimi saymaz) ve bazı bankalar eski alışverişlerin
+o ayki taksidini döneme ancak kesimde ekliyor — ay ortasında karşılaştırmak sahte fark üretirdi.
+Kullanılabilir limit her bankada var ve tanımı tek: taksitli alışverişte toplam tutar limitten hemen
+düşer. Yani limit − kullanılabilir = ödenmemiş ekstreler + açık dönem + bütün gelecek taksitler;
+`cardInfos().debt` ile tanım gereği aynı şey (Kartlar ekranının "kullanılabilir" rakamı zaten
+`limit − debt` idi).
+
+**Fark nereye yazılır.** Farkın TOPLAMI bilinir, aylara dağılımı bilinmez — kullanıcı seçer
+(varsayılan tek çekim, "kalan taksit" girilebilir; kesilmiş ama ödenmemiş ekstre varsa dönem de
+sorulur). "Açıklanamayan kart harcaması" olarak bir kart harcaması yazılır, zarfında `mutabakat: true`
+taşır. Eksi farkta önce iki olası sebep gösterilir: bankada ödenmiş ama burada işaretlenmemiş ekstre
+(tutarı farka denkse "Ödedim") ve gerçek kayıtları sonradan girilmiş eski bir açıklanamayan kalem (sil).
+
+**Çift sayım kapanı.** Ekstre içe aktarılınca gerçek kayıtlar gelir; açıklanamayan kalem kalırsa aynı
+para iki kez sayılır. İçe aktarma, belgenin kapsadığı ekstre dönemlerine (kesim günü üzerinden) düşen
+kalemleri gösterir ve önden seçili olarak **aynı transaction'da** siler (`POST /cardtxs/bulk` `sil`).
+Kalem içe aktarma karşılaştırmasına girmez (`kartDefteri`), harcama özetinde kendi kovasında ve
+işaretiyle sayılır (kategorisiz kart uyarısı üretmez), kategorilemede ve form önerilerinde görünmez.
+
+Uç: `POST /cards/:id/reconcile` (kalem + gerekirse limit + `cards.last_recon_date`, tek transaction;
+asistana kapalı). Doğrulama: 11 yeni engine testi + iki sızıntı rotası; `pnpm build` ve tüm testler
+temiz; 390px'te üç durum (artı fark + taksit, kesilmiş ekstre seçimi, eksi fark + "Ödedim" önerisi)
+stub'a karşı çekildi, taşma yok. Ardından boş bir yerel veritabanında gerçek sunucuyla, başsız
+Chrome'da gerçek formdan (kayıt + kurtarma kodu dahil) altı senaryo: artı fark 3 taksit (ekstrelere
+3.000/2.000/2.000 dağıldı), aynı rakamla "tutuyor", eksi fark → eski kalemi sil, kesilmiş ekstreye
+yazma + limit değişimi (kalem kesim günü tarihli, limit güncellendi), eksi fark → "Ödedim" → tutuyor,
+içe aktarmada kalemin aynı istekte silinmesi (gerçek 700'lük satır kalemle EŞLEŞMEDİ, "eksik" geldi).
+Satırlar `v1:`, işaret düz metinde yok; sunucu bozuk/eksik gövdeyi, var olmayan silme kimliğini ve
+kartı reddediyor (satır yazılmadan). Kiracı yalıtımı: ikinci kullanıcı kaydedilip e-postası
+veritabanından onaylandı, gerçek formdan girdi; onun oturumundan birinci kullanıcının kalemini `sil`
+ile silme (400), kartına toplu satır (400), kartını doğrulama / fark kalemi / limit zarfını ezme (404)
+denendi — hiçbiri satır yazmadı ya da silmedi. Kalan: haftalık hatırlatma bildirimi (ayrı adım).
+
 ## Doğrulama
 `pnpm build` temiz, 57 engine testi yeşil. Kota sıfırlandıktan sonra `returns-by-date` tasarımı gerçek veride **tam** doğrulandı:
 - **Tek istekte 3489 fon fiyatı** toplandı (`prices` + aynı gün `price_history`'de tam senkron) — tahmin edilenin (~150-160) çok üzerinde, TEFAS'ta pay sınıfı/alt kategori dahil gerçekten binlerce fon var.

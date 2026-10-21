@@ -1109,6 +1109,34 @@ crud("cardtxs", "card_txs", [
   { name: "category_id" }, // Faz 39 (ops.) — kategorisiz kart harcaması hâlâ geçerli bir kayıt
 ]);
 
+/* ---- kart mutabakatı ----
+   Hesap mutabakatının kart karşılığı. Kullanıcı bankadaki limit ve kullanılabilir limiti girer; farkı
+   tarayıcı hesaplar (borç, tutarlar zarfta) ve gerekiyorsa "açıklanamayan kart harcaması" olarak
+   kurar — sunucu yalnız yazar ve günü damgalar. Limit bankadakinden farklı girildiyse kartın zarfı da
+   yenilenir (sunucu zarfa alan ekleyemez). Üçü tek transaction: kalem yazılıp damga atılamazsa ya da
+   tersi olsa "doğrulandı" denen kart doğrulanmamış olurdu. Fark 0 ise yalnız damga. */
+api.post("/cards/:id/reconcile", async (c) => {
+  const b = await c.req.json().catch(() => null);
+  if (!b || typeof b !== "object") return c.json({ error: "geçersiz gövde" }, 400);
+  const enc = zarfAl(b.enc), txEnc = zarfAl(b.tx?.enc);
+  const txDate = b.tx?.date;
+  if (enc === false || txEnc === false || (b.tx != null && (!txEnc || typeof txDate !== "string" || !DUE_RE.test(txDate)))) {
+    return c.json({ error: "geçersiz mutabakat gövdesi" }, 400);
+  }
+  const uid = c.get("user").id, id = Number(c.req.param("id"));
+  const date = typeof b.date === "string" && DUE_RE.test(b.date) ? b.date : todayLocal();
+  const ok = await db.tx(async (t) => {
+    const kart = await t.get<{ id: number }>("SELECT id FROM cards WHERE id=? AND user_id=? FOR UPDATE", id, uid);
+    if (!kart) return false;
+    if (txEnc) await t.run("INSERT INTO card_txs (card_id, date, enc, user_id) VALUES (?,?,?,?)", id, txDate, txEnc, uid);
+    if (enc) await t.run("UPDATE cards SET enc=? WHERE id=? AND user_id=?", enc, id, uid);
+    await t.run("UPDATE cards SET last_recon_date=? WHERE id=? AND user_id=?", date, id, uid);
+    return true;
+  });
+  if (!ok) return c.json({ error: "kayıt yok" }, 404);
+  return c.json({ ok: true });
+});
+
 /* ---- kart ekstresi ödeme (Faz 8.2) ----
    Ekstre olayı projeksiyonda sanaldı; "Ödedim" onu gerçek kayda çevirir: transactions'a −tutar yazılır
    (hesap seçildiyse bakiye düşer, gider kaydı oluşur), (card_id, due) statement_payments ile işaretlenir →
@@ -1289,8 +1317,19 @@ api.post("/cardtxs/bulk", async (c) => {
   if (!(await hepsiSahibin(uid, "cards", farkliIdler(rows, "card_id"))) || !(await hepsiSahibin(uid, "categories", farkliIdler(rows, "category_id")))) {
     return c.json({ error: "geçersiz kart veya kategori" }, 400);
   }
-  await db.tx((t) => topluKartYaz(t, uid, rows.map((r: any) => ({ card_id: r.card_id, date: r.date, enc: r.enc, category_id: r.category_id ?? null }))));
-  console.log(`[audit] Toplu kart harcaması: ${rows.length} kayıt (id:${uid})`);
+  /* Kart mutabakatının açıklanamayan kalemleri: ekstrenin gerçek kayıtları yazılırken AYNI
+     transaction'da silinir — ayrı istek olsaydı biri yazılıp diğeri kalınca aynı para iki kez sayılırdı.
+     Hangi satırın kalem olduğunu sunucu bilmez (işaret zarfta); kullanıcının kendi satırı olması yeter. */
+  const sil = Array.isArray(b.sil) ? b.sil : [];
+  if (sil.length > 100 || !sil.every((x: unknown) => Number.isInteger(x))) return c.json({ error: "geçersiz silme listesi" }, 400);
+  if (sil.length && (await db.all<{ id: number }>("SELECT id FROM card_txs WHERE user_id=? AND id = ANY(?::int[])", uid, sil)).length !== new Set(sil).size) {
+    return c.json({ error: "silinecek kayıt bulunamadı" }, 400);
+  }
+  await db.tx(async (t) => {
+    await topluKartYaz(t, uid, rows.map((r: any) => ({ card_id: r.card_id, date: r.date, enc: r.enc, category_id: r.category_id ?? null })));
+    if (sil.length) await t.run("DELETE FROM card_txs WHERE user_id=? AND id = ANY(?::int[])", uid, sil);
+  });
+  console.log(`[audit] Toplu kart harcaması: ${rows.length} kayıt${sil.length ? ` − ${sil.length} mutabakat kalemi` : ""} (id:${uid})`);
   return c.json({ inserted: rows.length });
 });
 /* Faz 45.9 — aracı kurum ekstresinden portföy işlemleri: toplu, atomik, sahiplik doğrulamalı, asistana

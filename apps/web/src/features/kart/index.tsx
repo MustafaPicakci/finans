@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { parseD, fmtD, keyOf, num, cardInfos, stmtKey, txShares, ekstreOdemeleri, ekstreDetayi, acikDonem, type AllData, type Card } from "@finans/engine";
+import { parseD, fmtD, keyOf, num, todayStr, cardInfos, stmtKey, txShares, ekstreOdemeleri, ekstreDetayi, acikDonem, kartMutabakat, mutabakatKalemi, reconStatus, KART_MUTABAKAT_ADI, type AllData, type Card } from "@finans/engine";
 import { api } from "../../api";
 import { T, css, tl, fmtMoney } from "../../theme";
 import { Empty, Aciklama, Modal, SilDugmesi, useSayfalama, DahaFazla } from "../../ui";
@@ -70,6 +70,9 @@ export function Kartlar({ data, reload }: { data: AllData; reload: () => void; o
   const [editing, setEditing] = useState<EditTarget | null>(null);
   /** Kart sayfası: `null` kapalı, `"yeni"` ekleme, kart nesnesi düzenleme */
   const [kartSayfa, setKartSayfa] = useState<Card | "yeni" | null>(null);
+  /** Borcu doğrulanan kartın kimliği (nesne değil — reload sonrası güncel kart/harcamalar okunsun) */
+  const [dogrula, setDogrula] = useState<number | null>(null);
+  const bugunStr = todayStr();
   const unpay = async (cardId: number, dueK: string) => { await api.unpayStatement(cardId, dueK); reload(); };
 
   return (<>
@@ -104,6 +107,7 @@ export function Kartlar({ data, reload }: { data: AllData; reload: () => void; o
           /* Birincil "Ödedim" yalnız ilk ödenebilir ekstrede: sıradaki iş odur */
           const ilkOdenmemis = ekstreler.findIndex((e) => !e.paid && !acik(e));
           const oto = ci.card.pay_account_id != null ? data.accounts.find((a) => a.id === ci.card.pay_account_id) : null;
+          const dogrulama = dogrulamaMetni(ci.card, bugunStr);
           return (
             <div key={ci.card.id} style={{ ...css.card, padding: 0, overflow: "hidden" }}>
               <div style={{ background: KART_RENK[i % KART_RENK.length], color: "#fff", padding: "18px 18px 16px" }}>
@@ -151,6 +155,16 @@ export function Kartlar({ data, reload }: { data: AllData; reload: () => void; o
                   </div>
                 );
               })}
+              {/* Kart mutabakatı: bankadaki kullanılabilir limitle karşılaştır — eksik girilen harcama borcu
+                  sessizce bankadan ayırmasın. Durum hesaplardaki doğrulama satırıyla aynı dilde. */}
+              <button type="button" className="liste-satir" onClick={() => setDogrula(ci.card.id)} style={{
+                ...satir, width: "100%", background: "none", border: "none", borderTop: `1px solid ${T.line2}`,
+                textAlign: "left", cursor: "pointer", fontFamily: T.disp, color: T.text,
+              }}>
+                <span style={{ flex: 1, minWidth: 0 }}>Borcu doğrula</span>
+                <span style={{ fontSize: 13, color: dogrulama.st === "guncel" ? T.mut : T.warn, whiteSpace: "nowrap" }}>{dogrulama.metin}</span>
+                <span aria-hidden="true" style={{ color: T.mut3, fontSize: 18, lineHeight: 1 }}>›</span>
+              </button>
               {/* otomatik ödeme talimatı: hesap seçiliyse vadesi gelen ekstre o hesaptan ödenir (uygulama
                   açılışında, vade tarihiyle); talimattan önceki ekstrelere dokunulmaz (engine/otomatik.ts) */}
               <SatirSec etiket="Otomatik ödeme" goruntu={oto ? oto.name : "talimat yok"} soluk={!oto} value={ci.card.pay_account_id ?? ""}
@@ -216,12 +230,24 @@ export function Kartlar({ data, reload }: { data: AllData; reload: () => void; o
         onEdit={(t) => { setEkstreSayfa(null); setEditing({ kind: "cardtx", row: t }); }}
         onClose={() => setEkstreSayfa(null)} /> : null;
     })()}
+    {dogrula != null && (() => {
+      const card = data.cards.find((c) => c.id === dogrula);
+      return card ? <KartDogrula data={data} card={card} today={today} odemeler={odemeler} reload={reload}
+        onPay={(o) => { setDogrula(null); setPaying(o); }} onClose={() => setDogrula(null)} /> : null;
+    })()}
     {paying && <EkstreOde data={data} reload={reload} odeme={paying} onClose={() => setPaying(null)} />}
     {kartSayfa && <KartSayfasi data={data} reload={reload} kart={kartSayfa === "yeni" ? null : kartSayfa}
       borc={kartSayfa === "yeni" ? 0 : infos.find((c) => c.card.id === kartSayfa.id)?.debt ?? 0} onClose={() => setKartSayfa(null)} />}
     {editing && <EditSheet data={data} target={editing} reload={reload} onClose={() => setEditing(null)} />}
   </>);
 }
+
+/** Doğrulama durumu metni — hesaplardaki `durumMetni`nin aynısı (bayat/hiç sarı) */
+const dogrulamaMetni = (card: Card, today: string) => {
+  const st = reconStatus(card, today);
+  const gun = card.last_recon_date ? fmtD(parseD(card.last_recon_date), { day: "numeric", month: "short" }) : "";
+  return { st, metin: st === "hic" ? "henüz doğrulanmadı" : st === "bayat" ? `son ${gun} — bayat` : `${gun} doğrulandı ✓` };
+};
 
 const Rozet = ({ renk, zemin, children }: { renk: string; zemin: string; children: React.ReactNode }) => (
   <span style={{ fontSize: 11.5, fontWeight: 600, padding: "2px 7px", borderRadius: 6, background: zemin, color: renk, whiteSpace: "nowrap" }}>{children}</span>
@@ -307,6 +333,130 @@ function EkstreSayfasi({ data, card, dueK, today, odemeler, onPay, onUnpay, onEd
           </div>
         )}
       </Bolum>
+    </Modal>
+  );
+}
+
+/** KART MUTABAKATI (kartMutabakat.ts): bankadaki limit − kullanılabilir limit = bankadaki borç, gelecek
+    taksitler dahil — uygulamadaki borçla tanım gereği aynı şey. Fark "açıklanamayan kart harcaması"
+    olarak yazılır; dönemi (kesilmiş ekstre varsa) ve taksiti kullanıcı seçer, çünkü rakam bunu söylemez.
+    Eksi farkta önce iki olası sebep sunulur: bankada ödenmiş ama burada işaretlenmemiş ekstre, ve daha
+    önce yazılmış (gerçek kayıtları sonradan girilmiş) açıklanamayan kalem. */
+function KartDogrula({ data, card, today, odemeler, reload, onPay, onClose }: {
+  data: AllData; card: Card; today: Date; odemeler: Map<string, number | null>; reload: () => void;
+  onPay: (o: Odeme) => void; onClose: () => void;
+}) {
+  const [limit, setLimit] = useState(card.limit_amount > 0 ? String(card.limit_amount) : "");
+  const [kul, setKul] = useState("");
+  const [donem, setDonem] = useState<"acik" | "kesilen">("acik");
+  const [tur, setTur] = useState<"tek" | "taksit">("tek");
+  const [taksit, setTaksit] = useState("");
+  const [busy, setBusy] = useState(false);
+  const limitOk = num(limit) > 0;
+  /* Kullanılabilir 0 olabilir (limit dolu), limit aşımında eksi — `num`'ın "çözemedim → 0"ına güvenilmez */
+  const kulOk = /^-?\s*[\d.,]+$/.test(kul.trim());
+  const m = limitOk && kulOk ? kartMutabakat(card, data.card_txs, today, odemeler, num(limit) - num(kul)) : null;
+  const arti = !!m && !m.tutuyor && m.fark > 0;
+  const n = arti && tur === "taksit" ? Math.trunc(+taksit) : 1;
+  const taksitOk = !arti || tur === "tek" || (n >= 2 && n <= 48);
+  const kalem = m && !m.tutuyor ? mutabakatKalemi(m, today, { donem, taksit: n }) : null;
+  const limitDegisti = limitOk && Math.abs(num(limit) - card.limit_amount) >= 0.005;
+  const ok = !!m && taksitOk && !busy;
+  const reason = busy ? "Kaydediliyor…" : !limitOk ? "Bankanın gösterdiği limiti gir."
+    : !kulOk ? "Kullanılabilir limiti gir (0 ya da eksi olabilir)." : !taksitOk ? "Kalan taksit sayısı 2-48 arası olmalı." : null;
+  const kisa = (d: Date) => fmtD(d, { day: "numeric", month: "short" });
+  const kaydet = async () => {
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await api.post(`cards/${card.id}/reconcile`, {
+        date: todayStr(),
+        ...(limitDegisti ? { limit_amount: num(limit) } : {}),
+        ...(kalem ? { tx: kalem } : {}),
+      });
+      reload(); onClose();
+    } finally { setBusy(false); }
+  };
+  const nereye = kalem && donem === "kesilen" && m?.kesilen && arti
+    ? <>{fmtD(m.kesilen.due, { day: "numeric", month: "long" })} ekstresine</>
+    : <>açık döneme (kesim {m ? kisa(m.acikKesim) : ""})</>;
+  return (
+    <Modal title={`${card.name} · borcu doğrula`} onClose={onClose}>
+      <form onSubmit={(e) => { e.preventDefault(); kaydet(); }}>
+        <Bolum>
+          <div style={{ fontSize: 14, color: T.mut, lineHeight: 1.45 }}>
+            Banka uygulamasında bu kartın <b style={{ color: T.text }}>limitine</b> ve <b style={{ color: T.text }}>kullanılabilir limitine</b> bak.
+            Taksitli alışverişte banka toplam tutarı limitten hemen düşer — bu yüzden "toplam borç" yerine bu ikisi karşılaştırılır.
+          </div>
+          <TutarGirdisi etiket={card.limit_amount > 0 ? "Limit" : "Limit (kartta kayıtlı değil — karta da yazılır)"} value={limit} onChange={setLimit} />
+          <TutarGirdisi serbest autoFocus etiket="Kullanılabilir limit" value={kul} onChange={setKul} />
+          {m && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr auto", rowGap: 4, fontSize: 14 }}>
+              <span style={{ color: T.mut }}>Bankadaki borç</span><span style={css.mono}>{fmtMoney(m.banka, "TRY", true)}</span>
+              <span style={{ color: T.mut }}>Uygulamadaki borç</span><span style={css.mono}>{fmtMoney(m.bizim, "TRY", true)}</span>
+              <span style={{ color: T.mut }}>Fark</span>
+              <b style={{ ...css.mono, color: m.tutuyor ? T.pos : T.warn }}>{m.tutuyor ? "yok ✓" : `${m.fark > 0 ? "+" : "−"}${fmtMoney(Math.abs(m.fark), "TRY", true)}`}</b>
+            </div>
+          )}
+          {arti && m && (<>
+            <div style={{ fontSize: 14, lineHeight: 1.45 }}>Bankada uygulamaya girilmemiş <Vurgu v={m.fark} /> harcama var.</div>
+            {m.kesilen && (
+              <Etiketli etiket="Hangi ekstreye ait?">
+                <Segment ad="Dönem" deger={donem} sec={setDonem} secenek={[
+                  { v: "acik", l: `Açık dönem · kesim ${kisa(m.acikKesim)}` },
+                  { v: "kesilen", l: `${kisa(m.kesilen.due)} ekstresi` },
+                ]} />
+                <div style={{ fontSize: 12.5, color: T.mut, marginTop: 4 }}>
+                  {kisa(m.kesilen.due)} ekstresi kesildi ama henüz ödenmedi. Bankadaki ekstre tutarı uygulamadakinden ({fmtMoney(m.kesilen.amount, "TRY", true)}) fazlaysa fark oradadır.
+                </div>
+              </Etiketli>
+            )}
+            <Etiketli etiket="Nasıl ödeniyor?">
+              <Segment ad="Taksit" deger={tur} sec={setTur} secenek={[{ v: "tek", l: "Tek çekim" }, { v: "taksit", l: "Taksitli" }]} />
+            </Etiketli>
+            {tur === "taksit" && (
+              <Satirlar>
+                <SatirMetin etiket="Kalan taksit" sayi placeholder="ör. 6" value={taksit} onChange={(v) => setTaksit(v.replace(/\D/g, "").slice(0, 2))} />
+              </Satirlar>
+            )}
+          </>)}
+          {m && !m.tutuyor && m.fark < 0 && (<>
+            <div style={{ fontSize: 14, lineHeight: 1.45 }}>Bankadaki borç uygulamadakinden <Vurgu v={-m.fark} /> az. Önce şunlara bak:</div>
+            {m.odenmisOlabilir.map((e) => (
+              <div key={keyOf(e.due)} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 14 }}>
+                <span style={{ flex: 1, minWidth: 0 }}>{fmtD(e.due, { day: "numeric", month: "long" })} ekstresi ({fmtMoney(e.amount, "TRY", true)}) burada ödenmemiş görünüyor — bankada ödediysen:</span>
+                <button type="button" onClick={() => onPay({ card, dueK: keyOf(e.due), amount: e.amount })} style={{
+                  height: 36, minHeight: 0, padding: "0 14px", border: "none", borderRadius: 10, background: T.acc, color: T.accInk,
+                  fontFamily: T.disp, fontSize: 13.5, fontWeight: 600, cursor: "pointer", flexShrink: 0,
+                }}>Ödedim</button>
+              </div>
+            ))}
+            {m.duzeltmeler.map(({ tx, kalan }) => (
+              <div key={tx.id} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 14 }}>
+                <span style={{ flex: 1, minWidth: 0 }}>{fmtD(parseD(tx.date), { day: "numeric", month: "short" })} tarihli açıklanamayan kalem ({fmtMoney(kalan, "TRY", true)} borçta) — gerçek kayıtlarını sonradan girdiysen fazladır.</span>
+                <SilDugmesi ad={`${KART_MUTABAKAT_ADI} · ${fmtMoney(tx.amount, "TRY", true)}`} title="Kalemi sil" ikon="Sil" className=""
+                  style={{ color: T.neg, fontSize: 14, fontWeight: 600, padding: "6px 4px", flexShrink: 0 }}
+                  onSil={async () => { await api.del("cardtxs", tx.id); reload(); }}
+                  sonuc={<>Kart borcundan {fmtMoney(kalan, "TRY", true)} düşer.</>} />
+              </div>
+            ))}
+            {m.odenmisOlabilir.length === 0 && m.duzeltmeler.length === 0 && (
+              <div style={{ fontSize: 13, color: T.mut, lineHeight: 1.45 }}>Uygulamada bankada olmayan bir kayıt olabilir (iki kez girilmiş harcama, iade). Bulursan onu silmek daha doğru; bulamazsan farkı düzeltme olarak yaz.</div>
+            )}
+          </>)}
+        </Bolum>
+        <FormAlt ok={ok} reason={reason} editing etiket={m?.tutuyor ? "Doğrula" : "Doğrula ve farkı yaz"}
+          sonuc={!m ? null : m.tutuyor
+            ? <><span style={{ color: T.pos }}>✓ Tutuyor — kart borcun bankayla aynı.</span> Onaylayınca yalnız doğrulama tarihi güncellenir.{limitDegisti && " Kartın limiti de güncellenir."}</>
+            : <>
+              {arti
+                ? <><Vurgu v={m.fark} /> "{KART_MUTABAKAT_ADI}" olarak {nereye} yazılır{n > 1 ? <>, {n} taksitte (ayda <Vurgu v={m.fark / n} />)</> : null}. </>
+                : m.odenmisOlabilir.length
+                  ? <>Ekstreyi bankada ödediysen yukarıdaki <b>Ödedim</b>'i kullan — farkı yazarsan ödeme hiçbir hesaptan düşmez. Yine de yazarsan kart borcundan <Vurgu v={-m.fark} isaret="−" /> düzeltme olarak düşülür. </>
+                  : <>Kart borcundan <Vurgu v={-m.fark} isaret="−" /> düzeltme olarak düşülür. </>}
+              {arti && "Ekstreyi içe aktardığında gerçek kayıtlarla yer değiştirir."}{limitDegisti && " Kartın limiti de güncellenir."}
+            </>} />
+      </form>
     </Modal>
   );
 }

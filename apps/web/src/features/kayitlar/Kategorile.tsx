@@ -55,7 +55,8 @@ export function kategorisizGruplar(data: AllData, { baslangic, sorgu, ekstreTxId
 
   const ham: Kayit[] = [];
   for (const c of data.card_txs) {
-    if (c.category_id != null || !arada(c.date)) continue;
+    // kart mutabakatının açıklanamayan farkı kategorilenmez — düzeltmesi ekstreyi içe aktarmak
+    if (c.category_id != null || c.mutabakat || !arada(c.date)) continue;
     const kart = kartAdi.get(c.card_id) ?? "kart";
     if (sorgu && !metinEsler(`${c.name} ${kart}`, sorgu)) continue;
     ham.push({ tur: "kart", id: c.id, date: c.date, name: c.name, amount: Math.abs(c.amount), ek: kart });

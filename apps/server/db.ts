@@ -371,6 +371,8 @@ ALTER TABLE recurring ADD COLUMN IF NOT EXISTS auto_since text;
 -- kalır, yani "kategorisi girilmemiş" — geriye dönük bir tahmin YAPILMAZ (adından kategori
 -- türetmek Faz 35'in "ekstre ödemesini adından tanıma" hatasının aynısı olurdu).
 ALTER TABLE card_txs ADD COLUMN IF NOT EXISTS category_id integer REFERENCES categories(id) ON DELETE SET NULL;
+-- Kart mutabakatı: son doğrulama günü (hesaplardaki last_recon_date ile aynı; fark kalemi card_txs zarfında)
+ALTER TABLE cards ADD COLUMN IF NOT EXISTS last_recon_date text;
 -- Faz 21: trades artık pozisyon OLAYLARI defteri — temettü ve bedelsiz de birer satır.
 -- Inline CHECK'in adı Postgres'te trades_side_check olur; drop+add ile idempotent güncellenir
 -- (ADD CONSTRAINT tek başına ikinci açılışta "already exists" hatası verirdi).

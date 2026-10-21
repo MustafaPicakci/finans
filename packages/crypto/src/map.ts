@@ -20,7 +20,9 @@ export const ZARF = {
   accounts: ["name", "last_recon_balance"],
   account_entries: ["amount", "note"],
   transactions: ["name", "amount"],
-  card_txs: ["name", "amount", "installments"],
+  /* `mutabakat`: kart mutabakatının yazdığı açıklanamayan fark — sunucunun bilmesi gerekmiyor,
+     içe aktarma onu tarayıcıda ayırır. Kolonu hiç olmadı (yalnız zarfta yaşar). */
+  card_txs: ["name", "amount", "installments", "mutabakat"],
   cards: ["name", "limit_amount"],
   transfers: ["amount", "note"],
   trades: ["qty", "price", "fee"],
@@ -66,7 +68,7 @@ export const DUZ: Record<ZarfliTablo, Record<string, string>> = {
   },
   transactions: { date: "tarih — sıralama, dönem süzgeci", category_id: "FK", account_id: "FK" },
   card_txs: { card_id: "FK", date: "tarih — ekstreye düşme (kesim günü) hesabı istemcide ama sıralama sunucuda", category_id: "FK" },
-  cards: { statement_day: "kesim günü — ekstre takvimi", due_day: "son ödeme günü — ekstre takvimi", pay_account_id: "FK (ödeme talimatı)", pay_since: "talimatın başladığı gün — otomatik ödeme bundan önceki vadeye dokunmaz" },
+  cards: { statement_day: "kesim günü — ekstre takvimi", due_day: "son ödeme günü — ekstre takvimi", pay_account_id: "FK (ödeme talimatı)", pay_since: "talimatın başladığı gün — otomatik ödeme bundan önceki vadeye dokunmaz", last_recon_date: "son kart mutabakatı günü — 'bayat' hatırlatması; fark tutarı kart harcamasının zarfında" },
   transfers: { date: "tarih", from_account_id: "FK", to_account_id: "FK" },
   trades: {
     date: "tarih", asset_type: "varlık türü — fiyat kaynağı seçimi", side: "işlem türü (ALIŞ/SATIŞ/…) — adet/fiyat değil",

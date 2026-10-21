@@ -70,6 +70,7 @@ export type CardTxSuggestion = {
 export function cardTxSuggestions(data: AllData): CardTxSuggestion[] {
   const by = new Map<string, { s: CardTxSuggestion; dates: string[] }>();
   for (const t of data.card_txs) {
+    if (t.mutabakat) continue; // kart mutabakatının farkı bir harcama adı değil — öneri olmasın
     const key = normName(t.name);
     if (!key) continue;
     const e = by.get(key);

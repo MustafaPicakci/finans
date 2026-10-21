@@ -411,6 +411,7 @@ export const SKIPPED: { route: string; reason: string }[] = [
   { route: "PUT /deposits/:id", reason: "mevduat düzenleme arayüzden" },
   { route: "DELETE /deposits/:id", reason: "silme arayüzden" },
   { route: "PUT /cards/:id", reason: "kart tanımı (kesim/vade günü) arayüzden düzenlenir" },
+  { route: "POST /cards/:id/reconcile", reason: "kart mutabakatı banka uygulamasından okunan iki rakam + farkın dönemi/taksiti kararını ister; önizlemeli form Kartlar ekranında" },
   { route: "DELETE /cards/:id", reason: "yıkıcı: kartın harcamaları da gider" },
   { route: "PUT /cardtxs/:id", reason: "kart harcaması düzenleme arayüzden" },
   { route: "DELETE /cardtxs/:id", reason: "silme arayüzden" },

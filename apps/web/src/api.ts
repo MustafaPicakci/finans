@@ -66,7 +66,9 @@ export const api = {
     ek: { acilis?: { account_id: number; date: string; amount: number }; virmanlar?: { date: string; from_account_id: number; to_account_id: number; amount: number; note: string }[] } = {},
   ) => yazJ<{ inserted: number }>("POST", "/transactions/bulk", { rows, ...ek }),
   /** Faz 45 — kart ekstresi içe aktarma: `amount` kart harcaması işaretiyle (+ harcama, − iade) */
-  bulkCardTxs: (rows: { card_id: number; date: string; name: string; amount: number; installments: number; category_id: number | null }[]) => yazJ<{ inserted: number }>("POST", "/cardtxs/bulk", { rows }),
+  /** `sil`: aynı transaction'da kaldırılacak kart mutabakatı kalemleri (açıklanamayan fark) */
+  bulkCardTxs: (rows: { card_id: number; date: string; name: string; amount: number; installments: number; category_id: number | null }[], sil: number[] = []) =>
+    yazJ<{ inserted: number }>("POST", "/cardtxs/bulk", { rows, ...(sil.length ? { sil } : {}) }),
   /** Faz 45.9 — aracı kurum ekstresinden portföy işlemleri (atomik; hesap etkisi tutar.ts'te türer) */
   bulkTrades: (rows: { date: string; asset_type: string; symbol: string; side: "ALIŞ" | "SATIŞ"; qty: number; price: number; fee: number; currency: string; account_id: number | null; portfolio_id: number | null }[]) =>
     yazJ<{ inserted: number }>("POST", "/trades/bulk", { rows }),

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  parseStatement, parseIslemler, dokumKarsilastir, hesapDefteri, kartDefteri, hedefTahmin, type IslemSonucu, type HedefTahmini,
+  parseStatement, parseIslemler, dokumKarsilastir, hesapDefteri, kartDefteri, hedefTahmin, firstCutoff, keyOf, parseD, mutabakatKalemiMi, type IslemSonucu, type HedefTahmini,
   type AllData, type Dogrulama, type ParsedRow, type DefterKaydi, type DokumDurum, type DokumKarsilastirma, type KonumluSatir,
 } from "@finans/engine";
 import { api } from "../../api";
@@ -56,6 +56,10 @@ export function ImportForm({ data, reload, onClose: kapat }: { data: AllData; re
   const kartaGiren = (r: ParsedRow) => cardId != null && r.amount > 0;
   const [drafts, setDrafts] = useKalici<Draft[] | null>("drafts", null);
   const [fazla, setFazla] = useKalici<DefterKaydi[]>("fazla", []);
+  /** Dökümün kapsadığı tarih aralığı (karşılaştırmanın `aralik`ı) — kart mutabakatı kalemlerini bulmak için */
+  const [aralik, setAralik] = useKalici<{ bas: string; son: string } | null>("aralik", null);
+  /** Kart mutabakatının bu ekstreye düşen açıklanamayan kalemleri aktarırken kaldırılsın mı */
+  const [mutKaldir, setMutKaldir] = useKalici("mutKaldir", true);
   const [filtre, setFiltre] = useKalici<Filtre>("filtre", "eksik");
   /** Faz 45.7 — açılıştan önceki satırlar eklenirken açılış hareketi aynı toplam kadar geri çekilsin mi */
   const [acilisGeri, setAcilisGeri] = useKalici("acilisGeri", false);
@@ -112,7 +116,7 @@ export function ImportForm({ data, reload, onClose: kapat }: { data: AllData; re
   /** Satırları defterle karşılaştırıp durumlarını yazar; yalnız EKSİK olan önden seçilir. */
   const durumla = (rows: (ParsedRow & { category_id?: string })[], h = hedef): Draft[] => {
     const k = karsilastir(rows, h);
-    setFazla(k.fazla);
+    setFazla(k.fazla); setAralik(k.aralik); setMutKaldir(true);
     const d = rows.map((r, i) => ({
       ...r, durum: k.satirlar[i].durum, kayit: k.satirlar[i].kayit, include: k.satirlar[i].durum === "eksik", virman: "",
       category_id: r.category_id ?? (() => { const c = guessCategory(r.name); return c != null ? String(c) : ""; })(),
@@ -158,7 +162,7 @@ export function ImportForm({ data, reload, onClose: kapat }: { data: AllData; re
     sonVeri.current = data;
     if (!drafts || hedef.startsWith("t:")) return;
     const k = karsilastir(drafts, hedef);
-    setFazla(k.fazla);
+    setFazla(k.fazla); setAralik(k.aralik);
     setDrafts(drafts.map((d, i) => {
       const yeni = k.satirlar[i];
       return yeni.durum === d.durum ? { ...d, kayit: yeni.kayit } : { ...d, durum: yeni.durum, kayit: yeni.kayit, include: yeni.durum === "eksik" };
@@ -201,6 +205,16 @@ export function ImportForm({ data, reload, onClose: kapat }: { data: AllData; re
   })));
 
   const chosen = drafts?.filter((d) => d.include) ?? [];
+  /* Kart mutabakatının "açıklanamayan kart harcaması" kalemleri (kartMutabakat.ts): bu ekstrenin gerçek
+     kayıtları yazılınca aynı para iki kez sayılırdı. Belgenin kapsadığı EKSTRE DÖNEMLERİNE (kesim günü
+     üzerinden — kalem ya bugünle ya kesim günüyle yazılır, son satırın gününden sonra olabilir) düşen
+     kalemler önerilir; aktarımla AYNI istekte silinir. Kalan fark bir sonraki doğrulamada görünür. */
+  const mutKalemleri = useMemo(() => {
+    if (!kart || !aralik) return [];
+    const kesim = (d: string) => keyOf(firstCutoff(parseD(d), kart.statement_day));
+    const bas = kesim(aralik.bas), son = kesim(aralik.son);
+    return data.card_txs.filter((t) => t.card_id === kart.id && mutabakatKalemiMi(t) && kesim(t.date) >= bas && kesim(t.date) <= son);
+  }, [data.card_txs, kart, aralik]);
   const sum = chosen.reduce((s, d) => s + d.amount, 0);
   const sayac = useMemo(() => {
     const m = new Map<Filtre, number>([["hepsi", drafts?.length ?? 0]]);
@@ -294,7 +308,7 @@ export function ImportForm({ data, reload, onClose: kapat }: { data: AllData; re
             card_id: cardId, date: t?.alis ?? d.date, name: d.name, amount: toplam, installments: t?.sayi ?? 1,
             category_id: d.category_id ? +d.category_id : null,
           };
-        }));
+        }), mutKaldir ? mutKalemleri.map((t) => t.id) : []);
       } else {
         const virmanlar = chosen.filter((d) => d.virman).map((d) => ({
           date: d.date, amount: Math.abs(d.amount), note: d.name,
@@ -607,6 +621,16 @@ export function ImportForm({ data, reload, onClose: kapat }: { data: AllData; re
               banka <span style={css.mono}>{fmtMoney(mutabakat.banka, "TRY", true)}</span> diyor — fark <span style={css.mono}>{fmtMoney(mutabakat.banka - mutabakat.defter, "TRY", true)}</span>.
               Seçimi gözden geçir; kalan farkı Hesaplar'dan mutabakatla sabitleyebilirsin.</>}
         </div>
+      )}
+      {mutKalemleri.length > 0 && (
+        <label style={{ ...satirMetni, fontSize: 13.5, padding: "0 4px", display: "flex", gap: 8, alignItems: "flex-start", color: T.text, cursor: "pointer" }}>
+          <input type="checkbox" checked={mutKaldir} onChange={(e) => setMutKaldir(e.target.checked)} style={{ marginTop: 3, minHeight: 0 }} />
+          <span>
+            Bu ekstrenin döneminde kart doğrulamasıyla yazılmış {mutKalemleri.length} açıklanamayan kalem var
+            (<span style={css.mono}>{fmtMoney(mutKalemleri.reduce((t, x) => t + x.amount, 0), "TRY", true)}</span>). Gerçek kayıtları bu ekstrede —
+            aktarırken kaldır, yoksa aynı para iki kez sayılır. Kalan bir fark olursa bir sonraki doğrulamada görünür.
+          </span>
+        </label>
       )}
       {fazla.length > 0 && (
         <details style={{ fontSize: 13, padding: "0 4px" }}>

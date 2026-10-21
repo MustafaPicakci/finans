@@ -69,7 +69,8 @@ export function tumKayitlar(data: AllData): Kayit[] {
       /* Kart harcaması nakdi O GÜN oynatmaz (ekstre gününde oynar), ama harcamadır —
          yön "çıkış"tır. Ekstre ödemesi ayrı bir gelir-gider kaydı olarak da listede görünür;
          bu yüzden bu liste TOPLAM ÜRETMEZ (ikisini toplamak aynı parayı iki kez sayardı). */
-      tutar: Math.abs(c.amount), yon: "cikis",
+      /* Eksi tutar yalnız kart mutabakatının farkında olur (bankada borç daha az) — giriş yönlüdür. */
+      tutar: Math.abs(c.amount), yon: c.amount < 0 ? "giris" : "cikis",
       currency: "TRY", etiket: "Kart",
     });
   }
